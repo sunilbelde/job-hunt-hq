@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import secrets
 import sys
 import time
@@ -16,7 +17,7 @@ from pydantic import ValidationError
 
 from app.applications import ApplicationStore, ApplicationStoreError
 from app.generation import generate_output
-from app.models import ApplicationRow, JobRow
+from app.models import ApplicationRow, ApplicationUpdate, JobRow
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
 from app.storage import LinkSigner, LocalStorage, Storage, StorageError, content_type_for, is_valid_key
@@ -29,11 +30,32 @@ if not logger.hasHandlers():  # without --log-config, uvicorn leaves app loggers
     logger.addHandler(_handler)
 
 CLEANUP_INTERVAL_SECONDS = 3600
-REQUEST_EVENTS = {"/jobs": "job_request", "/application": "application_request"}
+APPLICATION_ID = re.compile(r"[1-9][0-9]{0,18}")
+MAX_APPLICATION_ID = 2**63 - 1  # SQLite's integer range
+
+
+def request_event(path: str) -> str | None:
+    if path == "/jobs":
+        return "job_request"
+    if path == "/application" or path.startswith("/application/"):
+        return "application_request"
+    return None
 
 
 def application_error(status: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"ok": False, "message": message})
+
+
+def application_not_found() -> JSONResponse:
+    return application_error(404, "Application not found")
+
+
+def parse_application_id(raw: str) -> int | None:
+    """A stored ID is a positive base-10 integer; anything else cannot name a row."""
+    if not APPLICATION_ID.fullmatch(raw):
+        return None
+    value = int(raw)
+    return value if value <= MAX_APPLICATION_ID else None
 
 
 def validation_message(exc: ValidationError) -> str:
@@ -97,7 +119,7 @@ def create_app(
 
     @app.middleware("http")
     async def log_request(request: Request, call_next):
-        event = REQUEST_EVENTS.get(request.url.path)
+        event = request_event(request.url.path)
         if event is None:
             return await call_next(request)
         if event == "job_request":
@@ -112,6 +134,8 @@ def create_app(
             fields: dict[str, Any] = {"event": event}
             if event == "job_request":
                 fields["job_id"] = request.state.job_id
+            else:
+                fields["method"] = request.method
             fields["status"] = status
             fields["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
             for name in ("key", "application_id", "duplicate"):
@@ -185,6 +209,10 @@ def create_app(
             "key": key,
         }
 
+    def store_unavailable(exc: ApplicationStoreError) -> JSONResponse:
+        logger.error(json.dumps({"event": "application_store_error", "error": str(exc)}))
+        return application_error(503, "Application store unavailable")
+
     # Errors here use {"ok": false, "message"} instead of /jobs' {"detail"}, so the key is
     # checked inline rather than through require_api_key.
     @app.post("/application")
@@ -206,13 +234,69 @@ def create_app(
         try:
             application_id, created = await run_in_threadpool(applications.record, application.model_dump())
         except ApplicationStoreError as exc:
-            logger.error(json.dumps({"event": "application_store_error", "error": str(exc)}))
-            return application_error(503, "Application store unavailable")
+            return store_unavailable(exc)
         request.state.application_id = application_id
         request.state.duplicate = not created
         return JSONResponse(
             status_code=201 if created else 200,
             content={"ok": True, "application_id": application_id},
         )
+
+    async def read_update(request: Request) -> tuple[dict | None, str | None]:
+        """The fields to write, or a 422 message naming what is wrong with the body."""
+        try:
+            payload = await request.json()
+        except ValueError:
+            return None, "Request body must be valid JSON"
+        if not isinstance(payload, dict):
+            return None, "Request body must be a JSON object"
+        try:
+            return ApplicationUpdate.model_validate(payload).model_dump(exclude_unset=True), None
+        except ValidationError as exc:
+            return None, validation_message(exc)
+
+    # The path ID is taken as a string: a typed int would let FastAPI answer with its own 422 shape.
+    @app.patch("/application/{application_id}")
+    async def update_application(
+        application_id: str, request: Request, x_api_key: str | None = Header(default=None)
+    ):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+
+        changes, message = await read_update(request)
+        try:
+            # An unknown ID is reported as such even when the body is also wrong.
+            if message is not None:
+                if not await run_in_threadpool(applications.exists, target):
+                    return application_not_found()
+                return application_error(422, message)
+            status = await run_in_threadpool(applications.update, target, changes)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if status is None:
+            return application_not_found()
+        return {"ok": True, "application_id": target, "status": status}
+
+    @app.delete("/application/{application_id}")
+    async def delete_application(
+        application_id: str, request: Request, x_api_key: str | None = Header(default=None)
+    ):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+        try:
+            deleted = await run_in_threadpool(applications.delete, target)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if not deleted:
+            return application_not_found()
+        return {"ok": True, "application_id": target}
 
     return app
