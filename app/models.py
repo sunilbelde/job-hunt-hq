@@ -171,3 +171,7 @@ class ResumeCreated(BaseModel):
     ok: Literal[True] = True
     application_id: str
     saved_path: str
+    cover_letter_path: str = Field(
+        description="Where the cover letter goes, beside the resume. Cover letters are not generated yet, "
+        "so no file exists at this path."
+    )
