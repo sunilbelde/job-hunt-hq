@@ -57,6 +57,8 @@ check "installed plist is valid and uses the repo path" \
   'plutil -lint "$tmp/installed.plist" >/dev/null && [ "$(plutil -extract WorkingDirectory raw "$tmp/installed.plist")" = "$repo" ]'
 check "installed plist runs as the current user" \
   '[ "$(plutil -extract UserName raw "$tmp/installed.plist")" = "$(id -un)" ]'
+check "installed plist keeps API docs off" \
+  '[ "$(plutil -extract EnvironmentVariables.API_DOCS_ENABLED raw "$tmp/installed.plist")" = false ]'
 check "logging config written with home log dir" \
   'grep -q "$home/Library/Logs/job-hunt-hq/service.log" "$repo/deploy/logging.json"'
 check "no tailscale warning when serve is configured" '! grep -q "WARNING" "$tmp/out"'

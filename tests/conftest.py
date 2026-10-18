@@ -54,9 +54,15 @@ def storage():
     return FakeStorage()
 
 
+# Every API test runs with docs off and on: serving docs must not change API behavior.
+@pytest.fixture(params=[False, True], ids=["docs-off", "docs-on"])
+def client(request, settings, storage):
+    return TestClient(create_app(settings.model_copy(update={"api_docs_enabled": request.param}), storage))
+
+
 @pytest.fixture
-def client(settings, storage):
-    return TestClient(create_app(settings, storage))
+def docs_client(settings, storage):
+    return TestClient(create_app(settings.model_copy(update={"api_docs_enabled": True}), storage))
 
 
 FAKE_PDF = b"%PDF-1.5 fake resume"

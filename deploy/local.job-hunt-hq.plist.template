@@ -29,6 +29,9 @@
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TECTONIC_CACHE_DIR</key>
         <string>__HOME__/Library/Caches/job-hunt-hq/tectonic</string>
+        <!-- Wins over .env: the service is public through Funnel, so it never serves API docs. -->
+        <key>API_DOCS_ENABLED</key>
+        <string>false</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

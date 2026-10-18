@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     api_key: SecretStr = Field(min_length=1)
     output_dir: Path = DEFAULT_OUTPUT_DIR
     anthropic_api_key: SecretStr | None = None
+    # Serves /docs, /redoc and /openapi.json. Local development only: the launchd job pins it off.
+    api_docs_enabled: bool = False
 
     @field_validator("output_dir")
     @classmethod

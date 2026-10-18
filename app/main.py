@@ -6,14 +6,26 @@ import sys
 import time
 from typing import Any
 
-from fastapi import FastAPI, Header, Request
+from fastapi import FastAPI, Path, Request, Security
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel, ValidationError
+from pydantic.json_schema import models_json_schema
 
 from app.applications import ApplicationStore, ApplicationStoreError
 from app.generation import generate_output
-from app.models import ApplicationRow, ApplicationUpdate, ResumeRequest, StoredApplication
+from app.models import (
+    ApplicationRecorded,
+    ApplicationRow,
+    ApplicationUpdate,
+    ApplicationUpdated,
+    ErrorResponse,
+    HealthStatus,
+    ResumeCreated,
+    ResumeRequest,
+    StoredApplication,
+)
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
 from app.storage import LocalStorage, Storage, StorageError, rename_legacy_folders
@@ -28,6 +40,61 @@ if not logger.hasHandlers():  # without --log-config, uvicorn leaves app loggers
 # Hyphenated UUIDs only: uuid.UUID() would also take braces, "urn:uuid:" and bare hex,
 # giving one ID several spellings in logs and folder names.
 APPLICATION_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+# auto_error=False: a missing key comes through as None, so the handlers answer with their own
+# {"ok": false} 401 rather than FastAPI's 403 {"detail"}. The scheme gives /docs its Authorize button.
+api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    scheme_name="ApiKey",
+    description="The service's API key. Entered once with Authorize; the page keeps it in memory only.",
+    auto_error=False,
+)
+
+# Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
+BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest)
+
+DESCRIPTION = """Records verified job applications and generates resume PDFs for them.
+
+Every endpoint except the health checks needs the `X-API-Key` header. Every error is a JSON object
+`{"ok": false, "message": "..."}`; the message names fields and rules but never echoes submitted values.
+
+Requests sent from this page are real: they change the application store and write resume files."""
+
+TAGS = [
+    {"name": "health", "description": "Liveness checks. No API key needed."},
+    {"name": "applications", "description": "Record, update and delete verified job applications."},
+    {"name": "resumes", "description": "Generate a resume PDF for a recorded application."},
+]
+
+ERROR_DESCRIPTIONS = {
+    401: "Missing or wrong `X-API-Key`. Checked before the body or ID is looked at.",
+    404: "No application has this ID. An ID that is not a UUID gets this too.",
+    422: "The body is not JSON, not a JSON object, or fails validation. `message` names the fields and rules.",
+    500: "Resume generation failed.",
+    502: "Storage service unavailable.",
+    503: "Application store unavailable.",
+}
+
+
+def errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
+    return {status: {"model": ErrorResponse, "description": ERROR_DESCRIPTIONS[status]} for status in statuses}
+
+
+def json_body(model: type[BaseModel], description: str) -> dict[str, Any]:
+    """openapi_extra documenting a JSON body, with the model's example to prefill Try it out."""
+    return {
+        "requestBody": {
+            "required": True,
+            "description": description,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": f"#/components/schemas/{model.__name__}"},
+                    "example": model.model_config["json_schema_extra"]["examples"][0],
+                }
+            },
+        }
+    }
 
 
 def request_event(path: str) -> str | None:
@@ -76,7 +143,37 @@ def create_app(
     except ApplicationStoreError as exc:
         logger.error(json.dumps({"event": "application_store_error", "error": str(exc)}))
 
-    app = FastAPI(title="Job output service")
+    docs = settings.api_docs_enabled
+    app = FastAPI(
+        title="Job output service",
+        description=DESCRIPTION,
+        openapi_tags=TAGS,
+        # Off unless API_DOCS_ENABLED: the installed service is public through Funnel.
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
+        # Pinned off so an entered API key never outlives the page.
+        swagger_ui_parameters={"persistAuthorization": False},
+    )
+    default_openapi = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            schema = default_openapi()
+            _, definitions = models_json_schema(
+                [(model, "validation") for model in BODY_MODELS], ref_template="#/components/schemas/{model}"
+            )
+            schema["components"]["schemas"].update(definitions["$defs"])
+            # FastAPI adds its {"detail"} 422 to every route with parameters; this service never sends it.
+            for operations in schema["paths"].values():
+                for operation in operations.values():
+                    if "HTTPValidationError" in json.dumps(operation["responses"].get("422", {})):
+                        del operation["responses"]["422"]
+            for name in ("HTTPValidationError", "ValidationError"):
+                schema["components"]["schemas"].pop(name, None)
+        return app.openapi_schema
+
+    app.openapi = openapi
     expected_key = settings.api_key.get_secret_value().encode()
 
     def api_key_valid(x_api_key: str | None) -> bool:
@@ -105,8 +202,22 @@ def create_app(
                     fields[name] = value
             logger.info(json.dumps(fields))
 
-    @app.get("/healthz")
-    @app.get("/health")
+    health = {"model": HealthStatus, "description": "The service is up."}
+
+    @app.get(
+        "/healthz",
+        tags=["health"],
+        summary="Health check",
+        description='Returns `{"status": "ok"}` while the service is up. Same as `GET /health`.',
+        responses={200: health},
+    )
+    @app.get(
+        "/health",
+        tags=["health"],
+        summary="Health check (alias)",
+        description='Returns `{"status": "ok"}` while the service is up. Same as `GET /healthz`.',
+        responses={200: health},
+    )
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
@@ -116,8 +227,32 @@ def create_app(
 
     # Errors use {"ok": false, "message"}, so the key is checked inline rather than through a
     # FastAPI dependency, whose 401 would come back as {"detail"}.
-    @app.post("/application")
-    async def record_application(request: Request, x_api_key: str | None = Header(default=None)):
+    application_id_path = Path(description="The application's UUID, as returned when it was recorded.")
+
+    @app.post(
+        "/application",
+        tags=["applications"],
+        summary="Record a verified application",
+        description=(
+            "Records a verified job posting and returns its ID. New rows get status `verified`.\n\n"
+            "Deduplicated on `job_link` (scheme and host case, default ports, fragments, trailing slashes "
+            "and tracking parameters are ignored): sending a recorded posting again changes nothing and "
+            "returns 200 with the existing ID.\n\n"
+            "Rules beyond the schema:\n"
+            "- `recruiting_platform` requires `verification_method` `official_apply_match` and "
+            "`official_apply_url` equal to `job_link`.\n"
+            "- `employer_site` requires `verification_method` `employer_site` and an empty `official_apply_url`.\n"
+            "- Unknown fields are ignored."
+        ),
+        status_code=201,
+        responses={
+            201: {"model": ApplicationRecorded, "description": "Recorded as a new application."},
+            200: {"model": ApplicationRecorded, "description": "Already recorded; the existing ID is returned."},
+            **errors(401, 422, 503),
+        },
+        openapi_extra=json_body(ApplicationRow, "The verified posting."),
+    )
+    async def record_application(request: Request, x_api_key: str | None = Security(api_key_header)):
         if not api_key_valid(x_api_key):
             return application_error(401, "Invalid or missing API key")
         try:
@@ -157,9 +292,26 @@ def create_app(
             return None, validation_message(exc)
 
     # The path ID is taken as a string: a typed UUID would let FastAPI answer with its own 422 shape.
-    @app.patch("/application/{application_id}")
+    @app.patch(
+        "/application/{application_id}",
+        tags=["applications"],
+        summary="Update an application",
+        description=(
+            "Writes only the fields present in the body. `status`, `company` and `role` cannot be set to null.\n\n"
+            "`job_link`, `posting_source_type`, `verification_method` and `official_apply_url` are fixed once "
+            "recorded: including any of them gets 422.\n\n"
+            "An unknown ID gets 404 even when the body is also invalid."
+        ),
+        responses={
+            200: {"model": ApplicationUpdated, "description": "Updated; returns the application's current status."},
+            **errors(401, 404, 422, 503),
+        },
+        openapi_extra=json_body(ApplicationUpdate, "The fields to change; at least one."),
+    )
     async def update_application(
-        application_id: str, request: Request, x_api_key: str | None = Header(default=None)
+        request: Request,
+        application_id: str = application_id_path,
+        x_api_key: str | None = Security(api_key_header),
     ):
         if not api_key_valid(x_api_key):
             return application_error(401, "Invalid or missing API key")
@@ -182,9 +334,23 @@ def create_app(
             return application_not_found()
         return {"ok": True, "application_id": target, "status": status}
 
-    @app.delete("/application/{application_id}")
+    @app.delete(
+        "/application/{application_id}",
+        tags=["applications"],
+        summary="Delete an application",
+        description=(
+            "Permanently removes the application and all its fields; this cannot be undone. "
+            "Resume files already generated for it are kept."
+        ),
+        responses={
+            200: {"model": ApplicationRecorded, "description": "Deleted."},
+            **errors(401, 404, 503),
+        },
+    )
     async def delete_application(
-        application_id: str, request: Request, x_api_key: str | None = Header(default=None)
+        request: Request,
+        application_id: str = application_id_path,
+        x_api_key: str | None = Security(api_key_header),
     ):
         if not api_key_valid(x_api_key):
             return application_error(401, "Invalid or missing API key")
@@ -201,8 +367,22 @@ def create_app(
         return {"ok": True, "application_id": target}
 
 
-    @app.post("/resume")
-    async def create_resume(request: Request, x_api_key: str | None = Header(default=None)):
+    @app.post(
+        "/resume",
+        tags=["resumes"],
+        summary="Generate a resume PDF",
+        description=(
+            "Renders the resume for a recorded application and saves it on the service host at `saved_path`, "
+            "replacing any earlier render. The application itself is not changed. Rendering takes a few seconds."
+        ),
+        status_code=201,
+        responses={
+            201: {"model": ResumeCreated, "description": "Generated and saved."},
+            **errors(401, 404, 422, 500, 502, 503),
+        },
+        openapi_extra=json_body(ResumeRequest, "The application to generate a resume for."),
+    )
+    async def create_resume(request: Request, x_api_key: str | None = Security(api_key_header)):
         if not api_key_valid(x_api_key):
             return application_error(401, "Invalid or missing API key")
         try:
