@@ -1,6 +1,7 @@
 #!/bin/sh
-# Smoke test: record a synthetic application on a running service, generate its resume, and
-# check that the file at the returned saved_path is a PDF. Must run on the Mac itself, since it
+# Smoke test: check that API docs are not served, then record a synthetic application on a
+# running service, generate its resume, and check that the file at the returned saved_path is a
+# PDF. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
 # Usage: API_KEY=... scripts/smoke_test.sh <base_url>
@@ -36,6 +37,15 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# The installed service is public, so it must never serve the API reference or its schema.
+for path in /docs /openapi.json; do
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$base$path")
+  if [ "$status" != "404" ]; then
+    echo "FAIL: GET $path returned $status, want 404 (API docs must be off on the installed service)" >&2
+    exit 1
+  fi
+done
 
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/application" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \

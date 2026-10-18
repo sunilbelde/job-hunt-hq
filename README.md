@@ -12,7 +12,7 @@ The generation step is a stub: `generate_output` in `app/generation.py` receives
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`POST /resume`)
 
@@ -105,6 +105,7 @@ Copy `.env.example` to `.env` (git-ignored), fill it in and run `chmod 600 .env`
 | `API_KEY` | yes | Sent by clients as `X-API-Key`. Generate it with `openssl rand -hex 32` |
 | `OUTPUT_DIR` | no | Where resumes and the application store live. Default `~/Library/Application Support/job-hunt-hq`. Don't use `~/Documents`, `~/Desktop` or `~/Downloads`: macOS blocks background services from those folders |
 | `ANTHROPIC_API_KEY` | no | Not used yet; reserved for resume tailoring |
+| `API_DOCS_ENABLED` | no | Default `false`. `true` serves the API reference at `/docs`, `/redoc` and `/openapi.json`. Local development only: the installed service always runs with it off |
 
 ## Development
 
@@ -134,6 +135,17 @@ curl -X DELETE "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY"
 # {"ok":true,"application_id":"3f2b…"}   (404 {"ok":false,"message":"Application not found"} if sent again)
 ```
 
+### API reference and request tester
+
+An interactive API reference (Swagger UI) is available on a development server. Its **Try it out** button sends a request to the service and shows the status, headers and body. Requests are real, so point `OUTPUT_DIR` at a throwaway folder:
+
+```sh
+API_DOCS_ENABLED=true OUTPUT_DIR=/tmp/job-hunt-hq-dev .venv/bin/uvicorn app.main:create_app --factory --port 8080
+open http://localhost:8080/docs   # also /redoc and /openapi.json
+```
+
+Click **Authorize** and enter the API key once. The page keeps it in memory only, so reloading forgets it. The page loads Swagger UI's files from the jsDelivr CDN. The installed service never serves these pages: its launchd job sets `API_DOCS_ENABLED=false`, which wins over `.env`, and the smoke test fails if `/docs` answers.
+
 Tests (no network needed):
 
 ```sh
@@ -144,7 +156,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` endpoints. Generated files are never served over HTTP.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` endpoints. Generated files are never served over HTTP, and neither are the API docs.
 
 ### 1. Prerequisites
 
