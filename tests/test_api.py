@@ -278,3 +278,172 @@ def test_startup_cleanup_failure_does_not_stop_service(settings, storage, monkey
     with TestClient(create_app(settings, storage)) as client:
         assert client.get("/healthz").status_code == 200
     assert "cleanup_error" in caplog.text
+
+
+# --- POST /application (real ApplicationStore in tmp_path) ---
+
+import sqlite3  # noqa: E402
+
+from app.applications import ApplicationStoreError  # noqa: E402
+from tests.conftest import GH_LINK, VALID_APPLICATION  # noqa: E402
+
+
+def post_application(client, body, headers=HEADERS):
+    return client.post("/application", json=body, headers=headers)
+
+
+def link_variant(link):
+    return {**VALID_APPLICATION, "job_link": link, "official_apply_url": link}
+
+
+def stored_rows(settings):
+    with sqlite3.connect(settings.output_dir / "applications.sqlite3") as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute("SELECT * FROM applications ORDER BY id")]
+
+
+def assert_error(r, status):
+    assert r.status_code == status
+    body = r.json()
+    assert set(body) == {"ok", "message"} and body["ok"] is False and body["message"]
+    return body["message"]
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_application_auth_rejected(client, settings, headers):
+    assert_error(post_application(client, VALID_APPLICATION, headers), 401)
+    assert stored_rows(settings) == []
+
+
+def test_application_auth_checked_before_body(client):
+    r = client.post("/application", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert_error(r, 401)
+
+
+def test_application_invalid_json(client, settings):
+    r = client.post("/application", content=b"{not json", headers={**HEADERS, "Content-Type": "application/json"})
+    assert_error(r, 422)
+    assert stored_rows(settings) == []
+
+
+@pytest.mark.parametrize("body", ["[1, 2]", '"text"', "42", "null"])
+def test_application_non_object_body(client, settings, body):
+    r = client.post("/application", content=body, headers={**HEADERS, "Content-Type": "application/json"})
+    assert_error(r, 422)
+    assert stored_rows(settings) == []
+
+
+@pytest.mark.parametrize("change,field", [
+    ({"job_link": ""}, "job_link"),
+    ({"job_link": None}, "job_link"),
+    ({"company": None}, "company"),
+    ({"salary": 100}, "salary"),
+    ({"posting_source_type": "linkedin"}, "posting_source_type"),
+    ({"verification_method": "Official_Apply_Match"}, "verification_method"),
+    ({"verification_method": "employer_site"}, "verification_method"),
+    ({"official_apply_url": GH_LINK + "/"}, "official_apply_url"),
+    ({"official_apply_url": ""}, "official_apply_url"),
+    ({"posting_source_type": "employer_site", "verification_method": "employer_site"}, "official_apply_url"),
+])
+def test_application_field_rules_422(client, settings, change, field):
+    message = assert_error(post_application(client, {**VALID_APPLICATION, **change}), 422)
+    assert field in message
+    assert stored_rows(settings) == []
+
+
+def test_application_missing_job_link_422(client):
+    body = {k: v for k, v in VALID_APPLICATION.items() if k != "job_link"}
+    assert "job_link" in assert_error(post_application(client, body), 422)
+
+
+def test_application_message_never_echoes_values(client):
+    r = post_application(client, {**VALID_APPLICATION, "posting_source_type": "secret-ish-value", "salary": 98765})
+    message = assert_error(r, 422)
+    assert "posting_source_type" in message
+    assert "secret-ish-value" not in r.text and "98765" not in r.text
+
+
+def test_application_created_then_duplicate(client, settings):
+    first = post_application(client, VALID_APPLICATION)
+    assert first.status_code == 201
+    body = first.json()
+    assert set(body) == {"ok", "application_id"} and body["ok"] is True
+    assert isinstance(body["application_id"], int) and body["application_id"] > 0
+    second = post_application(client, {**VALID_APPLICATION, "salary": "$1"})
+    assert second.status_code == 200 and second.json() == body
+    rows = stored_rows(settings)
+    assert len(rows) == 1 and rows[0]["salary"] == VALID_APPLICATION["salary"]
+
+
+def test_application_employer_site_accepted(client, settings):
+    body = {**VALID_APPLICATION, "job_link": "https://www.acme.com/careers/1",
+            "posting_source_type": "employer_site", "verification_method": "employer_site",
+            "official_apply_url": ""}
+    assert post_application(client, body).status_code == 201
+    assert stored_rows(settings)[0]["official_apply_url"] == ""
+
+
+def test_application_required_only_accepted(client):
+    body = {k: VALID_APPLICATION[k] for k in (
+        "company", "role", "job_link", "posting_source_type", "verification_method", "official_apply_url")}
+    assert post_application(client, {**body, "found": True}).status_code == 201
+
+
+def test_application_decorated_links_share_id(client, settings):
+    base = "https://job-boards.greenhouse.io/acme/jobs/123"
+    links = [base, base + "/", base + "?gh_src=x&utm_source=y", "HTTPS://Job-Boards.Greenhouse.io/acme/jobs/123#apply"]
+    ids = {post_application(client, link_variant(link)).json()["application_id"] for link in links}
+    assert len(ids) == 1
+    rows = stored_rows(settings)
+    assert len(rows) == 1 and rows[0]["job_link"] == base
+
+
+def test_application_job_id_in_query_distinct(client):
+    a = post_application(client, link_variant("https://www.acme.com/careers?gh_jid=111"))
+    b = post_application(client, link_variant("https://www.acme.com/careers?gh_jid=222"))
+    assert (a.status_code, b.status_code) == (201, 201)
+    assert a.json()["application_id"] != b.json()["application_id"]
+
+
+class FailingApplications:
+    def record(self, fields):
+        raise ApplicationStoreError("OperationalError: disk I/O error: /secret/out/applications.sqlite3")
+
+
+def test_application_store_failure_503(settings, storage, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    client = TestClient(create_app(settings, storage, FailingApplications()))
+    r = post_application(client, VALID_APPLICATION)
+    message = assert_error(r, 503)
+    assert "/secret" not in r.text and "OperationalError" not in r.text and "disk" not in message
+    assert "application_store_error" in caplog.text and "disk I/O error" in caplog.text
+
+
+def test_application_store_created_at_startup(settings, storage):
+    create_app(settings, storage)
+    assert (settings.output_dir / "applications.sqlite3").is_file()
+
+
+# --- POST /application logging ---
+
+def application_log_lines(caplog):
+    return [json.loads(r.getMessage()) for r in caplog.records
+            if r.name == "app.requests" and '"application_request"' in r.getMessage()]
+
+
+def test_application_one_log_line_per_request(client, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    post_application(client, {**VALID_APPLICATION, "why_it_fits": "payload-value"})
+    post_application(client, VALID_APPLICATION)
+    post_application(client, VALID_APPLICATION, {"X-API-Key": "wrong-key-value"})
+    post_application(client, {**VALID_APPLICATION, "company": ""})
+    lines = application_log_lines(caplog)
+    assert [l["status"] for l in lines] == [201, 200, 401, 422]
+    assert all({"status", "duration_ms"} <= set(l) and "job_id" not in l for l in lines)
+    assert lines[0]["duplicate"] is False and lines[1]["duplicate"] is True
+    assert lines[0]["application_id"] == lines[1]["application_id"]
+    assert "application_id" not in lines[2] and "application_id" not in lines[3]
+    assert '"job_request"' not in caplog.text
+    text = caplog.text
+    assert "payload-value" not in text and "wrong-key-value" not in text and API_KEY not in text
+    assert GH_LINK not in text and "Acme Corp" not in text

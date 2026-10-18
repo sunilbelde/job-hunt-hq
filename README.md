@@ -9,8 +9,9 @@ The generation step is a stub: `generate_output` in `app/generation.py` validate
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
 | `POST /jobs` | `X-API-Key` | `201 {"job_id", "url", "expires_at", "key"}`; 401 bad key, 422 bad body, 500 render failure, 502 storage failure |
 | `GET /files/{key}?expires=…&sig=…` | signed link | The stored file. 403 for a missing, wrong or expired signature, 404 if the file is gone. This is the `url` returned by `POST /jobs` |
+| `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 
-Code layout: `app/main.py` (HTTP, download route, hourly cleanup), `app/models.py` (`JobRow`), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (local file storage, link signing, retention), `app/settings.py` (config), `app/log_filters.py` (keeps link signatures out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP, download route, hourly cleanup), `app/models.py` (`JobRow`, `ApplicationRow`), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (local file storage, link signing, retention), `app/settings.py` (config), `app/log_filters.py` (keeps link signatures out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`JobRow`)
 
@@ -20,6 +21,36 @@ All values are plain strings and are not parsed or validated beyond type. Extra 
 |---|---|
 | `company`, `role`, `full_job_description` | yes (non-empty) |
 | `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `job_link` | no |
+
+### Request body (`ApplicationRow`)
+
+Strings only, extra fields ignored, and a 422 message names fields but never values.
+
+| Field | Required |
+|---|---|
+| `company`, `role`, `job_link` | yes (non-empty) |
+| `posting_source_type` | yes: `recruiting_platform` or `employer_site` |
+| `verification_method` | yes: `official_apply_match` or `employer_site` |
+| `official_apply_url` | yes (may be `""`) |
+| `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `company_careers_url`, `official_employer_domain`, `full_job_description` | no |
+
+Only two combinations are verified, and anything else is a 422:
+
+- `recruiting_platform` + `official_apply_match`, with `official_apply_url` equal to `job_link` byte-for-byte
+- `employer_site` + `employer_site`, with `official_apply_url` set to `""`
+
+**Dedupe.** A posting counts as already stored when its `job_link` matches after normalization:
+- the scheme and host are lowercased
+- the default port, the `#fragment` and trailing slashes are dropped
+- the tracking parameters `utm_*`, `gh_src`, `source`, `src`, `ref`, `lever-source`, `lever-origin` and `trk` are removed
+
+Other query parameters are kept, so `?gh_jid=111` and `?gh_jid=222` stay separate postings. Path case is kept. A duplicate never changes the stored row, and `job_link` is stored as first sent. To strip a new tracking parameter, add it to `TRACKING_PARAMS` in `app/applications.py`.
+
+Rows live in `OUTPUT_DIR/applications.sqlite3` (mode 600). Retention cleanup doesn't touch the file. To back it up while the service runs:
+
+```sh
+sqlite3 ~/Library/Application\ Support/job-hunt-hq/applications.sqlite3 ".backup applications-backup.sqlite3"
+```
 
 ### Storage and links
 
@@ -51,6 +82,11 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 curl -X POST localhost:8080/jobs -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"company":"Acme","role":"Software Engineer","full_job_description":"Build things."}'
+
+curl -X POST localhost:8080/application -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"company":"Acme","role":"Software Engineer","job_link":"https://www.acme.com/careers/1","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":""}'
+# {"ok":true,"application_id":1}   (201; 200 with the same id when sent again)
 ```
 
 Tests (no network needed):
@@ -63,7 +99,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key for `POST /jobs` and the signed links for downloads.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key for `POST /jobs` and `POST /application`, and the signed links for downloads.
 
 ### 1. Prerequisites
 
@@ -124,7 +160,7 @@ The install script checks prerequisites and `.env` permissions, creates `.venv`,
 The daemon runs straight from this checkout. **After `git pull`, run `scripts/install_service.sh` again** (or `sudo launchctl kickstart -k system/local.job-hunt-hq` if only Python code changed).
 
 Logs are in `~/Library/Logs/job-hunt-hq/`:
-- `service.log`: requests (one JSON line per `POST /jobs`), access log without query strings, and cleanup. Rotated at 10 MB, 5 kept.
+- `service.log`: requests (one JSON line per `POST /jobs` or `POST /application`), access log without query strings, and cleanup. Rotated at 10 MB, 5 kept.
 - `launchd.log`: anything printed before logging starts, such as import errors and crash tracebacks.
 
 ### 5. Verify

@@ -14,8 +14,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
 
+from app.applications import ApplicationStore, ApplicationStoreError
 from app.generation import generate_output
-from app.models import JobRow
+from app.models import ApplicationRow, JobRow
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
 from app.storage import LinkSigner, LocalStorage, Storage, StorageError, content_type_for, is_valid_key
@@ -28,15 +29,35 @@ if not logger.hasHandlers():  # without --log-config, uvicorn leaves app loggers
     logger.addHandler(_handler)
 
 CLEANUP_INTERVAL_SECONDS = 3600
+REQUEST_EVENTS = {"/jobs": "job_request", "/application": "application_request"}
 
 
-def create_app(settings: Settings | None = None, storage: Storage | None = None) -> FastAPI:
+def application_error(status: int, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"ok": False, "message": message})
+
+
+def validation_message(exc: ValidationError) -> str:
+    """Field names and messages only: never echo submitted values."""
+    parts = []
+    for error in exc.errors(include_input=False):
+        msg = error["msg"].removeprefix("Value error, ")
+        field = ".".join(str(part) for part in error["loc"])
+        parts.append(f"{field}: {msg}" if field else msg)
+    return "Invalid request: " + "; ".join(parts)
+
+
+def create_app(
+    settings: Settings | None = None,
+    storage: Storage | None = None,
+    applications: ApplicationStore | None = None,
+) -> FastAPI:
     """Build the app. Settings are validated here, so bad config fails at startup."""
     settings = settings or get_settings()
     storage = storage or LocalStorage(
         settings.output_dir,
         LinkSigner(settings.link_signing_secret.get_secret_value(), settings.public_base_url),
     )
+    applications = applications or ApplicationStore(settings.output_dir / "applications.sqlite3")
     retention_seconds = settings.output_retention_days * 86400
 
     async def run_cleanup() -> None:
@@ -67,15 +88,20 @@ def create_app(settings: Settings | None = None, storage: Storage | None = None)
     app = FastAPI(title="Job output service", lifespan=lifespan)
     expected_key = settings.api_key.get_secret_value().encode()
 
+    def api_key_valid(x_api_key: str | None) -> bool:
+        return x_api_key is not None and secrets.compare_digest(x_api_key.encode(), expected_key)
+
     def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-        if x_api_key is None or not secrets.compare_digest(x_api_key.encode(), expected_key):
+        if not api_key_valid(x_api_key):
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     @app.middleware("http")
-    async def log_jobs_request(request: Request, call_next):
-        if request.url.path != "/jobs":
+    async def log_request(request: Request, call_next):
+        event = REQUEST_EVENTS.get(request.url.path)
+        if event is None:
             return await call_next(request)
-        request.state.job_id = str(uuid.uuid4())
+        if event == "job_request":
+            request.state.job_id = str(uuid.uuid4())
         started = time.perf_counter()
         status = 500
         try:
@@ -83,15 +109,15 @@ def create_app(settings: Settings | None = None, storage: Storage | None = None)
             status = response.status_code
             return response
         finally:
-            fields: dict[str, Any] = {
-                "event": "job_request",
-                "job_id": request.state.job_id,
-                "status": status,
-                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-            }
-            key = getattr(request.state, "key", None)
-            if key:
-                fields["key"] = key
+            fields: dict[str, Any] = {"event": event}
+            if event == "job_request":
+                fields["job_id"] = request.state.job_id
+            fields["status"] = status
+            fields["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
+            for name in ("key", "application_id", "duplicate"):
+                value = getattr(request.state, name, None)
+                if value is not None:
+                    fields[name] = value
             logger.info(json.dumps(fields))
 
     @app.get("/healthz")
@@ -158,5 +184,35 @@ def create_app(settings: Settings | None = None, storage: Storage | None = None)
             "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
             "key": key,
         }
+
+    # Errors here use {"ok": false, "message"} instead of /jobs' {"detail"}, so the key is
+    # checked inline rather than through require_api_key.
+    @app.post("/application")
+    async def record_application(request: Request, x_api_key: str | None = Header(default=None)):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        try:
+            payload = await request.json()
+        except ValueError:
+            return application_error(422, "Request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return application_error(422, "Request body must be a JSON object")
+
+        try:
+            application = ApplicationRow.model_validate(payload)
+        except ValidationError as exc:
+            return application_error(422, validation_message(exc))
+
+        try:
+            application_id, created = await run_in_threadpool(applications.record, application.model_dump())
+        except ApplicationStoreError as exc:
+            logger.error(json.dumps({"event": "application_store_error", "error": str(exc)}))
+            return application_error(503, "Application store unavailable")
+        request.state.application_id = application_id
+        request.state.duplicate = not created
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content={"ok": True, "application_id": application_id},
+        )
 
     return app
