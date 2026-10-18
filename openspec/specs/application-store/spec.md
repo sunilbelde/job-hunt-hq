@@ -77,13 +77,6 @@ The store file SHALL be readable and writable only by the service's user account
 - **WHEN** the service creates the store file
 - **THEN** its mode grants no access to group or other users
 
-### Requirement: Excluded from output retention
-Retention cleanup of generated files SHALL NOT delete or modify the application store, regardless of its age.
-
-#### Scenario: Old store kept
-- **WHEN** retention is 30 days and the store file was last modified 31 days ago
-- **THEN** after a cleanup run the store file and all its rows still exist
-
 ### Requirement: Atomic row updates
 An update SHALL apply all of its field changes to one row in a single transaction, so the row reflects either all of the changes or none of them. Concurrent updates to the same row SHALL each apply whole, with the later one winning field by field.
 

@@ -1,28 +1,22 @@
 # job-hunt-hq
 
-A small FastAPI service that runs on a Mac mini used as a personal server. `POST /jobs` takes a job posting, renders a resume PDF, stores it on the Mac's disk, and returns a signed download link that expires. Nothing depends on a cloud service: storage, links, secrets and the process all live on the Mac, and it is published over HTTPS through [Tailscale](https://tailscale.com) Funnel, so both your own devices and outside tools (such as Muse) can call it.
+A small FastAPI service that runs on a Mac mini used as a personal server. `POST /application` records a job posting, and `POST /resume` renders a resume PDF for a recorded application and saves it on the Mac's disk at `OUTPUT_DIR/<company>/<application id>/SUNIL BELDE.pdf`. Nothing depends on a cloud service: storage, secrets and the process all live on the Mac, and it is published over HTTPS through [Tailscale](https://tailscale.com) Funnel, so both your own devices and outside tools (such as Muse) can call it.
 
-The generation step is a stub: `generate_output` in `app/generation.py` validates the posting but ignores its contents and renders the baseline resume (`data/BASE.tex` + `data/resume.cls`, compiled with [tectonic](https://tectonic-typesetting.github.io/)), so the PDF is equivalent to `data/BASE.pdf`. **Not implemented yet (backlog):** tailoring the resume to the posting; that change will replace the stub with generated TeX rendered through the same path.
+The generation step is a stub: `generate_output` in `app/generation.py` receives the stored application but ignores its contents and renders the baseline resume (`data/BASE.tex` + `data/resume.cls`, compiled with [tectonic](https://tectonic-typesetting.github.io/)), so the PDF is equivalent to `data/BASE.pdf`. **Not implemented yet (backlog):** tailoring the resume to the posting; that change will replace the stub with generated TeX rendered through the same path.
 
 | Endpoint | Auth | Description |
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
-| `POST /jobs` | `X-API-Key` | `201 {"job_id", "url", "expires_at", "key"}`; 401 bad key, 422 bad body, 500 render failure, 502 storage failure |
-| `GET /files/{key}?expires=…&sig=…` | signed link | The stored file. 403 for a missing, wrong or expired signature, 404 if the file is gone. This is the `url` returned by `POST /jobs` |
+| `POST /resume` | `X-API-Key` | Body `{"application_id": <integer>}`. Renders the resume from the stored application and saves it. `201 {"ok": true, "application_id", "saved_path"}`, where `saved_path` is the file's absolute path. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render failure, 502 file write failure, 503 store failure |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP, download route, hourly cleanup), `app/models.py` (`JobRow`, `ApplicationRow`, `ApplicationUpdate`), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (local file storage, link signing, retention), `app/settings.py` (config), `app/log_filters.py` (keeps link signatures out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
 
-### Request body (`JobRow`)
+### Request body (`POST /resume`)
 
-All values are plain strings and are not parsed or validated beyond type. Extra fields are ignored. Missing or empty required fields, or non-string values, return 422 (the error lists field names, never values).
-
-| Field | Required |
-|---|---|
-| `company`, `role`, `full_job_description` | yes (non-empty) |
-| `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `job_link` | no |
+`{"application_id": 7}`: the ID returned by `POST /application`, as a JSON integer. Everything else (company, role, job description and so on) is read from the stored application, so record or `PATCH` the posting first. Extra fields are ignored. A missing or non-integer ID (`"7"`, `7.5`, `true`) is a 422; an integer that names no stored application, including `0` and negatives, is a 404. Generating a resume never changes the application, its status included, and works for any status.
 
 ### Request body (`ApplicationRow`)
 
@@ -68,7 +62,7 @@ An unknown ID returns 404, checked before the body, and a bad key returns 401 be
 
 **Deleting** is permanent and frees the link: posting it again creates a new row with a new, larger ID, and IDs are never reused. To stop tracking a posting but keep its record, set `status` to `withdrawn` instead.
 
-Rows live in `OUTPUT_DIR/applications.sqlite3` (mode 600). Retention cleanup doesn't touch the file. To back it up while the service runs:
+Rows live in `OUTPUT_DIR/applications.sqlite3` (mode 600). To back it up while the service runs:
 
 ```sh
 sqlite3 ~/Library/Application\ Support/job-hunt-hq/applications.sqlite3 ".backup applications-backup.sqlite3"
@@ -76,9 +70,17 @@ sqlite3 ~/Library/Application\ Support/job-hunt-hq/applications.sqlite3 ".backup
 
 Take a backup before upgrading to a build that changes the store. The first start of the status-aware build adds the `status` and `updated_at` columns in place. Older builds ignore them, so rolling back needs no restore.
 
-### Storage and links
+### Resume files
 
-Files are written to `OUTPUT_DIR/outputs/YYYY-MM-DD/<uuid>.pdf`. The directory is readable only by your user. Download links are signed with `LINK_SIGNING_SECRET` (HMAC-SHA256) and expire after `SIGNED_URL_TTL_SECONDS`. They keep working across restarts. The service deletes files older than `OUTPUT_RETENTION_DAYS`, at startup and then every hour.
+Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/SUNIL BELDE.pdf`, using the application's company at the time you generate. The folder keeps the company name as written (spaces, case, accents), with `/`, `\`, `:` and control characters replaced by `-`, leading and trailing spaces and dots removed, and the name cut to 100 characters. An empty result becomes `unknown-company`, and a name starting with `applications.sqlite3` gets a leading `_` so it can't collide with the store.
+
+- Generating again for the same application replaces the file in one step; a failed render or write leaves the previous file intact.
+- Folders are readable only by your user and files are mode 600. The service doesn't serve them over HTTP.
+- Files are kept until you delete them. Deleting an application, or renaming its company, leaves existing resume folders where they are.
+
+### Upgrading from `POST /jobs`
+
+`POST /jobs`, `GET /files/...` and signed download links are gone (both return 404). Record the posting with `POST /application`, then call `POST /resume` with the returned ID, and read errors from `ok`/`message` rather than `detail`. `LINK_SIGNING_SECRET`, `PUBLIC_BASE_URL`, `SIGNED_URL_TTL_SECONDS` and `OUTPUT_RETENTION_DAYS` are no longer used: remove them from `.env` (they're ignored if left in). Files under `OUTPUT_DIR/outputs/` from the old endpoint are no longer served or cleaned up; delete that folder by hand.
 
 ## Configuration
 
@@ -87,11 +89,7 @@ Copy `.env.example` to `.env` (git-ignored), fill it in and run `chmod 600 .env`
 | Variable | Required | Notes |
 |---|---|---|
 | `API_KEY` | yes | Sent by clients as `X-API-Key`. Generate it with `openssl rand -hex 32` |
-| `LINK_SIGNING_SECRET` | yes | At least 32 characters; `openssl rand -hex 32`. Changing it invalidates every outstanding link, so rotate it if it leaks |
-| `PUBLIC_BASE_URL` | yes | Base of the download links, e.g. `https://mac-mini.your-tailnet.ts.net` |
-| `OUTPUT_DIR` | no | Default `~/Library/Application Support/job-hunt-hq`. Don't use `~/Documents`, `~/Desktop` or `~/Downloads`: macOS blocks background services from those folders |
-| `OUTPUT_RETENTION_DAYS` | no | Default 30. Must be at least as long as the link lifetime |
-| `SIGNED_URL_TTL_SECONDS` | no | Default and max 604800 (7 days) |
+| `OUTPUT_DIR` | no | Where resumes and the application store live. Default `~/Library/Application Support/job-hunt-hq`. Don't use `~/Documents`, `~/Desktop` or `~/Downloads`: macOS blocks background services from those folders |
 | `ANTHROPIC_API_KEY` | no | Not used yet; reserved for resume tailoring |
 
 ## Development
@@ -103,14 +101,14 @@ brew install python@3.12 tectonic
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/uvicorn app.main:create_app --factory --port 8080
 
-curl -X POST localhost:8080/jobs -H "X-API-Key: $API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"company":"Acme","role":"Software Engineer","full_job_description":"Build things."}'
-
 curl -X POST localhost:8080/application -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"company":"Acme","role":"Software Engineer","job_link":"https://www.acme.com/careers/1","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":""}'
 # {"ok":true,"application_id":1}   (201; 200 with the same id when sent again)
+
+curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' -d '{"application_id":1}'
+# {"ok":true,"application_id":1,"saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/1/SUNIL BELDE.pdf"}
 
 curl -X PATCH localhost:8080/application/1 -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
@@ -130,7 +128,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key for `POST /jobs` and the `/application` endpoints, and the signed links for downloads.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` endpoints. Generated files are never served over HTTP.
 
 ### 1. Prerequisites
 
@@ -160,7 +158,7 @@ tailscale funnel status   # "Funnel on": https://<machine>.<tailnet>.ts.net -> h
 
 If Funnel isn't allowed yet, the command prints an admin-console link to enable it for this machine. Use `--bg` so it keeps running after the terminal closes; the setting persists across reboots.
 
-**Security:** with Funnel on, anyone on the internet can reach the service. The API key (keep it a 64-character random value) and the link-signing secret are the only protection, and there is no rate limiting yet. Give outside tools only the URL and `API_KEY`.
+**Security:** with Funnel on, anyone on the internet can reach the service. The API key (keep it a 64-character random value) is the only protection, and there is no rate limiting yet. Give outside tools only the URL and `API_KEY`.
 
 To go back to tailnet-only access:
 
@@ -173,8 +171,7 @@ sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
 
 ```sh
 cp .env.example .env
-# API_KEY and LINK_SIGNING_SECRET: openssl rand -hex 32
-# PUBLIC_BASE_URL: the https://<machine>.<tailnet>.ts.net URL from `tailscale funnel status`
+# API_KEY: openssl rand -hex 32
 chmod 600 .env
 ```
 
@@ -191,16 +188,18 @@ The install script checks prerequisites and `.env` permissions, creates `.venv`,
 The daemon runs straight from this checkout. **After `git pull`, run `scripts/install_service.sh` again** (or `sudo launchctl kickstart -k system/local.job-hunt-hq` if only Python code changed).
 
 Logs are in `~/Library/Logs/job-hunt-hq/`:
-- `service.log`: requests (one JSON line per `POST /jobs` or `/application` request, the latter with its `method`), access log without query strings, and cleanup. Rotated at 10 MB, 5 kept.
+- `service.log`: requests (one JSON line per `POST /resume` or `/application` request, the latter with its `method`) and the access log without query strings. Rotated at 10 MB, 5 kept.
 - `launchd.log`: anything printed before logging starts, such as import errors and crash tracebacks.
 
 ### 5. Verify
 
-From another device (any network, since Funnel is public):
+On the Mac (the smoke test reads the saved PDF from disk, so it must run there):
 
 ```sh
-API_KEY=... scripts/smoke_test.sh https://<machine>.<tailnet>.ts.net
+API_KEY=... scripts/smoke_test.sh http://127.0.0.1:8080
 ```
+
+It records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 

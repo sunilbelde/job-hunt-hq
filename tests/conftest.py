@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,9 +9,6 @@ from app.settings import Settings
 from app.storage import StorageError
 
 API_KEY = "test-api-key"
-SIGNING_SECRET = "x" * 32
-BASE_URL = "https://mac-mini.tail1234.ts.net"
-VALID_JOB = {"company": "Acme", "role": "Engineer", "full_job_description": "Build things"}
 # The client's example POST /application body.
 GH_LINK = "https://job-boards.greenhouse.io/acme/jobs/1234567"
 VALID_APPLICATION = {
@@ -32,41 +31,22 @@ VALID_APPLICATION = {
 
 
 class FakeStorage:
+    """Records what would be saved; writes nothing."""
+
     def __init__(self, fail: bool = False):
         self.fail = fail
-        self.uploads: list[tuple[bytes, str, str]] = []
-        self.signed: list[tuple[str, int]] = []
+        self.saved: list[tuple[str, int, bytes]] = []
 
-    def upload(self, content, content_type, extension):
+    def save_resume(self, company, application_id, content):
         if self.fail:
-            raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/outputs")
-        self.uploads.append((content, content_type, extension))
-        return f"outputs/2026-01-01/fake.{extension}"
-
-    def presigned_url(self, key, ttl_seconds):
-        self.signed.append((key, ttl_seconds))
-        return f"{BASE_URL}/files/{key}?ttl={ttl_seconds}"
-
-    def verify_link(self, key, expires, sig):
-        return False
-
-    def path_for(self, key):
-        raise ValueError("invalid key")
-
-    def cleanup(self, max_age_seconds):
-        return 0
+            raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/Acme")
+        self.saved.append((company, application_id, content))
+        return Path("/fake/out") / company / str(application_id) / "SUNIL BELDE.pdf"
 
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(
-        _env_file=None,
-        api_key=API_KEY,
-        link_signing_secret=SIGNING_SECRET,
-        public_base_url=BASE_URL,
-        output_dir=tmp_path / "out",
-        signed_url_ttl_seconds=3600,
-    )
+    return Settings(_env_file=None, api_key=API_KEY, output_dir=tmp_path / "out")
 
 
 @pytest.fixture
@@ -87,5 +67,5 @@ def fake_generate(monkeypatch):
     """Keep API tests independent of tectonic; rendering has its own tests."""
     monkeypatch.setattr(
         "app.main.generate_output",
-        lambda job, *, job_id=None: GeneratedFile(FAKE_PDF, "application/pdf", "pdf"),
+        lambda application: GeneratedFile(FAKE_PDF, "application/pdf", "pdf"),
     )

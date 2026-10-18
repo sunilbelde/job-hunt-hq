@@ -1,51 +1,35 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models import JobRow
-
-MINIMAL = {"company": "Acme", "role": "Engineer", "full_job_description": "Build things"}
+from app.models import ResumeRequest, StoredApplication
 
 
-def test_minimal_posting_accepted():
-    job = JobRow.model_validate(MINIMAL)
-    assert job.location is None and job.job_link is None
+# --- ResumeRequest ---
+
+def test_resume_request_ignores_extra_fields():
+    request = ResumeRequest.model_validate({"application_id": 7, "x": 1})
+    assert request.application_id == 7 and not hasattr(request, "x")
 
 
-def test_free_form_optional_values_pass_through_unchanged():
-    data = {**MINIMAL, "salary": "$120k-$150k + equity", "date_posted": "yesterday", "job_link": "not a url"}
-    job = JobRow.model_validate(data)
-    assert (job.salary, job.date_posted, job.job_link) == (
-        "$120k-$150k + equity", "yesterday", "not a url")
-
-
-def test_all_fields_accepted():
-    data = {**MINIMAL, **{k: "x" for k in (
-        "location", "work_type", "salary", "date_posted", "sponsorship", "why_it_fits", "job_link")}}
-    assert JobRow.model_validate(data).why_it_fits == "x"
-
-
-@pytest.mark.parametrize("field", ["company", "role", "full_job_description"])
-def test_missing_required_field(field):
-    data = {k: v for k, v in MINIMAL.items() if k != field}
+@pytest.mark.parametrize("body", [{"application_id": "7"}, {"application_id": 7.5},
+                                  {"application_id": True}, {"application_id": None}, {}])
+def test_resume_request_rejects_non_integer_ids(body):
     with pytest.raises(ValidationError) as exc:
-        JobRow.model_validate(data)
-    assert exc.value.errors()[0]["loc"] == (field,)
+        ResumeRequest.model_validate(body)
+    assert exc.value.errors()[0]["loc"] == ("application_id",)
 
 
-@pytest.mark.parametrize("field", ["company", "role", "full_job_description"])
-def test_empty_required_field(field):
-    with pytest.raises(ValidationError):
-        JobRow.model_validate({**MINIMAL, field: ""})
+# --- StoredApplication ---
 
-
-@pytest.mark.parametrize("field,value", [("salary", 100), ("company", None), ("role", 5), ("job_link", ["x"])])
-def test_wrong_type_rejected(field, value):
-    with pytest.raises(ValidationError):
-        JobRow.model_validate({**MINIMAL, field: value})
-
-
-def test_unknown_fields_ignored():
-    assert not hasattr(JobRow.model_validate({**MINIMAL, "extra": "x"}), "extra")
+def test_stored_application_with_null_optional_fields():
+    row = {
+        "id": 7, "company": "Acme", "role": "Engineer", "job_link": "https://example.com/1",
+        "posting_source_type": "employer_site", "verification_method": "employer_site",
+        "official_apply_url": "", "status": "verified", "location": None, "full_job_description": None,
+        "created_at": "2026-10-17T00:00:00Z", "updated_at": None,
+    }
+    application = StoredApplication.model_validate(row)
+    assert application.id == 7 and application.full_job_description is None and application.salary is None
 
 
 # --- ApplicationRow ---

@@ -1,14 +1,15 @@
 import json
 import logging
 import threading
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.log_filters import RedactQueryString
 from app.main import create_app
 from app.rendering import RenderError
-from tests.conftest import API_KEY, BASE_URL, VALID_JOB, FakeStorage
+from app.storage import RESUME_FILE_NAME, LocalStorage
+from tests.conftest import API_KEY, FAKE_PDF, FakeStorage
 
 HEADERS = {"X-API-Key": API_KEY}
 
@@ -17,267 +18,16 @@ HEADERS = {"X-API-Key": API_KEY}
 def test_health_open_and_no_storage_call(client, storage, path):
     r = client.get(path)
     assert r.status_code == 200 and r.json() == {"status": "ok"}
-    assert storage.uploads == [] and storage.signed == []
-
-
-@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
-def test_auth_rejected(client, storage, headers):
-    r = client.post("/jobs", json=VALID_JOB, headers=headers)
-    assert r.status_code == 401
-    assert storage.uploads == []
-
-
-def test_auth_checked_before_body(client, storage):
-    r = client.post("/jobs", content=b"{not json", headers={"Content-Type": "application/json"})
-    assert r.status_code == 401
-    assert storage.uploads == []
-
-
-def test_invalid_json(client, storage):
-    r = client.post(
-        "/jobs", content=b"{not json", headers={**HEADERS, "Content-Type": "application/json"}
-    )
-    assert 400 <= r.status_code < 500
-    assert storage.uploads == []
-
-
-@pytest.mark.parametrize("body", ["[1, 2]", '"text"', "42", "null"])
-def test_non_object_body(client, storage, body):
-    r = client.post("/jobs", content=body, headers={**HEADERS, "Content-Type": "application/json"})
-    assert 400 <= r.status_code < 500
-    assert storage.uploads == []
-
-
-def test_success_shape(client, storage):
-    r = client.post("/jobs", json=VALID_JOB, headers=HEADERS)
-    assert r.status_code == 201
-    body = r.json()
-    assert set(body) == {"job_id", "url", "expires_at", "key"}
-    assert body["key"].startswith("outputs/") and body["key"].endswith(".pdf")
-    assert body["url"].startswith(f"{BASE_URL}/files/")
-    assert body["expires_at"].endswith("Z")
-    content, content_type, ext = storage.uploads[0]
-    assert (content_type, ext) == ("application/pdf", "pdf")
-    assert content.startswith(b"%PDF")
-    assert storage.signed == [(body["key"], 3600)]
-
-
-def test_minimal_posting_accepted(client):
-    assert client.post("/jobs", json=VALID_JOB, headers=HEADERS).status_code == 201
-
-
-@pytest.mark.parametrize("body", [
-    {},
-    {"company": "Acme", "role": "Engineer"},
-    {**VALID_JOB, "company": ""},
-    {**VALID_JOB, "salary": 100},
-    {**VALID_JOB, "company": None},
-])
-def test_invalid_posting_422_and_nothing_stored(client, storage, body):
-    r = client.post("/jobs", json=body, headers=HEADERS)
-    assert r.status_code == 422
-    assert storage.uploads == []
-
-
-def test_422_does_not_echo_values(client):
-    r = client.post("/jobs", json={**VALID_JOB, "salary": 12345, "role": ""}, headers=HEADERS)
-    assert r.status_code == 422
-    assert "12345" not in r.text and "Build things" not in r.text
-
-
-def test_free_form_optional_values_accepted(client):
-    body = {**VALID_JOB, "salary": "$1", "date_posted": "yesterday", "job_link": "not a url"}
-    assert client.post("/jobs", json=body, headers=HEADERS).status_code == 201
-
-
-def test_storage_failure_returns_generic_502(settings):
-    client = TestClient(create_app(settings, FakeStorage(fail=True)))
-    r = client.post("/jobs", json=VALID_JOB, headers=HEADERS)
-    assert r.status_code == 502
-    assert "/secret/out" not in r.text and "No space left" not in r.text and "OSError" not in r.text
-
-
-def test_one_log_line_per_request_without_secrets(client, caplog):
-    caplog.set_level(logging.INFO, logger="app.requests")
-    client.post("/jobs", json={**VALID_JOB, "why_it_fits": "payload-value"}, headers=HEADERS)
-    client.post("/jobs", json=VALID_JOB, headers={"X-API-Key": "wrong-key-value"})
-    lines = [json.loads(r.getMessage()) for r in caplog.records if r.name == "app.requests"]
-    assert [l["status"] for l in lines] == [201, 401]
-    assert all({"job_id", "status", "duration_ms"} <= set(l) for l in lines)
-    text = caplog.text
-    assert "payload-value" not in text and "wrong-key-value" not in text and API_KEY not in text
-
-
-def test_storage_failure_logged_server_side(settings, caplog):
-    caplog.set_level(logging.INFO, logger="app.requests")
-    client = TestClient(create_app(settings, FakeStorage(fail=True)))
-    client.post("/jobs", json=VALID_JOB, headers=HEADERS)
-    assert "No space left on device" in caplog.text
-    request_lines = [r for r in caplog.records if '"job_request"' in r.getMessage()]
-    assert len(request_lines) == 1 and '"status": 502' in request_lines[0].getMessage()
-
-
-def _failing_render(job, *, job_id=None):
-    raise RenderError("tectonic exited with 1: /srv/data/BASE.tex:2 ! LaTeX Error")
-
-
-def test_render_failure_returns_generic_500(settings, storage, monkeypatch, caplog):
-    caplog.set_level(logging.INFO, logger="app.requests")
-    monkeypatch.setattr("app.main.generate_output", _failing_render)
-    client = TestClient(create_app(settings, storage))
-    r = client.post("/jobs", json=VALID_JOB, headers=HEADERS)
-    assert r.status_code == 500
-    assert r.json() == {"detail": "Resume generation failed"}
-    assert "LaTeX" not in r.text and "/srv" not in r.text and "tectonic" not in r.text
-    assert storage.uploads == []
-    assert "LaTeX Error" in caplog.text  # details are logged server-side
-    lines = [json.loads(r.getMessage()) for r in caplog.records if '"job_request"' in r.getMessage()]
-    assert len(lines) == 1 and lines[0]["status"] == 500 and lines[0]["job_id"]
-    errors = [json.loads(r.getMessage()) for r in caplog.records if '"render_error"' in r.getMessage()]
-    assert errors[0]["job_id"] == lines[0]["job_id"]
-
-
-def test_health_responds_during_slow_render(settings, storage, monkeypatch):
-    started, release = threading.Event(), threading.Event()
-
-    def slow(job, *, job_id=None):
-        started.set()
-        release.wait(timeout=10)
-        from app.generation import GeneratedFile
-        return GeneratedFile(b"%PDF-slow", "application/pdf", "pdf")
-
-    monkeypatch.setattr("app.main.generate_output", slow)
-    client = TestClient(create_app(settings, storage))
-    result = {}
-    worker = threading.Thread(
-        target=lambda: result.update(r=client.post("/jobs", json=VALID_JOB, headers=HEADERS))
-    )
-    worker.start()
-    try:
-        assert started.wait(timeout=5)
-        assert client.get("/health").status_code == 200  # not blocked by the in-flight render
-        assert "r" not in result  # the render is still running
-    finally:
-        release.set()
-        worker.join(timeout=10)
-    assert result["r"].status_code == 201
-
-
-# --- Signed downloads (real LocalStorage on tmp_path) ---
-
-from urllib.parse import parse_qs, urlsplit  # noqa: E402
-
-from app.log_filters import RedactQueryString  # noqa: E402
-from app.storage import LinkSigner, LocalStorage  # noqa: E402
-from tests.conftest import FAKE_PDF, SIGNING_SECRET  # noqa: E402
-
-
-@pytest.fixture
-def local_storage(settings):
-    return LocalStorage(settings.output_dir, LinkSigner(SIGNING_SECRET, BASE_URL))
-
-
-@pytest.fixture
-def local_client(settings, local_storage):
-    return TestClient(create_app(settings, local_storage))
-
-
-def _create(local_client):
-    r = local_client.post("/jobs", json=VALID_JOB, headers=HEADERS)
-    assert r.status_code == 201
-    body = r.json()
-    parts = urlsplit(body["url"])
-    query = {k: v[0] for k, v in parse_qs(parts.query).items()}
-    return body, parts.path, query
-
-
-def test_download_round_trip(local_client):
-    body, path, query = _create(local_client)
-    r = local_client.get(path, params=query)
-    assert r.status_code == 200
-    assert r.content == FAKE_PDF
-    assert r.headers["content-type"] == "application/pdf"
-    assert path == f"/files/{body['key']}"
-
-
-def test_download_without_api_key_header_needed(local_client):
-    _, path, query = _create(local_client)
-    assert local_client.get(path, params=query, headers={}).status_code == 200
-
-
-def test_download_missing_signature_403(local_client):
-    _, path, _ = _create(local_client)
-    assert local_client.get(path).status_code == 403
-
-
-def test_download_tampered_signature_403(local_client):
-    _, path, query = _create(local_client)
-    query["sig"] = "0" * 64
-    r = local_client.get(path, params=query)
-    assert r.status_code == 403 and FAKE_PDF not in r.content
-
-
-def test_download_expired_403(local_client, monkeypatch):
-    _, path, query = _create(local_client)
-    monkeypatch.setattr("app.storage.time.time", lambda: int(query["expires"]) + 1)
-    assert local_client.get(path, params=query).status_code == 403
-
-
-def test_download_traversal_403_without_filesystem_access(local_client, local_storage, monkeypatch):
-    calls = []
-    monkeypatch.setattr(local_storage, "path_for", lambda key: calls.append(key))
-    for path in ["/files/../../etc/passwd", "/files/outputs/..%2F..%2Fetc%2Fpasswd", "/files/outputs/x.pdf"]:
-        r = local_client.get(path, params={"expires": "9999999999", "sig": "0" * 64})
-        assert r.status_code in (403, 404)
-        assert r.status_code == 403 or not path.startswith("/files/outputs")
-    assert calls == []
-
-
-def test_download_deleted_file_404(local_client, settings):
-    body, path, query = _create(local_client)
-    (settings.output_dir / body["key"]).unlink()
-    assert local_client.get(path, params=query).status_code == 404
-
-
-def test_download_not_logged_as_job_request(local_client, caplog):
-    _, path, query = _create(local_client)
-    caplog.clear()
-    caplog.set_level(logging.DEBUG)
-    local_client.get(path, params=query)
-    service_logs = " ".join(
-        r.getMessage() for r in caplog.records if r.name.startswith(("app", "uvicorn"))
-    )
-    assert '"job_request"' not in service_logs
-    assert query["sig"] not in service_logs
+    assert storage.saved == []
 
 
 def test_access_log_query_string_redacted():
     record = logging.LogRecord(
         "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
-        ("100.64.0.1:5000", "GET", "/files/outputs/d/k.pdf?expires=1&sig=abc", "1.1", 200), None,
+        ("100.64.0.1:5000", "GET", "/application/1?token=abc", "1.1", 200), None,
     )
     assert RedactQueryString().filter(record)
-    assert "sig=" not in record.getMessage() and "/files/outputs/d/k.pdf" in record.getMessage()
-
-
-# --- Retention cleanup on startup ---
-
-def test_startup_cleanup_removes_expired_files(settings, local_storage):
-    import os
-    old = settings.output_dir / local_storage.upload(b"old", "application/pdf", "pdf")
-    recent = settings.output_dir / local_storage.upload(b"new", "application/pdf", "pdf")
-    t = time.time() - 31 * 86400
-    os.utime(old, (t, t))
-    with TestClient(create_app(settings, local_storage)) as client:
-        assert client.get("/health").status_code == 200
-    assert not old.exists() and recent.exists()
-
-
-def test_startup_cleanup_failure_does_not_stop_service(settings, storage, monkeypatch, caplog):
-    monkeypatch.setattr(storage, "cleanup", lambda max_age: (_ for _ in ()).throw(OSError("disk gone")))
-    with TestClient(create_app(settings, storage)) as client:
-        assert client.get("/healthz").status_code == 200
-    assert "cleanup_error" in caplog.text
+    assert "token=" not in record.getMessage() and "/application/1" in record.getMessage()
 
 
 # --- POST /application (real ApplicationStore in tmp_path) ---
@@ -443,7 +193,7 @@ def test_application_one_log_line_per_request(client, caplog):
     assert lines[0]["duplicate"] is False and lines[1]["duplicate"] is True
     assert lines[0]["application_id"] == lines[1]["application_id"]
     assert "application_id" not in lines[2] and "application_id" not in lines[3]
-    assert '"job_request"' not in caplog.text
+    assert '"resume_request"' not in caplog.text
     text = caplog.text
     assert "payload-value" not in text and "wrong-key-value" not in text and API_KEY not in text
     assert GH_LINK not in text and "Acme Corp" not in text
@@ -640,7 +390,7 @@ def test_patch_and_delete_logging(client, caplog):
     assert [l.get("application_id") for l in lines] == [
         application_id, None, 999999, application_id, application_id, application_id]
     assert all("duplicate" not in l and "duration_ms" in l for l in lines)
-    assert '"job_request"' not in caplog.text
+    assert '"resume_request"' not in caplog.text
     text = caplog.text
     for value in ("applied", "ghosted", "payload-value", "wrong-key-value", API_KEY):
         assert value not in text
@@ -651,3 +401,255 @@ def test_post_log_line_carries_method(client, caplog):
     post_application(client, VALID_APPLICATION)
     (line,) = application_log_lines(caplog)
     assert line["method"] == "POST" and line["status"] == 201 and line["duplicate"] is False
+
+
+# --- POST /resume ---
+
+def post_resume(client, body, headers=HEADERS):
+    return client.post("/resume", json=body, headers=headers)
+
+
+def resume_log_lines(caplog):
+    return [json.loads(r.getMessage()) for r in caplog.records
+            if r.name == "app.requests" and '"resume_request"' in r.getMessage()]
+
+
+def new_application(client, n=1, **overrides):
+    """Record a distinct application (its own job_link) and return its ID."""
+    body = {**link_variant(f"{GH_LINK}{n}"), **overrides}
+    return recorded(client, body)
+
+
+@pytest.fixture
+def local_client(settings):
+    return TestClient(create_app(settings, LocalStorage(settings.output_dir)))
+
+
+def output_files(settings):
+    return sorted(p for p in settings.output_dir.rglob("*") if p.is_file() and p.suffix == ".pdf")
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_resume_auth_rejected(client, storage, headers):
+    application_id = new_application(client)
+    assert_error(post_resume(client, {"application_id": application_id}, headers), 401)
+    assert_error(post_resume(client, {"application_id": 999999}, headers), 401)  # unknown ID not leaked
+    r = client.post("/resume", content=b"{not json", headers={**headers, "Content-Type": "application/json"})
+    assert_error(r, 401)
+    assert storage.saved == []
+
+
+@pytest.mark.parametrize("content", [b"{not json", b"[1, 2]", b'"text"', b"42", b"null"])
+def test_resume_bad_body_422(client, storage, content):
+    r = client.post("/resume", content=content, headers={**HEADERS, "Content-Type": "application/json"})
+    assert_error(r, 422)
+    assert storage.saved == []
+
+
+@pytest.mark.parametrize("body", [{}, {"application_id": "7"}, {"application_id": 7.5},
+                                  {"application_id": True}, {"application_id": None}])
+def test_resume_non_integer_id_422(client, storage, body):
+    message = assert_error(post_resume(client, body), 422)
+    assert "application_id" in message
+    assert storage.saved == []
+
+
+def test_resume_422_does_not_echo_value(client):
+    r = post_resume(client, {"application_id": "secret-ish-value"})
+    assert_error(r, 422)
+    assert "secret-ish-value" not in r.text
+
+
+@pytest.mark.parametrize("application_id", [999999, 0, -1, 2**63, 10**30])
+def test_resume_unknown_id_404(local_client, settings, application_id):
+    new_application(local_client)
+    r = post_resume(local_client, {"application_id": application_id})
+    assert assert_error(r, 404) == "Application not found"
+    assert output_files(settings) == []
+    assert not [p for p in settings.output_dir.iterdir() if p.is_dir()]
+
+
+def test_resume_deleted_application_404(client, storage):
+    application_id = new_application(client)
+    delete_application(client, application_id)
+    assert_error(post_resume(client, {"application_id": application_id}), 404)
+    assert storage.saved == []
+
+
+def test_resume_success_saves_file(local_client, settings):
+    application_id = new_application(local_client)
+    r = post_resume(local_client, {"application_id": application_id})
+    assert r.status_code == 201
+    body = r.json()
+    assert set(body) == {"ok", "application_id", "saved_path"}
+    assert body["ok"] is True and body["application_id"] == application_id
+    expected = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME
+    assert body["saved_path"] == str(expected)
+    assert expected.is_absolute() and expected.read_bytes() == FAKE_PDF
+
+
+def test_resume_regenerate_replaces_file(local_client, settings, monkeypatch):
+    from app.generation import GeneratedFile
+    application_id = new_application(local_client)
+    first = post_resume(local_client, {"application_id": application_id}).json()["saved_path"]
+    monkeypatch.setattr("app.main.generate_output",
+                        lambda application: GeneratedFile(b"%PDF-second", "application/pdf", "pdf"))
+    r = post_resume(local_client, {"application_id": application_id})
+    assert r.status_code == 201 and r.json()["saved_path"] == first
+    assert output_files(settings) == [settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME]
+    assert output_files(settings)[0].read_bytes() == b"%PDF-second"
+
+
+def test_resume_ignores_extra_fields(client, storage):
+    application_id = new_application(client)
+    body = {"application_id": application_id, "company": "Other Co", "full_job_description": "x"}
+    assert post_resume(client, body).status_code == 201
+    assert storage.saved == [("Acme Corp", application_id, FAKE_PDF)]
+
+
+def test_resume_uses_updated_row(client, storage, monkeypatch):
+    from app.generation import GeneratedFile
+    seen = []
+
+    def capture(application):
+        seen.append(application)
+        return GeneratedFile(FAKE_PDF, "application/pdf", "pdf")
+    monkeypatch.setattr("app.main.generate_output", capture)
+    application_id = new_application(client)
+    patch_application(client, application_id, {"role": "Staff Engineer", "company": "Acme Inc"})
+    assert post_resume(client, {"application_id": application_id}).status_code == 201
+    assert seen[0].role == "Staff Engineer" and seen[0].id == application_id
+    assert storage.saved[0][0] == "Acme Inc"
+
+
+def test_resume_company_rename_leaves_old_folder(local_client, settings):
+    application_id = new_application(local_client, company="Acme")
+    old = post_resume(local_client, {"application_id": application_id}).json()["saved_path"]
+    patch_application(local_client, application_id, {"company": "Acme Inc"})
+    new = post_resume(local_client, {"application_id": application_id}).json()["saved_path"]
+    assert old != new
+    assert old.endswith(f"/Acme/{application_id}/{RESUME_FILE_NAME}")
+    assert new.endswith(f"/Acme Inc/{application_id}/{RESUME_FILE_NAME}")
+    assert len(output_files(settings)) == 2
+
+
+def test_resume_without_job_description(client):
+    body = {k: v for k, v in link_variant(f"{GH_LINK}9").items() if k != "full_job_description"}
+    application_id = recorded(client, body)
+    assert post_resume(client, {"application_id": application_id}).status_code == 201
+
+
+def test_resume_leaves_application_unchanged(client, settings):
+    application_id = new_application(client)
+    before = stored_row(settings, application_id)
+    assert post_resume(client, {"application_id": application_id}).status_code == 201
+    assert stored_row(settings, application_id) == before
+    assert before["status"] == "verified" and before["updated_at"] is None
+
+
+@pytest.mark.parametrize("status", ["rejected", "withdrawn"])
+def test_resume_for_closed_application(client, status):
+    application_id = new_application(client)
+    patch_application(client, application_id, {"status": status})
+    assert post_resume(client, {"application_id": application_id}).status_code == 201
+
+
+class FailingReads:
+    def get(self, application_id):
+        raise ApplicationStoreError("OperationalError: disk I/O error: /secret/out/applications.sqlite3")
+
+
+def test_resume_store_failure_503(settings, storage, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    client = TestClient(create_app(settings, storage, FailingReads()))
+    r = post_resume(client, {"application_id": 1})
+    message = assert_error(r, 503)
+    assert "/secret" not in r.text and "OperationalError" not in r.text and "disk" not in message
+    assert "application_store_error" in caplog.text
+    assert storage.saved == []
+
+
+def _failing_render(application):
+    raise RenderError("tectonic exited with 1: /srv/data/BASE.tex:2 ! LaTeX Error")
+
+
+def test_resume_render_failure_500_keeps_earlier_resume(local_client, settings, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    application_id = new_application(local_client)
+    saved = post_resume(local_client, {"application_id": application_id}).json()["saved_path"]
+    monkeypatch.setattr("app.main.generate_output", _failing_render)
+    r = post_resume(local_client, {"application_id": application_id})
+    assert r.json() == {"ok": False, "message": "Resume generation failed"} and r.status_code == 500
+    assert "LaTeX" not in r.text and "/srv" not in r.text and "tectonic" not in r.text
+    assert output_files(settings) == [settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME]
+    assert open(saved, "rb").read() == FAKE_PDF
+    errors = [json.loads(r.getMessage()) for r in caplog.records if '"render_error"' in r.getMessage()]
+    assert errors[0]["application_id"] == application_id and "LaTeX Error" in errors[0]["error"]
+
+
+def test_resume_storage_failure_502(settings, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    client = TestClient(create_app(settings, FakeStorage(fail=True)))
+    application_id = new_application(client)
+    r = post_resume(client, {"application_id": application_id})
+    assert_error(r, 502)
+    assert "/secret/out" not in r.text and "No space left" not in r.text and "OSError" not in r.text
+    errors = [json.loads(r.getMessage()) for r in caplog.records if '"storage_error"' in r.getMessage()]
+    assert errors[0]["application_id"] == application_id and "No space left" in errors[0]["error"]
+    (line,) = resume_log_lines(caplog)
+    assert line["status"] == 502
+
+
+def test_resume_one_log_line_per_request(local_client, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    application_id = new_application(local_client, why_it_fits="payload-value")
+    caplog.clear()
+    post_resume(local_client, {"application_id": application_id, "note": "body-value"})
+    post_resume(local_client, {"application_id": application_id}, {"X-API-Key": "wrong-key-value"})
+    post_resume(local_client, {"application_id": "x"})
+    post_resume(local_client, {"application_id": 999999})
+    lines = resume_log_lines(caplog)
+    assert [l["status"] for l in lines] == [201, 401, 422, 404]
+    assert [l.get("application_id") for l in lines] == [application_id, None, None, 999999]
+    assert all({"event", "status", "duration_ms"} <= set(l) <= {"event", "status", "duration_ms", "application_id"}
+               for l in lines)
+    assert '"application_request"' not in caplog.text and '"job_request"' not in caplog.text
+    for value in ("payload-value", "body-value", "wrong-key-value", API_KEY, "Acme Corp", RESUME_FILE_NAME):
+        assert value not in caplog.text
+
+
+def test_resume_health_responds_during_slow_render(settings, storage, monkeypatch):
+    from app.generation import GeneratedFile
+    started, release = threading.Event(), threading.Event()
+
+    def slow(application):
+        started.set()
+        release.wait(timeout=10)
+        return GeneratedFile(b"%PDF-slow", "application/pdf", "pdf")
+
+    monkeypatch.setattr("app.main.generate_output", slow)
+    client = TestClient(create_app(settings, storage))
+    application_id = new_application(client)
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.update(r=post_resume(client, {"application_id": application_id}))
+    )
+    worker.start()
+    try:
+        assert started.wait(timeout=5)
+        assert client.get("/health").status_code == 200  # not blocked by the in-flight render
+        assert "r" not in result
+    finally:
+        release.set()
+        worker.join(timeout=10)
+    assert result["r"].status_code == 201
+
+
+def test_legacy_paths_gone(client, storage, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    r = client.post("/jobs", json={"company": "Acme", "role": "Eng", "full_job_description": "x"}, headers=HEADERS)
+    assert r.status_code == 404
+    for path in ["/files/outputs/2026-01-01/x.pdf", "/files/x?expires=9999999999&sig=" + "0" * 64]:
+        assert client.get(path).status_code == 404
+    assert storage.saved == []
+    assert resume_log_lines(caplog) == []
