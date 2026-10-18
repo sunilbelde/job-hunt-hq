@@ -10,8 +10,10 @@ The generation step is a stub: `generate_output` in `app/generation.py` validate
 | `POST /jobs` | `X-API-Key` | `201 {"job_id", "url", "expires_at", "key"}`; 401 bad key, 422 bad body, 500 render failure, 502 storage failure |
 | `GET /files/{key}?expires=…&sig=…` | signed link | The stored file. 403 for a missing, wrong or expired signature, 404 if the file is gone. This is the `url` returned by `POST /jobs` |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
+| `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
+| `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP, download route, hourly cleanup), `app/models.py` (`JobRow`, `ApplicationRow`), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (local file storage, link signing, retention), `app/settings.py` (config), `app/log_filters.py` (keeps link signatures out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP, download route, hourly cleanup), `app/models.py` (`JobRow`, `ApplicationRow`, `ApplicationUpdate`), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (local file storage, link signing, retention), `app/settings.py` (config), `app/log_filters.py` (keeps link signatures out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`JobRow`)
 
@@ -46,11 +48,33 @@ Only two combinations are verified, and anything else is a 422:
 
 Other query parameters are kept, so `?gh_jid=111` and `?gh_jid=222` stay separate postings. Path case is kept. A duplicate never changes the stored row, and `job_link` is stored as first sent. To strip a new tracking parameter, add it to `TRACKING_PARAMS` in `app/applications.py`.
 
+**Status.** Every application has a `status`:
+
+| Status | Meaning |
+|---|---|
+| `verified` | Recorded, not yet applied. The default for new rows and for rows stored before statuses existed |
+| `applied`, `interviewing`, `offer` | Progress |
+| `rejected`, `withdrawn` | Closed: by the employer, or by you |
+
+Values are exact and case-sensitive, and any status can change to any other. Re-posting a stored link never changes its status.
+
+**Updating.** `PATCH /application/{application_id}` writes only the fields in the body:
+- `status`, `company` and `role` must be non-empty strings
+- `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `company_careers_url`, `official_employer_domain` and `full_job_description` take a string, or `null` to clear them
+- `job_link`, `posting_source_type`, `verification_method` and `official_apply_url` can't be changed. A body that contains any of them is a 422, even if the value matches
+- unknown fields are ignored, and a body with nothing to update is a 422
+
+An unknown ID returns 404, checked before the body, and a bad key returns 401 before either.
+
+**Deleting** is permanent and frees the link: posting it again creates a new row with a new, larger ID, and IDs are never reused. To stop tracking a posting but keep its record, set `status` to `withdrawn` instead.
+
 Rows live in `OUTPUT_DIR/applications.sqlite3` (mode 600). Retention cleanup doesn't touch the file. To back it up while the service runs:
 
 ```sh
 sqlite3 ~/Library/Application\ Support/job-hunt-hq/applications.sqlite3 ".backup applications-backup.sqlite3"
 ```
+
+Take a backup before upgrading to a build that changes the store. The first start of the status-aware build adds the `status` and `updated_at` columns in place. Older builds ignore them, so rolling back needs no restore.
 
 ### Storage and links
 
@@ -87,6 +111,13 @@ curl -X POST localhost:8080/application -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"company":"Acme","role":"Software Engineer","job_link":"https://www.acme.com/careers/1","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":""}'
 # {"ok":true,"application_id":1}   (201; 200 with the same id when sent again)
+
+curl -X PATCH localhost:8080/application/1 -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' -d '{"status":"applied"}'
+# {"ok":true,"application_id":1,"status":"applied"}
+
+curl -X DELETE localhost:8080/application/1 -H "X-API-Key: $API_KEY"
+# {"ok":true,"application_id":1}   (404 {"ok":false,"message":"Application not found"} if sent again)
 ```
 
 Tests (no network needed):
@@ -99,7 +130,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key for `POST /jobs` and `POST /application`, and the signed links for downloads.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key for `POST /jobs` and the `/application` endpoints, and the signed links for downloads.
 
 ### 1. Prerequisites
 
@@ -160,7 +191,7 @@ The install script checks prerequisites and `.env` permissions, creates `.venv`,
 The daemon runs straight from this checkout. **After `git pull`, run `scripts/install_service.sh` again** (or `sudo launchctl kickstart -k system/local.job-hunt-hq` if only Python code changed).
 
 Logs are in `~/Library/Logs/job-hunt-hq/`:
-- `service.log`: requests (one JSON line per `POST /jobs` or `POST /application`), access log without query strings, and cleanup. Rotated at 10 MB, 5 kept.
+- `service.log`: requests (one JSON line per `POST /jobs` or `/application` request, the latter with its `method`), access log without query strings, and cleanup. Rotated at 10 MB, 5 kept.
 - `launchd.log`: anything printed before logging starts, such as import errors and crash tracebacks.
 
 ### 5. Verify

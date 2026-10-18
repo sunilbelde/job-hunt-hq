@@ -123,3 +123,71 @@ def test_pairing_rules(data, field):
 def test_unknown_application_fields_ignored():
     row = ApplicationRow.model_validate({**REQUIRED_APPLICATION, "found": True})
     assert "found" not in row.model_dump()
+
+
+# --- ApplicationUpdate ---
+
+from app.models import IMMUTABLE_FIELDS, ApplicationUpdate  # noqa: E402
+
+STATUSES = ["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
+
+
+def update_error(data):
+    with pytest.raises(ValidationError) as exc:
+        ApplicationUpdate.model_validate(data)
+    return str(exc.value.errors(include_input=False))
+
+
+@pytest.mark.parametrize("status", STATUSES)
+def test_each_status_accepted(status):
+    assert ApplicationUpdate.model_validate({"status": status}).model_dump(exclude_unset=True) == {"status": status}
+
+
+@pytest.mark.parametrize("status", ["ghosted", "Applied", None, 1])
+def test_bad_status_rejected(status):
+    assert "status" in update_error({"status": status})
+
+
+@pytest.mark.parametrize("value", ["", None])
+@pytest.mark.parametrize("field", ["company", "role"])
+def test_required_fields_cannot_be_emptied(field, value):
+    assert field in update_error({field: value})
+
+
+def test_wrong_type_rejected_on_update():
+    assert "salary" in update_error({"salary": 5})
+
+
+def test_null_clears_optional_and_absent_fields_left_out():
+    update = ApplicationUpdate.model_validate({"sponsorship": None, "salary": "$1"})
+    assert update.model_dump(exclude_unset=True) == {"sponsorship": None, "salary": "$1"}
+
+
+@pytest.mark.parametrize("field", IMMUTABLE_FIELDS)
+def test_immutable_field_rejected(field):
+    assert field in update_error({field: "anything"})
+    assert field in update_error({field: "anything", "status": "applied"})
+
+
+def test_all_immutable_fields_named():
+    text = update_error({name: "x" for name in IMMUTABLE_FIELDS})
+    assert all(name in text for name in IMMUTABLE_FIELDS)
+
+
+@pytest.mark.parametrize("body", [{}, {"found": True}])
+def test_nothing_to_update_rejected(body):
+    assert "no updatable fields" in update_error(body)
+
+
+def test_unknown_field_ignored_on_update():
+    update = ApplicationUpdate.model_validate({"status": "applied", "found": True})
+    assert update.model_dump(exclude_unset=True) == {"status": "applied"}
+
+
+@pytest.mark.parametrize("body", [
+    {"status": "secret-ish-value"},
+    {"job_link": "secret-ish-value"},
+    {"company": "", "salary": "secret-ish-value", "location": 5},
+])
+def test_update_errors_do_not_echo_values(body):
+    assert "secret-ish-value" not in update_error(body)
