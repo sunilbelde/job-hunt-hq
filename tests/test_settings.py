@@ -10,6 +10,7 @@ API_KEY = "k" * 32
 OPTIONAL = [
     "OUTPUT_DIR",
     "ANTHROPIC_API_KEY",
+    "API_DOCS_ENABLED",
     "R2_ACCOUNT_ID",
     "R2_ACCESS_KEY_ID",
     "R2_SECRET_ACCESS_KEY",
@@ -79,3 +80,28 @@ def test_secret_values_not_in_error(env):
     with pytest.raises(ValidationError) as exc:
         Settings(_env_file=None)
     assert "sk-secret-value" not in str(exc.value)
+
+
+def test_api_docs_disabled_by_default(env):
+    assert Settings(_env_file=None).api_docs_enabled is False
+
+
+def test_api_docs_enabled_from_env_file(env, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("API_DOCS_ENABLED=true\n")
+    assert Settings(_env_file=env_file).api_docs_enabled is True
+
+
+def test_process_env_overrides_env_file_for_api_docs(env, tmp_path):
+    # The launchd job relies on this to keep docs off whatever .env says.
+    env_file = tmp_path / ".env"
+    env_file.write_text("API_DOCS_ENABLED=true\n")
+    env.setenv("API_DOCS_ENABLED", "false")
+    assert Settings(_env_file=env_file).api_docs_enabled is False
+
+
+def test_invalid_api_docs_value_names_it(env):
+    env.setenv("API_DOCS_ENABLED", "maybe")
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None)
+    assert "api_docs_enabled" in str(exc.value)
