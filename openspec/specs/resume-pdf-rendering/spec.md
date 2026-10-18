@@ -34,14 +34,18 @@ A render SHALL be terminated if it exceeds a fixed time limit, and that outcome 
 - **THEN** the process is killed and a render failure is raised
 
 ### Requirement: Offline rendering
-Rendering SHALL NOT require network access at request time; all TeX packages and fonts needed by the baseline resume SHALL be present in the deployed image.
+Rendering SHALL NOT require network access at request time. All TeX packages and fonts needed by the baseline resume SHALL be present in the service's local TeX cache after installation.
 
 #### Scenario: No network
-- **WHEN** a render runs in a container with outbound network blocked
+- **WHEN** a render runs on the installed Mac mini with outbound network blocked
 - **THEN** the render succeeds
 
+#### Scenario: Cache warmed at install
+- **WHEN** the install script completes successfully
+- **THEN** one render has already succeeded under the service's user and cache directory
+
 ### Requirement: Bundled template assets
-The deployed image SHALL contain the baseline TeX source and the custom resume class file it depends on.
+The repository's `data/` directory, which the installed service reads its templates from, SHALL contain the baseline TeX source and the custom resume class file it depends on.
 
 #### Scenario: Missing class file
 - **WHEN** the class file is absent from the template assets

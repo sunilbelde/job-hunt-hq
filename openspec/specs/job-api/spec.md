@@ -18,12 +18,13 @@ The system SHALL require the `X-API-Key` header on `POST /jobs` to equal the con
 - **THEN** the system responds 401 and no file is generated or stored
 
 ### Requirement: Job creation response
-On success, `POST /jobs` SHALL respond 201 with a JSON body containing `job_id`, `url`, `expires_at` and `key`, where `url` is a pre-signed download link for the stored file and `key` is its object key.
+On success, `POST /jobs` SHALL respond 201 with a JSON body containing `job_id`, `url`, `expires_at` and `key`, where `url` is a signed download link for the stored file served by this service under the configured public base URL, and `key` is its storage key.
 
 #### Scenario: Successful job
 - **WHEN** an authenticated client posts a valid job posting
 - **THEN** the system responds 201 with `job_id`, `url`, `expires_at` (UTC, ISO 8601) and `key`
-- **AND** opening `url` in a browser downloads the generated PDF before expiry
+- **AND** `url` starts with the configured public base URL
+- **AND** opening `url` in a browser on a tailnet device downloads the generated PDF before expiry
 
 ### Requirement: Stubbed output generation
 For this release the system SHALL produce a PDF by rendering the baseline resume, without altering it based on the posting, via a generation interface that accepts the validated job posting and returns content bytes, a content type and a file extension.
@@ -32,14 +33,6 @@ For this release the system SHALL produce a PDF by rendering the baseline resume
 - **WHEN** a valid job is processed
 - **THEN** the stored file is `application/pdf` with extension `pdf`
 - **AND** it is a valid PDF whose content matches the baseline resume
-
-### Requirement: Storage failure handling
-When storage upload or URL signing fails, the system SHALL respond 502 with a generic message that exposes no internal details, and SHALL log the failure details server-side.
-
-#### Scenario: R2 unavailable
-- **WHEN** the upload to R2 raises an error
-- **THEN** the system responds 502 with a generic error message
-- **AND** the response body contains no endpoint, bucket, credential or exception text
 
 ### Requirement: Per-request structured logging
 The system SHALL emit exactly one structured log line per `POST /jobs` request including job id, HTTP status and duration, and SHALL NOT log secrets, the API key, or the full request payload.
@@ -51,17 +44,6 @@ The system SHALL emit exactly one structured log line per `POST /jobs` request i
 #### Scenario: Rejected request log
 - **WHEN** a request fails authentication or validation
 - **THEN** one log line records the status and duration, with no key or payload content
-
-### Requirement: Health endpoint
-The system SHALL expose `GET /healthz` and `GET /health`, each returning 200 `{"status": "ok"}` without authentication and without contacting R2. The `/health` alias exists because Cloud Run's front end intercepts `/healthz` on its public URLs.
-
-#### Scenario: Health check
-- **WHEN** any client sends `GET /healthz` or `GET /health`
-- **THEN** the system responds 200 `{"status": "ok"}` and makes no storage call
-
-#### Scenario: Health check on Cloud Run
-- **WHEN** a client sends `GET /health` to the deployed Cloud Run URL
-- **THEN** the system responds 200 `{"status": "ok"}`
 
 ### Requirement: Job posting body validation
 The system SHALL accept as the `POST /jobs` body only a JSON object that validates as a job posting, and SHALL reject non-JSON, non-object, or invalid bodies with a 4xx status (422 for validation failures) without generating or storing anything.
@@ -113,3 +95,37 @@ When PDF rendering fails or exceeds its time limit, the system SHALL respond 500
 - **THEN** the system responds 500 with a generic error body
 - **AND** no object is written to storage
 - **AND** the failure details are logged with the job id
+
+### Requirement: Local storage failure handling
+When storing the file or signing its link fails, the system SHALL respond 502 with a generic message that exposes no internal details, and SHALL log the failure details server-side.
+
+#### Scenario: Output directory unwritable
+- **WHEN** writing the file to the output directory raises an error, such as a full disk or a permission error
+- **THEN** the system responds 502 with a generic error message
+- **AND** the response body contains no filesystem path, secret or exception text
+
+### Requirement: Health endpoints
+The system SHALL expose `GET /healthz` and `GET /health`, each returning 200 `{"status": "ok"}` without authentication and without touching storage.
+
+#### Scenario: Health check
+- **WHEN** any client sends `GET /healthz` or `GET /health`
+- **THEN** the system responds 200 `{"status": "ok"}` and makes no storage call
+
+### Requirement: Signed file download endpoint
+The system SHALL serve stored files at `GET /files/{key}` without requiring the API key, returning the file only when the request carries an unexpired, valid signature for that key, and SHALL respond 403 for missing, expired or invalid signatures and 404 for a valid signature whose file no longer exists.
+
+#### Scenario: Valid link
+- **WHEN** a client opens a `url` returned by `POST /jobs` before it expires
+- **THEN** the system responds 200 with the file bytes and its stored Content-Type
+
+#### Scenario: Missing signature
+- **WHEN** a client requests `GET /files/{key}` with no signature parameters
+- **THEN** the system responds 403
+
+#### Scenario: File removed by retention
+- **WHEN** a client uses a validly signed, unexpired link whose file has been deleted
+- **THEN** the system responds 404
+
+#### Scenario: Download is not a job request
+- **WHEN** a client downloads a file
+- **THEN** no `job_request` log line is emitted and the signature is not logged
