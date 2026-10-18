@@ -1,43 +1,70 @@
+import asyncio
 import json
 import logging
 import secrets
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
 
 from app.generation import generate_output
 from app.models import JobRow
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
-from app.storage import R2Storage, Storage, StorageError
+from app.storage import LinkSigner, LocalStorage, Storage, StorageError, content_type_for, is_valid_key
 
 logger = logging.getLogger("app.requests")
 logger.setLevel(logging.INFO)
-if not logger.handlers:  # uvicorn leaves non-uvicorn loggers without a handler
+if not logger.hasHandlers():  # without --log-config, uvicorn leaves app loggers without a handler
     _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(_handler)
-logging.getLogger("botocore").setLevel(logging.WARNING)
-logging.getLogger("boto3").setLevel(logging.WARNING)
+
+CLEANUP_INTERVAL_SECONDS = 3600
 
 
 def create_app(settings: Settings | None = None, storage: Storage | None = None) -> FastAPI:
     """Build the app. Settings are validated here, so bad config fails at startup."""
     settings = settings or get_settings()
-    storage = storage or R2Storage(
-        account_id=settings.r2_account_id,
-        access_key_id=settings.r2_access_key_id.get_secret_value(),
-        secret_access_key=settings.r2_secret_access_key.get_secret_value(),
-        bucket=settings.r2_bucket,
+    storage = storage or LocalStorage(
+        settings.output_dir,
+        LinkSigner(settings.link_signing_secret.get_secret_value(), settings.public_base_url),
     )
-    app = FastAPI(title="Job output service")
+    retention_seconds = settings.output_retention_days * 86400
+
+    async def run_cleanup() -> None:
+        try:
+            deleted = await run_in_threadpool(storage.cleanup, retention_seconds)
+        except Exception as exc:  # never let cleanup take the service down
+            logger.error(json.dumps({"event": "cleanup_error", "error": str(exc)}))
+            return
+        if deleted:
+            logger.info(json.dumps({"event": "cleanup", "deleted": deleted}))
+
+    async def cleanup_loop() -> None:
+        while True:
+            await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            await run_cleanup()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await run_cleanup()
+        task = asyncio.create_task(cleanup_loop())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(title="Job output service", lifespan=lifespan)
     expected_key = settings.api_key.get_secret_value().encode()
 
     def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -67,12 +94,28 @@ def create_app(settings: Settings | None = None, storage: Storage | None = None)
                 fields["key"] = key
             logger.info(json.dumps(fields))
 
-    # Cloud Run's front end intercepts /healthz on *.run.app URLs, so /health is the
-    # path that is reachable once deployed.
     @app.get("/healthz")
     @app.get("/health")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    # No API key: the signature in the link is the credential.
+    @app.get("/files/{key:path}")
+    def download(key: str, expires: str | None = None, sig: str | None = None):
+        if not is_valid_key(key) or not storage.verify_link(key, expires, sig):
+            raise HTTPException(status_code=403, detail="Invalid or expired link")
+        try:
+            path = storage.path_for(key)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Invalid or expired link")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(
+            path,
+            media_type=content_type_for(key),
+            filename=f"resume.{key.rsplit('.', 1)[-1]}",
+            content_disposition_type="inline",
+        )
 
     @app.post("/jobs", status_code=201, dependencies=[Depends(require_api_key)])
     async def create_job(request: Request):
