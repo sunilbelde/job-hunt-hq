@@ -1,8 +1,0 @@
-.env
-.venv
-.git
-tests
-openspec
-.claude
-__pycache__
-.pytest_cache

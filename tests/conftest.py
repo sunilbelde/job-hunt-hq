@@ -7,6 +7,8 @@ from app.settings import Settings
 from app.storage import StorageError
 
 API_KEY = "test-api-key"
+SIGNING_SECRET = "x" * 32
+BASE_URL = "https://mac-mini.tail1234.ts.net"
 VALID_JOB = {"company": "Acme", "role": "Engineer", "full_job_description": "Build things"}
 
 
@@ -18,24 +20,32 @@ class FakeStorage:
 
     def upload(self, content, content_type, extension):
         if self.fail:
-            raise StorageError("upload failed: EndpointConnectionError: secret-host.example")
+            raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/outputs")
         self.uploads.append((content, content_type, extension))
         return f"outputs/2026-01-01/fake.{extension}"
 
     def presigned_url(self, key, ttl_seconds):
         self.signed.append((key, ttl_seconds))
-        return f"https://signed.example/{key}?ttl={ttl_seconds}"
+        return f"{BASE_URL}/files/{key}?ttl={ttl_seconds}"
+
+    def verify_link(self, key, expires, sig):
+        return False
+
+    def path_for(self, key):
+        raise ValueError("invalid key")
+
+    def cleanup(self, max_age_seconds):
+        return 0
 
 
 @pytest.fixture
-def settings():
+def settings(tmp_path):
     return Settings(
         _env_file=None,
         api_key=API_KEY,
-        r2_account_id="acct",
-        r2_access_key_id="akid",
-        r2_secret_access_key="secret",
-        r2_bucket="bucket",
+        link_signing_secret=SIGNING_SECRET,
+        public_base_url=BASE_URL,
+        output_dir=tmp_path / "out",
         signed_url_ttl_seconds=3600,
     )
 
