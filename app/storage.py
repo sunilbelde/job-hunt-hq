@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 RESUME_FILE_NAME = "SUNIL BELDE.pdf"
+COVER_LETTER_FILE_NAME = "SUNIL BELDE - Cover Letter.pdf"
 TMP_PREFIX = ".tmp-"
 MAX_FOLDER_CHARS = 100
 UNKNOWN_COMPANY = "unknown-company"
@@ -28,6 +29,11 @@ class Storage(Protocol):
     def save_resume(self, company: str, application_id: str, content: bytes) -> Path:
         """Write the resume for an application, replacing any earlier one, and return its absolute path."""
         ...
+
+
+def cover_letter_path(resume_path: Path) -> Path:
+    """Where the application's cover letter goes: beside its resume. Nothing writes it yet."""
+    return resume_path.parent / COVER_LETTER_FILE_NAME
 
 
 def company_folder(company: str) -> str:

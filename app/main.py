@@ -28,7 +28,7 @@ from app.models import (
 )
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
-from app.storage import LocalStorage, Storage, StorageError, rename_legacy_folders
+from app.storage import LocalStorage, Storage, StorageError, cover_letter_path, rename_legacy_folders
 
 logger = logging.getLogger("app.requests")
 logger.setLevel(logging.INFO)
@@ -373,7 +373,9 @@ def create_app(
         summary="Generate a resume PDF",
         description=(
             "Renders the resume for a recorded application and saves it on the service host at `saved_path`, "
-            "replacing any earlier render. The application itself is not changed. Rendering takes a few seconds."
+            "replacing any earlier render. The application itself is not changed. Rendering takes a few seconds. "
+            "`cover_letter_path` is where the application's cover letter goes, beside the resume; "
+            "cover letters are not generated yet, so no file exists there."
         ),
         status_code=201,
         responses={
@@ -419,9 +421,16 @@ def create_app(
         except StorageError as exc:
             logger.error(json.dumps({"event": "storage_error", "application_id": target, "error": str(exc)}))
             return application_error(502, "Storage service unavailable")
+        # TODO: generate the cover letter and save it at cover_letter_path(path), alongside the resume.
+        # Until then the path is returned as a placeholder and no file is written there.
         return JSONResponse(
             status_code=201,
-            content={"ok": True, "application_id": target, "saved_path": str(path)},
+            content={
+                "ok": True,
+                "application_id": target,
+                "saved_path": str(path),
+                "cover_letter_path": str(cover_letter_path(path)),
+            },
         )
 
     return app
