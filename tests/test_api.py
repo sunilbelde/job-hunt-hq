@@ -447,3 +447,207 @@ def test_application_one_log_line_per_request(client, caplog):
     text = caplog.text
     assert "payload-value" not in text and "wrong-key-value" not in text and API_KEY not in text
     assert GH_LINK not in text and "Acme Corp" not in text
+
+
+# --- PATCH / DELETE /application/{application_id} ---
+
+def patch_application(client, application_id, body, headers=HEADERS):
+    return client.patch(f"/application/{application_id}", json=body, headers=headers)
+
+
+def delete_application(client, application_id, headers=HEADERS):
+    return client.delete(f"/application/{application_id}", headers=headers)
+
+
+def recorded(client, body=VALID_APPLICATION):
+    return post_application(client, body).json()["application_id"]
+
+
+def stored_row(settings, application_id):
+    return next(r for r in stored_rows(settings) if r["id"] == application_id)
+
+
+class FailingStore(FailingApplications):
+    def update(self, application_id, changes):
+        self.record(changes)
+
+    def delete(self, application_id):
+        self.record({})
+
+    def exists(self, application_id):
+        self.record({})
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_patch_auth_rejected(client, settings, headers):
+    application_id = recorded(client)
+    assert_error(patch_application(client, application_id, {"status": "applied"}, headers), 401)
+    assert stored_row(settings, application_id)["status"] == "verified"
+
+
+def test_patch_auth_checked_before_id_and_body(client):
+    assert_error(patch_application(client, 999999, {"status": "applied"}, {}), 401)
+    r = client.patch("/application/1", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert_error(r, 401)
+
+
+@pytest.mark.parametrize("application_id", ["999999", "abc", "0", "-1", "1.0", "99999999999999999999"])
+def test_patch_unknown_id_404(client, settings, application_id):
+    message = assert_error(patch_application(client, application_id, {"status": "applied"}), 404)
+    assert message == "Application not found"
+    assert stored_rows(settings) == []
+
+
+def test_patch_unknown_id_with_bad_body_404(client):
+    r = client.patch("/application/999999", content=b"{not json",
+                     headers={**HEADERS, "Content-Type": "application/json"})
+    assert_error(r, 404)
+
+
+@pytest.mark.parametrize("content", [b"{not json", b"[1, 2]", b'"text"', b"42", b"null"])
+def test_patch_bad_body_422(client, settings, content):
+    application_id = recorded(client)
+    before = stored_row(settings, application_id)
+    r = client.patch(f"/application/{application_id}", content=content,
+                     headers={**HEADERS, "Content-Type": "application/json"})
+    assert_error(r, 422)
+    assert stored_row(settings, application_id) == before
+
+
+@pytest.mark.parametrize("body,field", [
+    ({"status": "ghosted"}, "status"),
+    ({"status": "Applied"}, "status"),
+    ({"status": None}, "status"),
+    ({"company": ""}, "company"),
+    ({"role": None}, "role"),
+    ({"salary": 5}, "salary"),
+    ({"job_link": "https://example.com/jobs/2", "status": "applied"}, "job_link"),
+    ({"verification_method": "official_apply_match"}, "verification_method"),
+    ({}, "no updatable fields"),
+    ({"found": True}, "no updatable fields"),
+])
+def test_patch_field_rules_422(client, settings, body, field):
+    application_id = recorded(client)
+    before = stored_row(settings, application_id)
+    assert field in assert_error(patch_application(client, application_id, body), 422)
+    assert stored_row(settings, application_id) == before
+
+
+def test_patch_does_not_echo_values(client):
+    application_id = recorded(client)
+    r = patch_application(client, application_id, {"status": "secret-ish-value", "job_link": "secret-link"})
+    assert "secret-ish-value" not in r.text and "secret-link" not in r.text
+
+
+def test_patch_status_only(client, settings):
+    application_id = recorded(client)
+    before = stored_row(settings, application_id)
+    r = patch_application(client, application_id, {"status": "applied", "found": True})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "application_id": application_id, "status": "applied"}
+    after = stored_row(settings, application_id)
+    assert after["status"] == "applied" and after["updated_at"]
+    assert {k: v for k, v in after.items() if k not in ("status", "updated_at")} == {
+        k: v for k, v in before.items() if k not in ("status", "updated_at")}
+
+
+def test_patch_fields_keep_status_and_null_clears(client, settings):
+    application_id = recorded(client)
+    patch_application(client, application_id, {"status": "applied"})
+    r = patch_application(client, application_id, {"salary": "$150k", "sponsorship": None})
+    assert r.json() == {"ok": True, "application_id": application_id, "status": "applied"}
+    row = stored_row(settings, application_id)
+    assert row["salary"] == "$150k" and row["sponsorship"] is None
+
+
+def test_patch_same_status_again(client):
+    application_id = recorded(client)
+    assert patch_application(client, application_id, {"status": "verified"}).status_code == 200
+
+
+def test_duplicate_post_keeps_updated_status(client, settings):
+    application_id = recorded(client)
+    patch_application(client, application_id, {"status": "interviewing"})
+    r = post_application(client, VALID_APPLICATION)
+    assert r.status_code == 200 and r.json() == {"ok": True, "application_id": application_id}
+    assert stored_row(settings, application_id)["status"] == "interviewing"
+
+
+@pytest.mark.parametrize("call", [
+    lambda c: patch_application(c, 1, {"status": "applied"}),
+    lambda c: patch_application(c, 1, {"status": "ghosted"}),
+    lambda c: delete_application(c, 1),
+])
+def test_patch_and_delete_store_failure_503(settings, storage, caplog, call):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    client = TestClient(create_app(settings, storage, FailingStore()))
+    r = call(client)
+    message = assert_error(r, 503)
+    assert "/secret" not in r.text and "OperationalError" not in r.text and "disk" not in message
+    assert "application_store_error" in caplog.text
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_delete_auth_rejected(client, settings, headers):
+    application_id = recorded(client)
+    assert_error(delete_application(client, application_id, headers), 401)
+    assert_error(delete_application(client, 999999, headers), 401)
+    assert len(stored_rows(settings)) == 1
+
+
+def test_delete_then_gone(client, settings):
+    application_id = recorded(client)
+    r = delete_application(client, application_id)
+    assert r.status_code == 200 and r.json() == {"ok": True, "application_id": application_id}
+    assert stored_rows(settings) == []
+    assert_error(delete_application(client, application_id), 404)
+    assert_error(patch_application(client, application_id, {"status": "applied"}), 404)
+
+
+def test_re_record_after_delete(client, settings):
+    application_id = recorded(client)
+    delete_application(client, application_id)
+    r = post_application(client, VALID_APPLICATION)
+    assert r.status_code == 201 and r.json()["application_id"] > application_id
+    assert stored_row(settings, r.json()["application_id"])["status"] == "verified"
+
+
+def test_delete_ignores_body(client, settings):
+    application_id = recorded(client)
+    r = client.request("DELETE", f"/application/{application_id}", content=b"{not json",
+                       headers={**HEADERS, "Content-Type": "application/json"})
+    assert r.status_code == 200 and stored_rows(settings) == []
+
+
+@pytest.mark.parametrize("application_id", ["abc", "0", "-1"])
+def test_delete_unparseable_id_404(client, application_id):
+    assert assert_error(delete_application(client, application_id), 404) == "Application not found"
+
+
+def test_patch_and_delete_logging(client, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    application_id = recorded(client)
+    caplog.clear()
+    patch_application(client, application_id, {"status": "applied", "salary": "payload-value"})
+    patch_application(client, application_id, {"status": "applied"}, {"X-API-Key": "wrong-key-value"})
+    patch_application(client, 999999, {"status": "applied"})
+    patch_application(client, application_id, {"status": "ghosted"})
+    delete_application(client, application_id)
+    delete_application(client, application_id)
+    lines = application_log_lines(caplog)
+    assert [(l["method"], l["status"]) for l in lines] == [
+        ("PATCH", 200), ("PATCH", 401), ("PATCH", 404), ("PATCH", 422), ("DELETE", 200), ("DELETE", 404)]
+    assert [l.get("application_id") for l in lines] == [
+        application_id, None, 999999, application_id, application_id, application_id]
+    assert all("duplicate" not in l and "duration_ms" in l for l in lines)
+    assert '"job_request"' not in caplog.text
+    text = caplog.text
+    for value in ("applied", "ghosted", "payload-value", "wrong-key-value", API_KEY):
+        assert value not in text
+
+
+def test_post_log_line_carries_method(client, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    post_application(client, VALID_APPLICATION)
+    (line,) = application_log_lines(caplog)
+    assert line["method"] == "POST" and line["status"] == 201 and line["duplicate"] is False

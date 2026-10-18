@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
@@ -18,6 +18,12 @@ class JobRow(BaseModel):
     sponsorship: StrictStr | None = None
     why_it_fits: StrictStr | None = None
     job_link: StrictStr | None = None
+
+
+ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
+
+# Fixed once recorded: job_link is the dedupe key and the rest are its verification record.
+IMMUTABLE_FIELDS = ("job_link", "posting_source_type", "verification_method", "official_apply_url")
 
 
 class ApplicationRow(BaseModel):
@@ -64,4 +70,41 @@ class ApplicationRow(BaseModel):
                 raise ValueError(
                     "official_apply_url must be empty when posting_source_type is employer_site"
                 )
+        return self
+
+
+class ApplicationUpdate(BaseModel):
+    """A partial update. Only fields present in the body are written: use exclude_unset."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    # The defaults only mark a field as absent; an explicit null is still checked against the type,
+    # so status, company and role cannot be cleared.
+    status: ApplicationStatus = None
+    company: StrictStr = Field(default=None, min_length=1)
+    role: StrictStr = Field(default=None, min_length=1)
+    location: StrictStr | None = None
+    work_type: StrictStr | None = None
+    salary: StrictStr | None = None
+    date_posted: StrictStr | None = None
+    sponsorship: StrictStr | None = None
+    why_it_fits: StrictStr | None = None
+    company_careers_url: StrictStr | None = None
+    official_employer_domain: StrictStr | None = None
+    full_job_description: StrictStr | None = None
+
+    # Runs before extra="ignore" would drop them. Messages name fields only.
+    @model_validator(mode="before")
+    @classmethod
+    def _no_immutable_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            present = [name for name in IMMUTABLE_FIELDS if name in data]
+            if present:
+                raise ValueError(f"cannot be changed: {', '.join(present)}")
+        return data
+
+    @model_validator(mode="after")
+    def _something_to_update(self) -> "ApplicationUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Request body has no updatable fields")
         return self
