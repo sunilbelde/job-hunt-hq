@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.log_filters import RedactQueryString
 from app.main import create_app
 from app.rendering import RenderError
-from app.storage import RESUME_FILE_NAME, LocalStorage
+from app.storage import COVER_LETTER_FILE_NAME, RESUME_FILE_NAME, LocalStorage
 from tests.conftest import API_KEY, FAKE_PDF, FakeStorage
 
 HEADERS = {"X-API-Key": API_KEY}
@@ -512,11 +513,26 @@ def test_resume_success_saves_file(local_client, settings):
     r = post_resume(local_client, {"application_id": application_id})
     assert r.status_code == 201
     body = r.json()
-    assert set(body) == {"ok", "application_id", "saved_path"}
+    assert set(body) == {"ok", "application_id", "saved_path", "cover_letter_path"}
     assert body["ok"] is True and body["application_id"] == application_id
     expected = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME
     assert body["saved_path"] == str(expected)
     assert expected.is_absolute() and expected.read_bytes() == FAKE_PDF
+    assert body["cover_letter_path"] == str(expected.parent / COVER_LETTER_FILE_NAME)
+
+
+def test_resume_cover_letter_path_is_a_placeholder(local_client, settings):
+    application_id = new_application(local_client)
+    first = post_resume(local_client, {"application_id": application_id}).json()
+    cover_letter = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / COVER_LETTER_FILE_NAME
+    assert first["cover_letter_path"] == str(cover_letter)
+    assert str(cover_letter.parent) == str(Path(first["saved_path"]).parent)
+    assert not cover_letter.exists()
+    assert output_files(settings) == [cover_letter.parent / RESUME_FILE_NAME]
+    cover_letter.write_bytes(b"%PDF-written-elsewhere")
+    second = post_resume(local_client, {"application_id": application_id}).json()
+    assert second["cover_letter_path"] == first["cover_letter_path"]
+    assert cover_letter.read_bytes() == b"%PDF-written-elsewhere"
 
 
 def test_resume_regenerate_replaces_file(local_client, settings, monkeypatch):
@@ -657,7 +673,7 @@ def test_resume_one_log_line_per_request(local_client, caplog):
                for l in lines)
     assert '"application_request"' not in caplog.text and '"job_request"' not in caplog.text
     for value in ("payload-value", "body-value", "wrong-key-value", API_KEY, "Acme Corp", RESUME_FILE_NAME,
-                  "not-a-uuid"):
+                  COVER_LETTER_FILE_NAME, "not-a-uuid"):
         assert value not in caplog.text
 
 

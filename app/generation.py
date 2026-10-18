@@ -18,4 +18,5 @@ def generate_output(application: StoredApplication) -> GeneratedFile:
     TeX through the same render_pdf path. Callers depend only on this signature and
     on GeneratedFile. Raises RenderError if compilation fails.
     """
+    # TODO: also generate the cover letter; POST /resume already returns its path (storage.cover_letter_path).
     return GeneratedFile(content=render_pdf(), content_type="application/pdf", extension="pdf")

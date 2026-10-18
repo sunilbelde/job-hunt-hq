@@ -127,6 +127,14 @@ def test_resume_body_schema(schema):
     assert body["required"] == ["application_id"]
 
 
+def test_resume_response_documents_cover_letter_path(schema):
+    response = operations(schema)[("post", "/resume")]["responses"]["201"]
+    ref = response["content"]["application/json"]["schema"]["$ref"]
+    created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
+    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "cover_letter_path"}
+    assert "not generated yet" in created["properties"]["cover_letter_path"]["description"]
+
+
 def test_path_ids_stay_plain_strings(schema):
     # A typed UUID would let FastAPI answer a malformed ID with its own 422 instead of 404.
     for key in [("patch", "/application/{application_id}"), ("delete", "/application/{application_id}")]:
