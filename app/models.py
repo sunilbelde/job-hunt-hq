@@ -1,23 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
-
-
-class JobRow(BaseModel):
-    """A job posting. Values are free-form strings and are never parsed or normalized."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    company: StrictStr = Field(min_length=1)
-    role: StrictStr = Field(min_length=1)
-    full_job_description: StrictStr = Field(min_length=1)
-    location: StrictStr | None = None
-    work_type: StrictStr | None = None
-    salary: StrictStr | None = None
-    date_posted: StrictStr | None = None
-    sponsorship: StrictStr | None = None
-    why_it_fits: StrictStr | None = None
-    job_link: StrictStr | None = None
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
 
 ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
@@ -108,3 +91,35 @@ class ApplicationUpdate(BaseModel):
         if not self.model_fields_set:
             raise ValueError("Request body has no updatable fields")
         return self
+
+
+class ResumeRequest(BaseModel):
+    """The POST /resume body: an application ID, as a JSON integer. Everything else comes from the store."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    application_id: StrictInt
+
+
+class StoredApplication(BaseModel):
+    """An application as read back from the store. Rows were validated when recorded, so no rules here."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    company: str
+    role: str
+    job_link: str
+    posting_source_type: str
+    verification_method: str
+    official_apply_url: str
+    status: str
+    location: str | None = None
+    work_type: str | None = None
+    salary: str | None = None
+    date_posted: str | None = None
+    sponsorship: str | None = None
+    why_it_fits: str | None = None
+    company_careers_url: str | None = None
+    official_employer_domain: str | None = None
+    full_job_description: str | None = None
