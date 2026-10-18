@@ -6,77 +6,89 @@ Defines how generated files are persisted to Cloudflare R2 and how time-limited 
 
 ## Requirements
 
-### Requirement: Dated unique object keys
-The system SHALL store each generated file at key `outputs/{YYYY-MM-DD}/{uuid4}.{extension}`, using the current UTC date and a fresh UUID4 per file, and the key SHALL map to the same relative path under the configured output directory on the local filesystem.
-
-#### Scenario: Key format
-- **WHEN** a file with extension `pdf` is stored on 2026-10-08 UTC
-- **THEN** its key matches `outputs/2026-10-08/<uuid4>.pdf`
-- **AND** the file exists at `<OUTPUT_DIR>/outputs/2026-10-08/<uuid4>.pdf`
-
-#### Scenario: No overwrites
-- **WHEN** two files are stored with identical content
-- **THEN** they receive distinct keys
-
-### Requirement: Pre-signed download URLs
-The system SHALL return, for each stored file, a download link under the configured public base URL that carries an expiry time and a signature, is valid for the configured TTL, and reports the matching expiry time.
-
-#### Scenario: URL validity
-- **WHEN** a file is stored with TTL 604800 seconds
-- **THEN** the returned URL downloads the file until `expires_at`, roughly seven days after creation
-
-#### Scenario: Expired link
-- **WHEN** a link is used after its `expires_at`
-- **THEN** the download is refused with 403 and the file content is not returned
-
-#### Scenario: Tampered link
-- **WHEN** the key, expiry or signature in a link is altered
-- **THEN** the download is refused with 403
-
-#### Scenario: Links survive restart
-- **WHEN** the service restarts between issuing a link and its use, with the same signing secret
-- **THEN** the link still downloads the file before expiry
-
-### Requirement: Content-Type preserved on download
-The system SHALL serve each stored file with the Content-Type supplied by the generator when it is downloaded.
-
-#### Scenario: PDF content type
-- **WHEN** a stored resume PDF is downloaded through its signed link
-- **THEN** the response has Content-Type `application/pdf`
-
 ### Requirement: Private file access
-Stored files SHALL be readable over HTTP only through a valid signed link, and the output directory SHALL be readable only by the service's user account.
+Saved resume files SHALL NOT be served over HTTP by the service. Every folder the service creates under the output directory SHALL be accessible only by the service's user account, and every resume file it writes SHALL be readable and writable only by that account.
 
 #### Scenario: Unsigned access
-- **WHEN** someone requests a stored file's download path without a signature
-- **THEN** access is denied and no file content is returned
+- **WHEN** any client requests a path under `/files/`, with or without signature parameters, or any other path naming a saved resume
+- **THEN** the system responds 404 and returns no file content
 
 #### Scenario: Path traversal
-- **WHEN** a download request names a key containing `..`, an absolute path, or any path outside the `outputs/` key format
-- **THEN** it is rejected without reading any file, even if its signature is otherwise well-formed
+- **WHEN** an application's stored company contains `..`, `/`, `\` or an absolute path
+- **THEN** its resume is written inside `OUTPUT_DIR`, and no file or folder outside `OUTPUT_DIR` is created or changed
 
 #### Scenario: Directory permissions
-- **WHEN** the service creates the output directory
+- **WHEN** the service creates the output directory, a company folder or an application folder
 - **THEN** other local user accounts cannot list or read it
 
+#### Scenario: File permissions
+- **WHEN** the service writes a resume file
+- **THEN** its mode grants no access to group or other users
+
 ### Requirement: Complete files only
-A stored file SHALL become visible at its key only once it has been completely written, so a download never returns a partial file.
+A resume file SHALL appear at its path only once completely written. Replacing an existing resume SHALL be atomic, so the path always holds either the previous complete file or the new complete file.
 
 #### Scenario: Interrupted write
-- **WHEN** the service is stopped while writing a file
-- **THEN** no partial file exists at that file's key
+- **WHEN** the service is stopped while writing a resume file
+- **THEN** no partial file exists at that file's path, and any previous resume at that path is intact
 
-### Requirement: Retention cleanup
-The system SHALL delete stored files older than the configured retention period, at startup and at least hourly while running, and SHALL remove date directories left empty.
+#### Scenario: Failed regeneration
+- **WHEN** writing a replacement resume fails partway
+- **THEN** the previously saved resume at that path is unchanged and no temporary file is left behind
 
-#### Scenario: Old file deleted
-- **WHEN** retention is 30 days and a stored file was created 31 days ago
-- **THEN** after the next cleanup run the file no longer exists
+### Requirement: Resume file path
+The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is written in base 10. Missing folders SHALL be created.
 
-#### Scenario: Recent file kept
-- **WHEN** retention is 30 days and a stored file was created 29 days ago
-- **THEN** cleanup leaves it in place
+#### Scenario: First resume for an application
+- **WHEN** a resume is generated for application 7 whose company is "Acme Corp" and no folders exist yet
+- **THEN** the file `<OUTPUT_DIR>/Acme Corp/7/SUNIL BELDE.pdf` exists afterwards
 
-#### Scenario: Cleanup failure is non-fatal
-- **WHEN** a cleanup run hits an error deleting a file
-- **THEN** the error is logged and the service keeps serving requests
+#### Scenario: Two applications at one company
+- **WHEN** resumes are generated for applications 7 and 9, both with company "Acme Corp"
+- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/7/SUNIL BELDE.pdf` and `<OUTPUT_DIR>/Acme Corp/9/SUNIL BELDE.pdf`
+
+#### Scenario: Company renamed
+- **WHEN** application 7's company is changed from "Acme" to "Acme Inc" after a resume was generated, and a resume is generated again
+- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/7/SUNIL BELDE.pdf`
+- **AND** the file under `<OUTPUT_DIR>/Acme/7/` is left unchanged
+
+### Requirement: Company folder naming
+The company folder SHALL be the stored `company` with each `/`, `\`, `:` and control character replaced by `-`, leading and trailing spaces and dots removed, and the result cut to 100 characters. It SHALL be `unknown-company` if nothing remains, and SHALL get a leading `_` if it starts with `applications.sqlite3` in any case.
+
+#### Scenario: Spaces and case kept
+- **WHEN** the company is "Acme Corp"
+- **THEN** the folder is "Acme Corp"
+
+#### Scenario: Separators replaced
+- **WHEN** the company is "AT&T / Mobility: West"
+- **THEN** the folder is "AT&T - Mobility- West"
+
+#### Scenario: Traversal neutralised
+- **WHEN** the company is "../../etc" or ".."
+- **THEN** the folder is "-..-etc" or "unknown-company" respectively, and the file is written inside `OUTPUT_DIR`
+
+#### Scenario: Store name protected
+- **WHEN** the company is "applications.sqlite3"
+- **THEN** the folder is "_applications.sqlite3" and the application store is untouched
+
+#### Scenario: Long name
+- **WHEN** the company is 300 characters long
+- **THEN** the folder name is its first 100 characters, trimmed as above
+
+### Requirement: Overwrite on regeneration
+Generating a resume for an application whose resume file already exists at the computed path SHALL replace that file with the new render.
+
+#### Scenario: Regenerate
+- **WHEN** a resume is generated twice for application 7
+- **THEN** exactly one file exists in `<OUTPUT_DIR>/<company folder>/7/`, holding the second render
+
+### Requirement: Resume files are kept
+The service SHALL NOT delete saved resume files or their folders on its own. They SHALL remain until removed outside the service, including after the application is deleted or the service restarts.
+
+#### Scenario: Old resume kept
+- **WHEN** a resume was saved 60 days ago and the service has run continuously since
+- **THEN** the file still exists
+
+#### Scenario: Application deleted
+- **WHEN** application 7 is deleted with `DELETE /application/7`
+- **THEN** its resume file is still on disk
