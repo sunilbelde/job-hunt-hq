@@ -182,3 +182,9 @@ def test_unknown_field_ignored_on_update():
 ])
 def test_update_errors_do_not_echo_values(body):
     assert "secret-ish-value" not in update_error(body)
+
+
+@pytest.mark.parametrize("model", [ApplicationRow, ApplicationUpdate, ResumeRequest])
+def test_docs_examples_validate(model):
+    for example in model.model_config["json_schema_extra"]["examples"]:
+        model.model_validate(example)

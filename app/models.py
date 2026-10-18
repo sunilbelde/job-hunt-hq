@@ -5,6 +5,24 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
 
+# Example bodies shown in the API docs; tests send each one to check it is accepted.
+APPLICATION_EXAMPLE = {
+    "company": "Acme Corp",
+    "role": "Senior Software Engineer",
+    "job_link": "https://job-boards.greenhouse.io/acme/jobs/1234567",
+    "posting_source_type": "recruiting_platform",
+    "verification_method": "official_apply_match",
+    "official_apply_url": "https://job-boards.greenhouse.io/acme/jobs/1234567",
+    "location": "San Francisco, CA (Hybrid)",
+    "work_type": "Hybrid",
+    "salary": "$220,000 - $300,000",
+    "date_posted": "2026-10-15",
+    "company_careers_url": "https://www.acme.com/careers",
+    "official_employer_domain": "acme.com",
+}
+UPDATE_EXAMPLE = {"status": "applied"}
+RESUME_EXAMPLE = {"application_id": "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
+
 # Fixed once recorded: job_link is the dedupe key and the rest are its verification record.
 IMMUTABLE_FIELDS = ("job_link", "posting_source_type", "verification_method", "official_apply_url")
 
@@ -12,7 +30,7 @@ IMMUTABLE_FIELDS = ("job_link", "posting_source_type", "verification_method", "o
 class ApplicationRow(BaseModel):
     """A verified job posting to record. Free-form values are stored as sent."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [APPLICATION_EXAMPLE]})
 
     company: StrictStr = Field(min_length=1)
     role: StrictStr = Field(min_length=1)
@@ -59,7 +77,7 @@ class ApplicationRow(BaseModel):
 class ApplicationUpdate(BaseModel):
     """A partial update. Only fields present in the body are written: use exclude_unset."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [UPDATE_EXAMPLE]})
 
     # The defaults only mark a field as absent; an explicit null is still checked against the type,
     # so status, company and role cannot be cleared.
@@ -96,7 +114,7 @@ class ApplicationUpdate(BaseModel):
 class ResumeRequest(BaseModel):
     """The POST /resume body: an application ID, as a JSON string. Everything else comes from the store."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [RESUME_EXAMPLE]})
 
     application_id: StrictStr
 
@@ -123,3 +141,33 @@ class StoredApplication(BaseModel):
     company_careers_url: str | None = None
     official_employer_domain: str | None = None
     full_job_description: str | None = None
+
+
+# Response shapes, used only to describe responses in the API docs. Handlers build their
+# responses directly, so these never filter or reshape what is sent.
+
+
+class ErrorResponse(BaseModel):
+    ok: Literal[False] = False
+    message: str
+
+
+class HealthStatus(BaseModel):
+    status: Literal["ok"] = "ok"
+
+
+class ApplicationRecorded(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+
+
+class ApplicationUpdated(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    status: ApplicationStatus
+
+
+class ResumeCreated(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    saved_path: str

@@ -4,10 +4,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 
-# Stub curl: status codes come from STUB_APP / STUB_RESUME; DELETE and /resume calls are logged to STUB_LOG.
+# Stub curl: status codes come from STUB_DOCS / STUB_APP / STUB_RESUME; DELETE and /resume calls are logged to STUB_LOG.
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
+  *"/docs"*|*"/openapi.json"*) printf '%s' "$STUB_DOCS" ;;
   *"-X DELETE"*) echo "DELETE $*" >> "$STUB_LOG" ;;
   *"/application"*) printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}\n%s' "$STUB_APP" ;;
   *"/resume"*) echo "$*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
@@ -25,7 +26,7 @@ run() {
   if [ "${3:-%PDF-1.5}" != none ]; then
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
-  PATH="$tmp:$PATH" API_KEY=k STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 deleted() { grep -q "DELETE.*http://x/application/$id" "$tmp/log"; }
@@ -41,5 +42,6 @@ run 201 404; [ $? -ne 0 ] && deleted && ok "resume404 still cleans up" || bad "r
 run 200 401; [ $? -ne 0 ] && ! deleted && ok "resume401" || bad "resume401"
 run 201 201 none; [ $? -ne 0 ] && deleted && ok "missing file" || bad "missing file"
 run 201 201 '{"not":"pdf"}'; [ $? -ne 0 ] && ok "notpdf" || bad "notpdf"
+STUB_DOCS=200 run 201 201; [ $? -ne 0 ] && ! deleted && ok "docs served fails before creating anything" || bad "docs served"
 env -u API_KEY PATH="$tmp:$PATH" sh "$here/smoke_test.sh" http://x >/dev/null 2>&1 && bad "nokey" || ok "nokey"
 exit $fail
