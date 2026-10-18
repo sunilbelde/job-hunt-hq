@@ -8,7 +8,8 @@ from typing import Any
 
 from fastapi import FastAPI, Path, Request, Security
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ValidationError
 from pydantic.json_schema import models_json_schema
@@ -75,6 +76,30 @@ ERROR_DESCRIPTIONS = {
     502: "Storage service unavailable.",
     503: "Application store unavailable.",
 }
+
+
+# Exact versions with subresource integrity: the API key is typed into this page, so the code it
+# runs must not change under it. To move versions, resolve the new one on jsDelivr and recompute each
+# hash: curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A
+CDN = "https://cdn.jsdelivr.net/npm"
+SWAGGER_JS = (f"{CDN}/swagger-ui-dist@5.33.3/swagger-ui-bundle.js",
+              "sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K")
+SWAGGER_CSS = (f"{CDN}/swagger-ui-dist@5.33.3/swagger-ui.css",
+               "sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW")
+REDOC_JS = (f"{CDN}/redoc@2.5.4/bundles/redoc.standalone.js",
+            "sha384-w447zOpYfw/1Tv/5AK9NfHTlQIqE3RVR6KY62jCyy9zNDgO64cMwGGP1Fj0zJVf5")
+
+
+def with_integrity(page: HTMLResponse, *assets: tuple[str, str]) -> HTMLResponse:
+    """Add integrity and crossorigin to the tags loading each pinned asset."""
+    html = page.body.decode()
+    for url, digest in assets:
+        attribute = "src" if url.endswith(".js") else "href"
+        tag = f'{attribute}="{url}"'
+        if html.count(tag) != 1:  # FastAPI's page template changed; this function needs updating
+            raise RuntimeError(f"cannot find the tag loading {url}")
+        html = html.replace(tag, f'{tag} integrity="{digest}" crossorigin="anonymous"')
+    return HTMLResponse(html)
 
 
 def errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
@@ -148,13 +173,37 @@ def create_app(
         title="Job output service",
         description=DESCRIPTION,
         openapi_tags=TAGS,
-        # Off unless API_DOCS_ENABLED: the installed service is public through Funnel.
-        docs_url="/docs" if docs else None,
-        redoc_url="/redoc" if docs else None,
+        # Off unless API_DOCS_ENABLED: the installed service's public listener never serves them.
+        # The pages themselves are registered below, with pinned assets.
+        docs_url=None,
+        redoc_url=None,
         openapi_url="/openapi.json" if docs else None,
-        # Pinned off so an entered API key never outlives the page.
-        swagger_ui_parameters={"persistAuthorization": False},
     )
+    if docs:
+        oauth2_redirect = "/docs/oauth2-redirect"
+
+        @app.get("/docs", include_in_schema=False)
+        def swagger_ui() -> HTMLResponse:
+            page = get_swagger_ui_html(
+                openapi_url=app.openapi_url,
+                title=f"{app.title} - Swagger UI",
+                swagger_js_url=SWAGGER_JS[0],
+                swagger_css_url=SWAGGER_CSS[0],
+                oauth2_redirect_url=oauth2_redirect,
+                # Pinned off so an entered API key never outlives the page.
+                swagger_ui_parameters={"persistAuthorization": False},
+            )
+            return with_integrity(page, SWAGGER_JS, SWAGGER_CSS)
+
+        @app.get(oauth2_redirect, include_in_schema=False)
+        def swagger_ui_redirect() -> HTMLResponse:
+            return get_swagger_ui_oauth2_redirect_html()
+
+        @app.get("/redoc", include_in_schema=False)
+        def redoc() -> HTMLResponse:
+            page = get_redoc_html(openapi_url=app.openapi_url, title=f"{app.title} - ReDoc", redoc_js_url=REDOC_JS[0])
+            return with_integrity(page, REDOC_JS)
+
     default_openapi = app.openapi
 
     def openapi() -> dict[str, Any]:
@@ -204,18 +253,19 @@ def create_app(
 
     health = {"model": HealthStatus, "description": "The service is up."}
 
-    @app.get(
-        "/healthz",
-        tags=["health"],
-        summary="Health check",
-        description='Returns `{"status": "ok"}` while the service is up. Same as `GET /health`.',
-        responses={200: health},
-    )
+    # Decorators apply bottom-up: /healthz registers first, so the docs list it before its alias.
     @app.get(
         "/health",
         tags=["health"],
         summary="Health check (alias)",
         description='Returns `{"status": "ok"}` while the service is up. Same as `GET /healthz`.',
+        responses={200: health},
+    )
+    @app.get(
+        "/healthz",
+        tags=["health"],
+        summary="Health check",
+        description='Returns `{"status": "ok"}` while the service is up. Same as `GET /health`.',
         responses={200: health},
     )
     def healthz() -> dict[str, str]:

@@ -11,13 +11,16 @@
     <string>__REPO__</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__REPO__/.venv/bin/uvicorn</string>
-        <string>app.main:create_app</string>
-        <string>--factory</string>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>app.serve</string>
         <string>--host</string>
         <string>127.0.0.1</string>
         <string>--port</string>
         <string>__PORT__</string>
+        <!-- The docs listener. install_service.sh drops these two lines when DOCS_PORT=off. -->
+        <string>--docs-port</string>
+        <string>__DOCS_PORT__</string>
         <string>--log-config</string>
         <string>__REPO__/deploy/logging.json</string>
     </array>
@@ -29,7 +32,8 @@
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TECTONIC_CACHE_DIR</key>
         <string>__HOME__/Library/Caches/job-hunt-hq/tectonic</string>
-        <!-- Wins over .env: the service is public through Funnel, so it never serves API docs. -->
+        <!-- Wins over .env. app.serve also forces docs off on the public port, which Funnel
+             publishes; only the docs port serves them. -->
         <key>API_DOCS_ENABLED</key>
         <string>false</string>
     </dict>
