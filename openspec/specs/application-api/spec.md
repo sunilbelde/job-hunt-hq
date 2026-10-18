@@ -19,15 +19,15 @@ The system SHALL require the `X-API-Key` header on `POST /application`, `PATCH /
 - **THEN** the system responds 401, not a validation error
 
 #### Scenario: Wrong key on update
-- **WHEN** a client sends `PATCH /application/1` with a wrong `X-API-Key` and a valid body
-- **THEN** the system responds 401 and row 1 is unchanged
+- **WHEN** a client sends `PATCH /application/<id>` for an existing row with a wrong `X-API-Key` and a valid body
+- **THEN** the system responds 401 and the row is unchanged
 
 #### Scenario: Wrong key on delete
-- **WHEN** a client sends `DELETE /application/1` with a wrong `X-API-Key`
-- **THEN** the system responds 401 and row 1 still exists
+- **WHEN** a client sends `DELETE /application/<id>` for an existing row with a wrong `X-API-Key`
+- **THEN** the system responds 401 and the row still exists
 
 #### Scenario: Unknown ID does not leak without key
-- **WHEN** a client without a valid key sends `PATCH` or `DELETE` to an ID that does not exist
+- **WHEN** a client without a valid key sends `PATCH` or `DELETE` to an ID that does not exist or is not a UUID
 - **THEN** the system responds 401, not 404
 
 ### Requirement: Application body validation
@@ -108,11 +108,11 @@ The body SHALL require `company`, `role` and `job_link` as non-empty strings, pl
 - **THEN** the system responds 422 naming `verification_method`
 
 ### Requirement: Application recording response
-For a `job_link` not yet stored, `POST /application` SHALL create a row and respond 201 with exactly `{"ok": true, "application_id": <integer>}`, where `application_id` is the new row's ID.
+For a `job_link` not yet stored, `POST /application` SHALL create a row and respond 201 with exactly `{"ok": true, "application_id": "<uuid>"}`, where `application_id` is the new row's ID as a lowercase, hyphenated UUID string.
 
 #### Scenario: New application
 - **WHEN** an authenticated client posts a valid body whose `job_link` is not in the store
-- **THEN** the system responds 201 with `ok` true and an integer `application_id`
+- **THEN** the system responds 201 with `ok` true and a UUID string `application_id`
 - **AND** the body has no other keys
 
 ### Requirement: Deduplication on job_link
@@ -175,7 +175,7 @@ When the application store cannot be read or written, `POST /application`, `PATC
 - **THEN** the system responds 503 with `ok` false and a generic `message` containing no path or exception text
 
 ### Requirement: Per-request application logging
-The system SHALL emit exactly one structured log line per `POST /application`, `PATCH /application/{application_id}` or `DELETE /application/{application_id}` request with event `application_request`, the HTTP `method`, HTTP status, duration and, when known, `application_id` and (for `POST`) whether it was a duplicate. It SHALL NOT log the API key or any request body field.
+The system SHALL emit exactly one structured log line per `POST /application`, `PATCH /application/{application_id}` or `DELETE /application/{application_id}` request with event `application_request`, the HTTP `method`, HTTP status, duration and, when known, `application_id` and (for `POST`) whether it was a duplicate. `application_id` SHALL be logged only as a lowercase UUID string, and a path value that is not a UUID SHALL NOT be logged. It SHALL NOT log the API key or any request body field.
 
 #### Scenario: New application log
 - **WHEN** a new application is recorded
@@ -186,8 +186,8 @@ The system SHALL emit exactly one structured log line per `POST /application`, `
 - **THEN** one log line records the status and duration, with no key or body content
 
 #### Scenario: Update log
-- **WHEN** application 7 is updated to status `applied`
-- **THEN** one log line records method `PATCH`, status 200, `application_id` 7 and the duration
+- **WHEN** application `<id>` is updated to status `applied`
+- **THEN** one log line records method `PATCH`, status 200, `application_id` `<id>` and the duration
 - **AND** the line does not contain `applied` or any other body value
 
 #### Scenario: Delete of unknown ID log
@@ -198,6 +198,10 @@ The system SHALL emit exactly one structured log line per `POST /application`, `
 - **WHEN** a client calls any application endpoint
 - **THEN** no `resume_request` log line is emitted
 - **AND** a `POST /resume` request emits no `application_request` log line
+
+#### Scenario: Malformed path ID not logged
+- **WHEN** an authenticated client sends `DELETE /application/not-a-uuid`
+- **THEN** the log line records method `DELETE` and status 404, and does not contain `not-a-uuid`
 
 ### Requirement: Application status values
 Every application SHALL have a `status` that is exactly one of `verified`, `applied`, `interviewing`, `offer`, `rejected` or `withdrawn`. Matching SHALL be case-sensitive, and any other value supplied by a client SHALL be rejected with 422 naming `status`.
@@ -215,7 +219,7 @@ Every application SHALL have a `status` that is exactly one of `verified`, `appl
 - **THEN** the response body does not contain "secret-ish-value"
 
 ### Requirement: Default status on recording
-A row created by `POST /application` SHALL have status `verified`. A duplicate `POST` SHALL NOT change the existing row's status, and the `POST` response body SHALL remain exactly `{"ok": true, "application_id": <integer>}`.
+A row created by `POST /application` SHALL have status `verified`. A duplicate `POST` SHALL NOT change the existing row's status, and the `POST` response body SHALL remain exactly `{"ok": true, "application_id": "<uuid>"}`.
 
 #### Scenario: New row is verified
 - **WHEN** a new application is recorded
@@ -279,37 +283,41 @@ An update SHALL accept `status`; `company` and `role` as non-empty strings; and 
 - **THEN** the system responds 422 naming `verification_method`
 
 ### Requirement: Application update response
-A successful update SHALL respond 200 with exactly `{"ok": true, "application_id": <integer>, "status": "<status after the update>"}`.
+A successful update SHALL respond 200 with exactly `{"ok": true, "application_id": "<uuid>", "status": "<status after the update>"}`, where `application_id` is the row's ID in lowercase.
 
 #### Scenario: Update response shape
-- **WHEN** an authenticated client sends `{"salary": "$150k"}` to application 7, whose status is `applied`
-- **THEN** the response is 200 with body `{"ok": true, "application_id": 7, "status": "applied"}` and no other keys
+- **WHEN** an authenticated client sends `{"salary": "$150k"}` to application `<id>`, whose status is `applied`
+- **THEN** the response is 200 with body `{"ok": true, "application_id": "<id>", "status": "applied"}` and no other keys
 
 ### Requirement: Application delete endpoint
-`DELETE /application/{application_id}` SHALL permanently remove the row and respond 200 with exactly `{"ok": true, "application_id": <integer>}`. Any request body SHALL be ignored.
+`DELETE /application/{application_id}` SHALL permanently remove the row and respond 200 with exactly `{"ok": true, "application_id": "<uuid>"}`, where `application_id` is the removed row's ID in lowercase. Any request body SHALL be ignored.
 
 #### Scenario: Delete existing
-- **WHEN** an authenticated client deletes application 7
-- **THEN** the response is 200 with body `{"ok": true, "application_id": 7}` and no other keys
-- **AND** a later `PATCH` or `DELETE` of 7 responds 404
+- **WHEN** an authenticated client deletes application `<id>`
+- **THEN** the response is 200 with body `{"ok": true, "application_id": "<id>"}` and no other keys
+- **AND** a later `PATCH` or `DELETE` of `<id>` responds 404
 
 #### Scenario: Re-record after delete
-- **WHEN** application 7 with a given `job_link` is deleted and the same `job_link` is posted again
-- **THEN** the response is 201 with a new `application_id` larger than 7, and the new row's status is `verified`
+- **WHEN** application `<id>` with a given `job_link` is deleted and the same `job_link` is posted again
+- **THEN** the response is 201 with a new `application_id` different from `<id>`, and the new row's status is `verified`
 
-### Requirement: Unknown application ID
-When `application_id` in the path does not identify a stored row, because it was never assigned, was deleted, or is not a positive base-10 integer, `PATCH` and `DELETE` SHALL respond 404 with `{"ok": false, "message": "Application not found"}` and change nothing. An authenticated request for an unknown ID SHALL be reported as 404 even when its body is also invalid.
+### Requirement: Unknown application ID in path
+`application_id` in the path SHALL be matched as a hyphenated UUID in any letter case. When it does not identify a stored row, because it was never assigned, was deleted, or is not a UUID (including an integer), `PATCH` and `DELETE` SHALL respond 404 with `{"ok": false, "message": "Application not found"}` and change nothing. An authenticated request for an unknown ID SHALL be reported as 404 even when its body is also invalid.
 
 #### Scenario: Never assigned
-- **WHEN** an authenticated client sends `PATCH /application/999999` with `{"status": "applied"}` and no such row exists
+- **WHEN** an authenticated client sends `PATCH /application/<random uuid>` with `{"status": "applied"}` and no such row exists
 - **THEN** the system responds 404 with `ok` false and `message` "Application not found", and no row is created
 
-#### Scenario: Not an integer
-- **WHEN** an authenticated client sends `DELETE /application/abc`, `/application/0` or `/application/-1`
+#### Scenario: Not a UUID
+- **WHEN** an authenticated client sends `DELETE /application/abc`, `/application/1`, `/application/0` or `/application/-1`
 - **THEN** the system responds 404 with `ok` false and a `message`, not a framework validation error
 
+#### Scenario: Upper case accepted
+- **WHEN** an authenticated client sends `PATCH /application/<id in upper case>` for an existing row
+- **THEN** the row is updated and the response carries `<id>` in lower case
+
 #### Scenario: Unknown ID with bad body
-- **WHEN** an authenticated client sends `PATCH /application/999999` with a body that is not JSON
+- **WHEN** an authenticated client sends `PATCH /application/<random uuid>` with a body that is not JSON and no such row exists
 - **THEN** the system responds 404
 
 #### Scenario: Delete twice

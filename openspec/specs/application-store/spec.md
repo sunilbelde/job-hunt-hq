@@ -7,7 +7,7 @@ Defines how recorded job applications are persisted locally: where they live, ho
 ## Requirements
 
 ### Requirement: Durable application rows
-The system SHALL persist each accepted application, with every recognised body field, a `status`, a creation timestamp (UTC), an `updated_at` timestamp (UTC, null until the row is first updated) and an integer ID, in a single file at `<OUTPUT_DIR>/applications.sqlite3`. A stored row, including any updates, SHALL remain readable after the service restarts.
+The system SHALL persist each accepted application, with every recognised body field, a `status`, a creation timestamp (UTC), an `updated_at` timestamp (UTC, null until the row is first updated) and a UUID application ID, in a single file at `<OUTPUT_DIR>/applications.sqlite3`. A stored row, including any updates, SHALL remain readable after the service restarts.
 
 #### Scenario: Survives restart
 - **WHEN** an application is recorded and the service is then restarted
@@ -25,16 +25,20 @@ The system SHALL persist each accepted application, with every recognised body f
 - **WHEN** a row is created and later updated
 - **THEN** its `updated_at` is null after creation and a UTC timestamp no earlier than `created_at` after the update, and `created_at` is unchanged
 
-### Requirement: Stable increasing IDs
-Application IDs SHALL be positive integers assigned by the store, unique across all rows, never changed once assigned, and never reused for any later row, including after the row holding the ID, or the row with the largest ID, is deleted.
+### Requirement: Random application IDs
+Each application ID SHALL be a random (version 4) UUID assigned by the store when the row is created, and SHALL be reported as a lowercase, hyphenated 36-character string. IDs SHALL be unique across all rows, SHALL never change once assigned, and SHALL NOT be derivable from the posting, the row count or the order of recording.
 
 #### Scenario: Distinct postings
 - **WHEN** two applications with different `job_link` values are recorded
-- **THEN** they receive different positive integer IDs, the later one larger
+- **THEN** they receive different IDs, each matching `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
 
-#### Scenario: No reuse after deleting the newest row
-- **WHEN** the row with the largest ID is deleted and a new application is recorded
-- **THEN** the new ID is larger than the deleted one
+#### Scenario: New ID after delete
+- **WHEN** a row is deleted and an application with the same `job_link` is recorded again
+- **THEN** the new row's ID differs from the deleted one
+
+#### Scenario: ID is stable
+- **WHEN** a row is updated and the service is restarted
+- **THEN** the row keeps the ID it was given when it was recorded
 
 ### Requirement: Uniqueness on job_link
 The store SHALL hold at most one row per `job_link` dedupe key, and SHALL enforce this itself so that concurrent writers cannot create a duplicate. Each row SHALL keep both the key and the `job_link` exactly as first sent, so keys can be rebuilt if the normalization rules change. Deleting a row SHALL free its key.
@@ -52,7 +56,7 @@ The store SHALL hold at most one row per `job_link` dedupe key, and SHALL enforc
 - **THEN** a new row is created and its `job_link` is the decorated variant as sent
 
 ### Requirement: Store initialisation
-The system SHALL create the store file and its schema at startup if absent. If present, it SHALL leave existing rows' values untouched, except that a store created before statuses existed SHALL be migrated so that every existing row has status `verified` and a null `updated_at`. It SHALL refuse to start with an error naming `OUTPUT_DIR` if the store cannot be opened, created or migrated.
+The system SHALL create the store file and its schema at startup if absent. If present, it SHALL leave existing rows' values untouched, except that a store created before statuses existed SHALL be migrated so that every existing row has status `verified` and a null `updated_at`, and a store with integer IDs SHALL be migrated to UUID IDs. It SHALL refuse to start with an error naming `OUTPUT_DIR` if the store cannot be opened, created or migrated.
 
 #### Scenario: First start
 - **WHEN** the service starts with no store file in `OUTPUT_DIR`
@@ -64,11 +68,38 @@ The system SHALL create the store file and its schema at startup if absent. If p
 
 #### Scenario: Pre-status store migrated
 - **WHEN** the service starts with a store holding rows written before statuses existed
-- **THEN** every such row has status `verified`, keeps its ID and every other field, and can be updated and deleted
+- **THEN** every such row has status `verified`, has a UUID ID, keeps every other field, and can be updated and deleted
 
 #### Scenario: Migration is idempotent
 - **WHEN** the service is restarted after a migration, or after rows changed status
-- **THEN** no status is reset and startup succeeds
+- **THEN** no status is reset, no ID changes, and startup succeeds
+
+### Requirement: Integer ID migration
+At startup, a store whose rows have integer IDs SHALL be converted so that each row gets a new random UUID ID and keeps every other field. Before converting, the system SHALL copy the store file to a backup in `OUTPUT_DIR` readable only by the service's user account. The conversion SHALL happen in one transaction and SHALL record each old integer ID with its new UUID in the store. Old integer IDs SHALL NOT identify any application afterwards.
+
+#### Scenario: Rows converted
+- **WHEN** the service starts with a store holding rows 1 and 2
+- **THEN** both rows have distinct UUID IDs, and their `job_link`, fields, `status`, `created_at` and `updated_at` are unchanged
+
+#### Scenario: Backup kept
+- **WHEN** an integer-ID store is migrated
+- **THEN** a copy of the store as it was before the migration exists in `OUTPUT_DIR`, and its mode grants no access to group or other users
+
+#### Scenario: Mapping recorded
+- **WHEN** row 1 is migrated
+- **THEN** the store records that old ID 1 became the row's new UUID
+
+#### Scenario: Failed migration leaves store unchanged
+- **WHEN** the migration fails partway through
+- **THEN** the store still holds every row with its integer ID, and startup fails with an error naming `OUTPUT_DIR`
+
+#### Scenario: Already migrated
+- **WHEN** the service restarts after a completed migration
+- **THEN** no ID changes and no new backup is made
+
+#### Scenario: Old ID rejected
+- **WHEN** a client uses integer ID 1 after the migration
+- **THEN** the request is handled as an unknown application
 
 ### Requirement: Private application data
 The store file SHALL be readable and writable only by the service's user account.
