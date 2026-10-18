@@ -51,7 +51,7 @@ application_id=$(printf '%s' "$body" | json_field application_id)
 
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/resume" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
-  -d "{\"application_id\":$application_id}")
+  -d "{\"application_id\":\"$application_id\"}")
 status=$(printf '%s\n' "$resp" | tail -n 1)
 body=$(printf '%s\n' "$resp" | sed '$d')
 if [ "$status" != "201" ]; then

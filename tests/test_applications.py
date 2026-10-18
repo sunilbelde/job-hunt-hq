@@ -1,7 +1,9 @@
 import os
+import re
 import sqlite3
 import stat
 import threading
+import uuid
 from contextlib import closing
 
 import pytest
@@ -10,6 +12,7 @@ from app.applications import FIELDS, ApplicationStore, ApplicationStoreError, de
 from app.storage import StorageError
 
 GH = "https://job-boards.greenhouse.io/acme/jobs/123"
+UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 # --- dedupe_key ---
@@ -111,7 +114,7 @@ def count(db_path):
 
 def test_first_record_creates_repeat_returns_same_id(store, db_path):
     application_id, created = store.record(row(salary="$1"))
-    assert created and application_id > 0
+    assert created and UUID4.match(application_id)
     assert store.record(row(salary="$2")) == (application_id, False)
     assert stored(db_path, application_id)["salary"] == "$1"
     assert count(db_path) == 1
@@ -132,10 +135,10 @@ def test_raw_link_retained_with_key(store, db_path):
     assert saved["job_link"] == link and saved["job_link_key"] == "https://example.com/jobs/1"
 
 
-def test_different_links_get_increasing_ids(store):
+def test_different_links_get_distinct_uuids(store):
     first, _ = store.record(row(GH))
     second, _ = store.record(row(GH.replace("123", "456")))
-    assert second > first
+    assert UUID4.match(first) and UUID4.match(second) and first != second
 
 
 def test_rows_survive_restart(db_path):
@@ -223,21 +226,22 @@ def test_new_row_is_verified_without_updated_at(store, db_path):
 
 def test_old_store_migrated_to_verified(old_store_path):
     store = ApplicationStore(old_store_path)
+    ids = store.legacy_ids()
     for n in (1, 2):
-        saved = stored(old_store_path, n)
+        saved = stored(old_store_path, ids[n])
         assert saved["status"] == "verified" and saved["updated_at"] is None
         assert saved["job_link"] == f"https://example.com/jobs/{n}/" and saved["salary"] == f"${n}"
         assert saved["created_at"] == "2026-10-01T00:00:00Z"
-    assert store.update(1, {"status": "applied"}) == "applied"
-    assert store.delete(2)
+    assert store.update(ids[1], {"status": "applied"}) == "applied"
+    assert store.delete(ids[2])
 
 
 def test_reopening_migrated_store_keeps_statuses(old_store_path):
-    ApplicationStore(old_store_path)
+    ids = ApplicationStore(old_store_path).legacy_ids()
     with closing(sqlite3.connect(old_store_path)) as conn, conn:
-        conn.execute("UPDATE applications SET status = 'offer' WHERE id = 1")
+        conn.execute("UPDATE applications SET status = 'offer' WHERE id = ?", (ids[1],))
     ApplicationStore(old_store_path)
-    assert stored(old_store_path, 1)["status"] == "offer"
+    assert stored(old_store_path, ids[1])["status"] == "offer"
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
@@ -267,7 +271,9 @@ def test_concurrent_migration(old_store_path):
     for t in threads:
         t.join(timeout=10)
     assert errors == []
-    assert stored(old_store_path, 1)["status"] == "verified"
+    ids = ApplicationStore(old_store_path).legacy_ids()
+    assert stored(old_store_path, ids[1])["status"] == "verified"
+    assert len(backups(old_store_path)) == 1
 
 
 # --- update, delete, exists ---
@@ -304,9 +310,10 @@ def test_update_rejects_non_updatable_columns(store, changes):
 
 
 def test_missing_id(store):
-    assert store.update(999, {"status": "applied"}) is None
-    assert store.delete(999) is False
-    assert store.exists(999) is False
+    unknown = str(uuid.uuid4())
+    assert store.update(unknown, {"status": "applied"}) is None
+    assert store.delete(unknown) is False
+    assert store.exists(unknown) is False
 
 
 def test_delete_frees_link_for_new_row(store, db_path):
@@ -316,17 +323,16 @@ def test_delete_frees_link_for_new_row(store, db_path):
     assert not store.exists(application_id)
     variant = GH + "/?utm_source=x"
     new_id, created = store.record(row(variant))
-    assert created and new_id > application_id
+    assert created and new_id != application_id
     assert stored(db_path, new_id)["job_link"] == variant
     assert stored(db_path, new_id)["status"] == "verified"
 
 
-def test_ids_not_reused_after_deleting_newest(store):
-    store.record(row(GH.replace("123", "1")))
-    newest, _ = store.record(row(GH.replace("123", "2")))
-    store.delete(newest)
-    replacement, _ = store.record(row(GH.replace("123", "3")))
-    assert replacement > newest
+def test_new_id_after_delete(store):
+    first, _ = store.record(row())
+    store.delete(first)
+    again, _ = store.record(row())
+    assert UUID4.match(again) and again != first
 
 
 def test_concurrent_updates_all_land(store, db_path):
@@ -378,7 +384,7 @@ def test_read_failure_raises_store_error(store, db_path):
     db_path.unlink()
     db_path.mkdir()  # a directory where the file was: sqlite cannot open it
     with pytest.raises(ApplicationStoreError):
-        store.exists(1)
+        store.exists(str(uuid.uuid4()))
 
 
 def test_get_returns_stored_row_without_key(store):
@@ -393,7 +399,7 @@ def test_get_returns_stored_row_without_key(store):
 
 
 def test_get_missing_or_deleted_is_none(store):
-    assert store.get(999) is None
+    assert store.get(str(uuid.uuid4())) is None
     application_id, _ = store.record(row())
     store.delete(application_id)
     assert store.get(application_id) is None
@@ -409,4 +415,107 @@ def test_get_read_failure_raises_store_error(store, db_path):
     db_path.unlink()
     db_path.mkdir()
     with pytest.raises(ApplicationStoreError):
-        store.get(1)
+        store.get(str(uuid.uuid4()))
+
+
+# --- integer-ID migration ---
+
+STATUS_SCHEMA = OLD_SCHEMA.replace(
+    "created_at TEXT NOT NULL", "created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'verified', updated_at TEXT")
+
+
+def backups(db_path):
+    return sorted(db_path.parent.glob(db_path.name + ".pre-uuid-*.bak"))
+
+
+@pytest.fixture
+def int_store_path(db_path):
+    """A store file with statuses but integer IDs, holding rows 1 and 2."""
+    db_path.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(STATUS_SCHEMA)
+        conn.execute(
+            "INSERT INTO applications (id, job_link_key, job_link, company, role, salary, created_at, status, updated_at) "
+            "VALUES (1, 'https://example.com/jobs/1', 'https://example.com/jobs/1/', 'Acme', 'Engineer', '$1', "
+            "'2026-10-01T00:00:00Z', 'applied', '2026-10-02T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO applications (id, job_link_key, job_link, company, role, created_at) "
+            "VALUES (2, 'https://example.com/jobs/2', 'https://example.com/jobs/2', 'Beta', 'Engineer', "
+            "'2026-10-03T00:00:00Z')"
+        )
+    db_path.chmod(0o600)
+    return db_path
+
+
+def raw_rows(db_path):
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute("SELECT * FROM applications")]
+
+
+def test_integer_ids_migrated_keeping_fields(int_store_path):
+    before = {r["id"]: r for r in raw_rows(int_store_path)}
+    store = ApplicationStore(int_store_path)
+    ids = store.legacy_ids()
+    assert set(ids) == {1, 2} and len(set(ids.values())) == 2
+    assert all(UUID4.match(v) for v in ids.values())
+    for old_id, new_id in ids.items():
+        after = stored(int_store_path, new_id)
+        assert after == {**before[old_id], "id": new_id}
+
+
+def test_migrated_store_keeps_working(int_store_path):
+    store = ApplicationStore(int_store_path)
+    ids = store.legacy_ids()
+    assert store.record(row("https://example.com/jobs/1")) == (ids[1], False)
+    new_id, created = store.record(row("https://example.com/jobs/3"))
+    assert created and UUID4.match(new_id)
+    assert store.update(ids[2], {"status": "offer"}) == "offer"
+
+
+def test_old_integer_ids_name_nothing(int_store_path):
+    store = ApplicationStore(int_store_path)
+    for old in (1, "1"):
+        assert store.get(old) is None and not store.exists(old)
+        assert store.update(old, {"status": "offer"}) is None
+        assert store.delete(old) is False
+    assert len(raw_rows(int_store_path)) == 2
+
+
+def test_backup_private_and_holds_integer_rows(int_store_path):
+    before = raw_rows(int_store_path)
+    ApplicationStore(int_store_path)
+    [backup] = backups(int_store_path)
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    assert raw_rows(backup) == before
+
+
+def test_pre_status_store_gets_status_and_uuids(old_store_path):
+    store = ApplicationStore(old_store_path)
+    ids = store.legacy_ids()
+    assert set(ids) == {1, 2}
+    assert all(stored(old_store_path, v)["status"] == "verified" for v in ids.values())
+
+
+def test_restart_after_migration_changes_nothing(int_store_path):
+    ids = ApplicationStore(int_store_path).legacy_ids()
+    rows = raw_rows(int_store_path)
+    assert ApplicationStore(int_store_path).legacy_ids() == ids
+    assert raw_rows(int_store_path) == rows
+    assert len(backups(int_store_path)) == 1
+
+
+def test_new_store_has_no_legacy_ids(store):
+    assert store.legacy_ids() == {}
+
+
+def test_failed_migration_leaves_integer_store(int_store_path, monkeypatch):
+    before = raw_rows(int_store_path)
+    same = uuid.uuid4()
+    monkeypatch.setattr("app.applications.uuid.uuid4", lambda: same)  # second mapping row breaks UNIQUE
+    with pytest.raises(StorageError, match="OUTPUT_DIR"):
+        ApplicationStore(int_store_path)
+    assert raw_rows(int_store_path) == before
+    monkeypatch.undo()
+    assert set(ApplicationStore(int_store_path).legacy_ids()) == {1, 2}

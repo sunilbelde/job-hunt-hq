@@ -3,17 +3,24 @@ from pydantic import ValidationError
 
 from app.models import ResumeRequest, StoredApplication
 
+ID = "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"
+
 
 # --- ResumeRequest ---
 
 def test_resume_request_ignores_extra_fields():
-    request = ResumeRequest.model_validate({"application_id": 7, "x": 1})
-    assert request.application_id == 7 and not hasattr(request, "x")
+    request = ResumeRequest.model_validate({"application_id": ID, "x": 1})
+    assert request.application_id == ID and not hasattr(request, "x")
 
 
-@pytest.mark.parametrize("body", [{"application_id": "7"}, {"application_id": 7.5},
-                                  {"application_id": True}, {"application_id": None}, {}])
-def test_resume_request_rejects_non_integer_ids(body):
+def test_resume_request_takes_any_string():
+    # Whether the string is a UUID is checked by the endpoint, which answers 404, not 422.
+    assert ResumeRequest.model_validate({"application_id": "not-a-uuid"}).application_id == "not-a-uuid"
+
+
+@pytest.mark.parametrize("body", [{"application_id": 7}, {"application_id": 7.5}, {"application_id": True},
+                                  {"application_id": None}, {"application_id": {"id": ID}}, {}])
+def test_resume_request_rejects_non_string_ids(body):
     with pytest.raises(ValidationError) as exc:
         ResumeRequest.model_validate(body)
     assert exc.value.errors()[0]["loc"] == ("application_id",)
@@ -23,13 +30,13 @@ def test_resume_request_rejects_non_integer_ids(body):
 
 def test_stored_application_with_null_optional_fields():
     row = {
-        "id": 7, "company": "Acme", "role": "Engineer", "job_link": "https://example.com/1",
+        "id": ID, "company": "Acme", "role": "Engineer", "job_link": "https://example.com/1",
         "posting_source_type": "employer_site", "verification_method": "employer_site",
         "official_apply_url": "", "status": "verified", "location": None, "full_job_description": None,
         "created_at": "2026-10-17T00:00:00Z", "updated_at": None,
     }
     application = StoredApplication.model_validate(row)
-    assert application.id == 7 and application.full_job_description is None and application.salary is None
+    assert application.id == ID and application.full_job_description is None and application.salary is None
 
 
 # --- ApplicationRow ---

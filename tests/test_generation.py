@@ -4,7 +4,7 @@ from app.generation import generate_output
 from app.models import StoredApplication
 
 APPLICATION = StoredApplication(
-    id=1, company="Acme", role="Engineer", job_link="https://example.com/1",
+    id="3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13", company="Acme", role="Engineer", job_link="https://example.com/1",
     posting_source_type="employer_site", verification_method="employer_site",
     official_apply_url="", status="verified",
 )

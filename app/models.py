@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 
 ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
@@ -94,11 +94,11 @@ class ApplicationUpdate(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    """The POST /resume body: an application ID, as a JSON integer. Everything else comes from the store."""
+    """The POST /resume body: an application ID, as a JSON string. Everything else comes from the store."""
 
     model_config = ConfigDict(extra="ignore")
 
-    application_id: StrictInt
+    application_id: StrictStr
 
 
 class StoredApplication(BaseModel):
@@ -106,7 +106,7 @@ class StoredApplication(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    id: int
+    id: str
     company: str
     role: str
     job_link: str

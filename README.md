@@ -7,7 +7,7 @@ The generation step is a stub: `generate_output` in `app/generation.py` receives
 | Endpoint | Auth | Description |
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
-| `POST /resume` | `X-API-Key` | Body `{"application_id": <integer>}`. Renders the resume from the stored application and saves it. `201 {"ok": true, "application_id", "saved_path"}`, where `saved_path` is the file's absolute path. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render failure, 502 file write failure, 503 store failure |
+| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Renders the resume from the stored application and saves it. `201 {"ok": true, "application_id", "saved_path"}`, where `saved_path` is the file's absolute path. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render failure, 502 file write failure, 503 store failure |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
@@ -16,7 +16,7 @@ Code layout: `app/main.py` (HTTP), `app/models.py` (`ResumeRequest`, `StoredAppl
 
 ### Request body (`POST /resume`)
 
-`{"application_id": 7}`: the ID returned by `POST /application`, as a JSON integer. Everything else (company, role, job description and so on) is read from the stored application, so record or `PATCH` the posting first. Extra fields are ignored. A missing or non-integer ID (`"7"`, `7.5`, `true`) is a 422; an integer that names no stored application, including `0` and negatives, is a 404. Generating a resume never changes the application, its status included, and works for any status.
+`{"application_id": "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}`: the ID returned by `POST /application`, as a JSON string. Everything else (company, role, job description and so on) is read from the stored application, so record or `PATCH` the posting first. Extra fields are ignored. A missing or non-string ID (`7`, `7.5`, `true`) is a 422; a string that is not a UUID or names no stored application is a 404. Generating a resume never changes the application, its status included, and works for any status.
 
 ### Request body (`ApplicationRow`)
 
@@ -60,13 +60,27 @@ Values are exact and case-sensitive, and any status can change to any other. Re-
 
 An unknown ID returns 404, checked before the body, and a bad key returns 401 before either.
 
-**Deleting** is permanent and frees the link: posting it again creates a new row with a new, larger ID, and IDs are never reused. To stop tracking a posting but keep its record, set `status` to `withdrawn` instead.
+**IDs** are random UUIDs (version 4), returned in lower case, such as `3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13`. They say nothing about how many applications exist or in what order they were recorded; sort by `created_at` if you need order. Paths and bodies accept the hyphenated form in any letter case. Any other path value, including an old integer ID, is a 404; in the `POST /resume` body a JSON number is a 422.
+
+**Deleting** is permanent and frees the link: posting it again creates a new row with a new ID. To stop tracking a posting but keep its record, set `status` to `withdrawn` instead.
 
 Rows live in `OUTPUT_DIR/applications.sqlite3` (mode 600). To back it up while the service runs:
 
 ```sh
 sqlite3 ~/Library/Application\ Support/job-hunt-hq/applications.sqlite3 ".backup applications-backup.sqlite3"
 ```
+
+### Upgrading from integer IDs
+
+Stores made before IDs were UUIDs are converted the first time the new version starts:
+
+- The store is first copied to `applications.sqlite3.pre-uuid-<timestamp>.bak` (mode 600) beside it.
+- Every row gets a new UUID in one transaction; all other fields, statuses and timestamps are kept. If anything fails, the store is left as it was and the service refuses to start.
+- The old-to-new mapping stays in the `legacy_application_ids` table: `sqlite3 …/applications.sqlite3 "select * from legacy_application_ids"`.
+- Resume folders named by an old ID (`Acme Corp/1/`) are renamed to the new UUID. A folder whose UUID name is already taken is left alone and logged as `legacy_folder_conflict`. An interrupted rename finishes on the next start.
+- Old integer IDs stop working. Update any client that stored them (such as Muse) to keep `application_id` as a string.
+
+To roll back: run `scripts/uninstall_service.sh`, copy the `.bak` file over `applications.sqlite3` (deleting any `-wal`/`-shm` files beside it), rename the resume folders back using the mapping, check out the previous commit and reinstall.
 
 Take a backup before upgrading to a build that changes the store. The first start of the status-aware build adds the `status` and `updated_at` columns in place. Older builds ignore them, so rolling back needs no restore.
 
@@ -101,21 +115,23 @@ brew install python@3.12 tectonic
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/uvicorn app.main:create_app --factory --port 8080
 
-curl -X POST localhost:8080/application -H "X-API-Key: $API_KEY" \
+ID=$(curl -s -X POST localhost:8080/application -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"company":"Acme","role":"Software Engineer","job_link":"https://www.acme.com/careers/1","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":""}'
-# {"ok":true,"application_id":1}   (201; 200 with the same id when sent again)
+  -d '{"company":"Acme","role":"Software Engineer","job_link":"https://www.acme.com/careers/1","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":""}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["application_id"])')
+echo "$ID"
+# 3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13   (201; 200 with the same id when sent again)
 
 curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
-  -H 'Content-Type: application/json' -d '{"application_id":1}'
-# {"ok":true,"application_id":1,"saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/1/SUNIL BELDE.pdf"}
+  -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
+# {"ok":true,"application_id":"3f2b…","saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf"}
 
-curl -X PATCH localhost:8080/application/1 -H "X-API-Key: $API_KEY" \
+curl -X PATCH "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
-# {"ok":true,"application_id":1,"status":"applied"}
+# {"ok":true,"application_id":"3f2b…","status":"applied"}
 
-curl -X DELETE localhost:8080/application/1 -H "X-API-Key: $API_KEY"
-# {"ok":true,"application_id":1}   (404 {"ok":false,"message":"Application not found"} if sent again)
+curl -X DELETE "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY"
+# {"ok":true,"application_id":"3f2b…"}   (404 {"ok":false,"message":"Application not found"} if sent again)
 ```
 
 Tests (no network needed):
