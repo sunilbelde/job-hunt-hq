@@ -46,3 +46,80 @@ def test_wrong_type_rejected(field, value):
 
 def test_unknown_fields_ignored():
     assert not hasattr(JobRow.model_validate({**MINIMAL, "extra": "x"}), "extra")
+
+
+# --- ApplicationRow ---
+
+from app.models import ApplicationRow  # noqa: E402
+from tests.conftest import GH_LINK, VALID_APPLICATION  # noqa: E402
+
+REQUIRED_APPLICATION = {
+    k: VALID_APPLICATION[k]
+    for k in ("company", "role", "job_link", "posting_source_type", "verification_method", "official_apply_url")
+}
+EMPLOYER_SITE = {
+    **REQUIRED_APPLICATION, "job_link": "https://www.acme.com/careers/1",
+    "posting_source_type": "employer_site", "verification_method": "employer_site", "official_apply_url": "",
+}
+
+
+def error_text(data):
+    with pytest.raises(ValidationError) as exc:
+        ApplicationRow.model_validate(data)
+    return str(exc.value.errors(include_input=False))
+
+
+def test_client_example_accepted():
+    row = ApplicationRow.model_validate(VALID_APPLICATION)
+    assert row.model_dump() == VALID_APPLICATION
+
+
+def test_required_only_accepted():
+    row = ApplicationRow.model_validate(REQUIRED_APPLICATION)
+    assert row.full_job_description is None and row.company_careers_url is None
+
+
+def test_employer_site_with_empty_apply_url_accepted():
+    assert ApplicationRow.model_validate(EMPLOYER_SITE).official_apply_url == ""
+
+
+@pytest.mark.parametrize("field", list(REQUIRED_APPLICATION))
+def test_missing_required_application_field(field):
+    data = {k: v for k, v in REQUIRED_APPLICATION.items() if k != field}
+    assert field in error_text(data)
+
+
+@pytest.mark.parametrize("field", ["company", "role", "job_link"])
+def test_empty_required_application_field(field):
+    assert field in error_text({**REQUIRED_APPLICATION, field: ""})
+
+
+@pytest.mark.parametrize("field,value", [("salary", 100), ("company", None), ("official_apply_url", None)])
+def test_application_wrong_type(field, value):
+    assert field in error_text({**REQUIRED_APPLICATION, field: value})
+
+
+@pytest.mark.parametrize("field,value", [
+    ("posting_source_type", "linkedin"),
+    ("posting_source_type", "Employer_Site"),
+    ("verification_method", "Official_Apply_Match"),
+    ("verification_method", "found"),
+])
+def test_enum_values_exact(field, value):
+    assert field in error_text({**REQUIRED_APPLICATION, field: value})
+
+
+@pytest.mark.parametrize("data,field", [
+    ({**EMPLOYER_SITE, "official_apply_url": "https://www.acme.com/careers/1"}, "official_apply_url"),
+    ({**REQUIRED_APPLICATION, "official_apply_url": ""}, "official_apply_url"),
+    ({**REQUIRED_APPLICATION, "official_apply_url": GH_LINK + "/"}, "official_apply_url"),
+    ({**REQUIRED_APPLICATION, "verification_method": "employer_site"}, "verification_method"),
+    ({**EMPLOYER_SITE, "verification_method": "official_apply_match"}, "verification_method"),
+])
+def test_pairing_rules(data, field):
+    assert field in error_text(data)
+
+
+def test_unknown_application_fields_ignored():
+    row = ApplicationRow.model_validate({**REQUIRED_APPLICATION, "found": True})
+    assert "found" not in row.model_dump()

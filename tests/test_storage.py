@@ -169,6 +169,21 @@ def test_cleanup_removes_stale_temp_and_empty_dirs(storage, tmp_path):
     assert fresh_tmp.exists()
 
 
+def test_cleanup_leaves_application_store(storage, tmp_path):
+    from app.applications import ApplicationStore
+
+    db = tmp_path / "out" / "applications.sqlite3"
+    application_id, _ = ApplicationStore(db).record({
+        "company": "Acme", "role": "Engineer", "job_link": "https://example.com/jobs/1",
+        "posting_source_type": "employer_site", "verification_method": "employer_site",
+        "official_apply_url": "",
+    })
+    age(db, 31 * DAY)
+    storage.cleanup(30 * DAY)
+    assert db.exists()
+    assert ApplicationStore(db).record({"job_link": "https://example.com/jobs/1"}) == (application_id, False)
+
+
 def test_cleanup_errors_are_logged_not_raised(storage, tmp_path, monkeypatch, caplog):
     path = tmp_path / "out" / storage.upload(b"old", "application/pdf", "pdf")
     age(path, 31 * DAY)
