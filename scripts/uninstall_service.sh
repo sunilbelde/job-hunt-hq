@@ -15,3 +15,4 @@ plist="${LAUNCHD_DIR:-/Library/LaunchDaemons}/$label.plist"
 sudo launchctl bootout "system/$label" >/dev/null 2>&1 || true
 sudo rm -f "$plist"
 echo "OK: service stopped and removed. Output files and logs were kept."
+echo "If you published the API docs on your tailnet, also run: tailscale serve --https=8444 off"

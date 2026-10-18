@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -205,3 +206,32 @@ def test_tried_request_logged_once(schema, docs_client, caplog):
     lines = request_lines(caplog)
     assert len(lines) == 1 and lines[0]["event"] == "application_request" and lines[0]["method"] == "DELETE"
     assert API_KEY not in caplog.text
+
+
+def test_healthz_listed_before_its_alias(schema):
+    paths = list(schema["paths"])
+    assert paths.index("/healthz") < paths.index("/health")
+
+
+# --- pinned page assets ---
+
+ASSET = re.compile(r'(?:src|href)="(https://cdn\.jsdelivr\.net/npm/[^"]+)"([^>]*)>')
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc"])
+def test_page_assets_pinned_with_integrity(docs_client, path):
+    assets = ASSET.findall(docs_client.get(path).text)
+    assert assets
+    for url, attributes in assets:
+        assert re.search(r"@\d+\.\d+\.\d+/", url), url
+        assert 'integrity="sha384-' in attributes and 'crossorigin="anonymous"' in attributes, url
+
+
+def test_swagger_page_loads_scripts_and_styles(docs_client):
+    urls = [url for url, _ in ASSET.findall(docs_client.get("/docs").text)]
+    assert any(u.endswith("swagger-ui-bundle.js") for u in urls)
+    assert any(u.endswith("swagger-ui.css") for u in urls)
+
+
+def test_oauth2_redirect_served_when_enabled(docs_client):
+    assert docs_client.get("/docs/oauth2-redirect").status_code == 200

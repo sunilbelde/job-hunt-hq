@@ -12,7 +12,7 @@ The generation step is a stub: `generate_output` in `app/generation.py` receives
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: public and docs listeners), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates, Tailscale docs-mapping check), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`POST /resume`)
 
@@ -105,7 +105,7 @@ Copy `.env.example` to `.env` (git-ignored), fill it in and run `chmod 600 .env`
 | `API_KEY` | yes | Sent by clients as `X-API-Key`. Generate it with `openssl rand -hex 32` |
 | `OUTPUT_DIR` | no | Where resumes and the application store live. Default `~/Library/Application Support/job-hunt-hq`. Don't use `~/Documents`, `~/Desktop` or `~/Downloads`: macOS blocks background services from those folders |
 | `ANTHROPIC_API_KEY` | no | Not used yet; reserved for resume tailoring |
-| `API_DOCS_ENABLED` | no | Default `false`. `true` serves the API reference at `/docs`, `/redoc` and `/openapi.json`. Local development only: the installed service always runs with it off |
+| `API_DOCS_ENABLED` | no | Default `false`. `true` serves the API reference at `/docs`, `/redoc` and `/openapi.json` on a development server. The installed service ignores it: its public port never serves docs, and its docs port always does |
 
 ## Development
 
@@ -139,14 +139,20 @@ curl -X DELETE "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY"
 
 ### API reference and request tester
 
-An interactive API reference (Swagger UI) is available on a development server. Its **Try it out** button sends a request to the service and shows the status, headers and body. Requests are real, so point `OUTPUT_DIR` at a throwaway folder:
+An interactive API reference (Swagger UI) lists every endpoint by tag. Its **Try it out** button sends a request to the service and shows the status, headers and body. On a development server, turn it on and point `OUTPUT_DIR` at a throwaway folder, because requests are real:
 
 ```sh
 API_DOCS_ENABLED=true OUTPUT_DIR=/tmp/job-hunt-hq-dev .venv/bin/uvicorn app.main:create_app --factory --port 8080
 open http://localhost:8080/docs   # also /redoc and /openapi.json
 ```
 
-Click **Authorize** and enter the API key once. The page keeps it in memory only, so reloading forgets it. The page loads Swagger UI's files from the jsDelivr CDN. The installed service never serves these pages: its launchd job sets `API_DOCS_ENABLED=false`, which wins over `.env`, and the smoke test fails if `/docs` answers.
+Click **Authorize** and enter the API key once. The page keeps it in memory only, so reloading forgets it. The page loads exact, integrity-checked versions of Swagger UI and ReDoc from the jsDelivr CDN (pinned in `app/main.py`).
+
+On the installed service the reference is on a separate, tailnet-only listener (see [API docs on the tailnet](#api-docs-on-the-tailnet)):
+- on the Mac mini: `http://127.0.0.1:8081/docs`
+- from your tailnet devices: `https://<machine>.<tailnet>.ts.net:8444/docs`
+
+The public address never serves these pages. Requests sent from there change your real application store and write real resume files.
 
 Tests (no network needed):
 
@@ -158,7 +164,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on `127.0.0.1:8080`. Tailscale Funnel publishes it over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. It is not reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` endpoints. Generated files are never served over HTTP, and neither are the API docs.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` endpoints. Generated files are never served over HTTP, and the public address never serves the API docs.
 
 ### 1. Prerequisites
 
@@ -190,6 +196,25 @@ If Funnel isn't allowed yet, the command prints an admin-console link to enable 
 
 **Security:** with Funnel on, anyone on the internet can reach the service. The API key (keep it a 64-character random value) is the only protection, and there is no rate limiting yet. Give outside tools only the URL and `API_KEY`.
 
+#### API docs on the tailnet
+
+Publish the docs listener to your tailnet only, on HTTPS port 8444:
+
+```sh
+tailscale serve --bg --https=8444 http://127.0.0.1:8081
+tailscale serve status   # :443 with Funnel -> 127.0.0.1:8080; :8444 tailnet only -> 127.0.0.1:8081
+```
+
+Then open the API reference:
+- on the Mac mini: `http://127.0.0.1:8081/docs`
+- from any device on your tailnet: `https://<machine>.<tailnet>.ts.net:8444/docs`
+
+The public address (`https://<machine>.<tailnet>.ts.net/docs`) answers 404. The app decides by the local port a connection arrived on, which no request header can change, and Funnel can only publish ports 443, 8443 and 10000, so 8444 can't be made public by mistake. The install and status scripts warn if Funnel ever publishes the docs listener.
+
+Anyone on your tailnet can open the docs. Requests from the page still need the API key, and they are real: they change your application store and write resume files. If others share your tailnet, add a rule to your tailnet policy file that allows `tcp:8444` on the Mac mini only from your own user.
+
+To install without the docs listener, run `DOCS_PORT=off scripts/install_service.sh`. Pick another port with `DOCS_PORT=<port>` and point `tailscale serve` at it.
+
 To go back to tailnet-only access:
 
 ```sh
@@ -209,11 +234,12 @@ chmod 600 .env
 
 ```sh
 scripts/install_service.sh     # asks for your sudo password for the launchd steps
-scripts/service_status.sh      # launchd state and pid, health check, log size, sleep setting
+scripts/service_status.sh      # launchd state and pid, health check, docs listener, log size, sleep setting
 scripts/uninstall_service.sh   # stops and removes the daemon; keeps output files and logs
+tailscale serve --https=8444 off   # after uninstalling, if you published the docs
 ```
 
-The install script checks prerequisites and `.env` permissions, creates `.venv`, validates the configuration, does one test render to fill the TeX cache (so later renders work offline), installs `/Library/LaunchDaemons/local.job-hunt-hq.plist` and waits for `/health`. It is safe to run again.
+The install script checks prerequisites and `.env` permissions, creates `.venv`, validates the configuration, does one test render to fill the TeX cache (so later renders work offline), installs `/Library/LaunchDaemons/local.job-hunt-hq.plist`, waits for `/health`, checks that `/docs` is 404 on port 8080 and 200 on port 8081, and prints the docs URLs. It is safe to run again.
 
 The daemon runs straight from this checkout. **After `git pull`, run `scripts/install_service.sh` again** (or `sudo launchctl kickstart -k system/local.job-hunt-hq` if only Python code changed).
 
@@ -229,7 +255,7 @@ On the Mac (the smoke test reads the saved PDF from disk, so it must run there):
 API_KEY=... scripts/smoke_test.sh http://127.0.0.1:8080
 ```
 
-It records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
+First it checks that the given address answers 404 for `/docs` and `/openapi.json`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs` and a schema with the six operations. Then it records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 
