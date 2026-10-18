@@ -10,6 +10,25 @@ API_KEY = "test-api-key"
 SIGNING_SECRET = "x" * 32
 BASE_URL = "https://mac-mini.tail1234.ts.net"
 VALID_JOB = {"company": "Acme", "role": "Engineer", "full_job_description": "Build things"}
+# The client's example POST /application body.
+GH_LINK = "https://job-boards.greenhouse.io/acme/jobs/1234567"
+VALID_APPLICATION = {
+    "company": "Acme Corp",
+    "role": "Senior Software Engineer, Applied AI",
+    "location": "San Francisco, CA (Hybrid)",
+    "work_type": "Hybrid",
+    "salary": "$220,000 - $300,000",
+    "date_posted": "2026-10-15",
+    "sponsorship": "No explicit mention of sponsorship",
+    "why_it_fits": "GenAI role building agent pipelines",
+    "job_link": GH_LINK,
+    "company_careers_url": "https://www.acme.com/careers/open-roles",
+    "official_employer_domain": "acme.com",
+    "posting_source_type": "recruiting_platform",
+    "verification_method": "official_apply_match",
+    "official_apply_url": GH_LINK,
+    "full_job_description": "Full text of the posting...",
+}
 
 
 class FakeStorage:
