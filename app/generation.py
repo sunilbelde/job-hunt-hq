@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.models import JobRow
+from app.models import StoredApplication
 from app.rendering import render_pdf
 
 
@@ -11,8 +11,8 @@ class GeneratedFile:
     extension: str
 
 
-def generate_output(job: JobRow, *, job_id: str | None = None) -> GeneratedFile:
-    """Stub generator: renders the baseline resume, ignoring the job details.
+def generate_output(application: StoredApplication) -> GeneratedFile:
+    """Stub generator: renders the baseline resume, ignoring the application's details.
 
     Replaced by the tailoring pipeline in a later change, which will render generated
     TeX through the same render_pdf path. Callers depend only on this signature and

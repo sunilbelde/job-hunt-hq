@@ -174,3 +174,15 @@ class ApplicationStore:
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
         return row is not None
+
+    def get(self, application_id: int) -> dict | None:
+        """The stored row as a dict (without its dedupe key), or None if absent."""
+        columns = ("id", "job_link", *FIELDS, "status", "created_at", "updated_at")
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute(
+                    f"SELECT {', '.join(columns)} FROM applications WHERE id = ?", (application_id,)
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return dict(zip(columns, row)) if row else None

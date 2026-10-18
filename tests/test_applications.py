@@ -379,3 +379,34 @@ def test_read_failure_raises_store_error(store, db_path):
     db_path.mkdir()  # a directory where the file was: sqlite cannot open it
     with pytest.raises(ApplicationStoreError):
         store.exists(1)
+
+
+def test_get_returns_stored_row_without_key(store):
+    application_id, _ = store.record(row(salary="$1"))
+    got = store.get(application_id)
+    assert got["id"] == application_id
+    assert got["company"] == "Acme" and got["job_link"] == GH and got["salary"] == "$1"
+    assert got["location"] is None and got["status"] == "verified" and got["updated_at"] is None
+    assert got["created_at"]
+    assert "job_link_key" not in got
+    assert set(got) == {"id", "job_link", *FIELDS, "status", "created_at", "updated_at"}
+
+
+def test_get_missing_or_deleted_is_none(store):
+    assert store.get(999) is None
+    application_id, _ = store.record(row())
+    store.delete(application_id)
+    assert store.get(application_id) is None
+
+
+def test_get_does_not_touch_updated_at(store, db_path):
+    application_id, _ = store.record(row())
+    store.get(application_id)
+    assert stored(db_path, application_id)["updated_at"] is None
+
+
+def test_get_read_failure_raises_store_error(store, db_path):
+    db_path.unlink()
+    db_path.mkdir()
+    with pytest.raises(ApplicationStoreError):
+        store.get(1)

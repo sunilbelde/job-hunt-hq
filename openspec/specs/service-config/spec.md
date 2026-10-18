@@ -7,7 +7,7 @@ Defines how the service is configured through environment variables, which are v
 ## Requirements
 
 ### Requirement: Environment-based configuration
-The system SHALL read `API_KEY`, `LINK_SIGNING_SECRET`, `PUBLIC_BASE_URL` (required), `OUTPUT_DIR`, `OUTPUT_RETENTION_DAYS`, `SIGNED_URL_TTL_SECONDS` (optional, with defaults) and `ANTHROPIC_API_KEY` (optional) from the environment or the repository's `.env` file, and SHALL NOT require any cloud credentials.
+The system SHALL read `API_KEY` (required), `OUTPUT_DIR` (optional, with a default) and `ANTHROPIC_API_KEY` (optional) from the environment or the repository's `.env` file, SHALL NOT require any cloud credentials, and SHALL ignore variables it no longer uses, such as `LINK_SIGNING_SECRET`, `PUBLIC_BASE_URL`, `SIGNED_URL_TTL_SECONDS` and `OUTPUT_RETENTION_DAYS`.
 
 #### Scenario: All required values present
 - **WHEN** the service starts with every required variable set
@@ -21,27 +21,24 @@ The system SHALL read `API_KEY`, `LINK_SIGNING_SECRET`, `PUBLIC_BASE_URL` (requi
 - **WHEN** `OUTPUT_DIR` is unset
 - **THEN** files are stored under `~/Library/Application Support/job-hunt-hq/` of the service's user
 
+#### Scenario: Retired variables ignored
+- **WHEN** the service starts with `.env` still setting `LINK_SIGNING_SECRET`, `PUBLIC_BASE_URL`, `SIGNED_URL_TTL_SECONDS` and `OUTPUT_RETENTION_DAYS`, including invalid values such as `SIGNED_URL_TTL_SECONDS=999999`
+- **THEN** it starts normally
+
+#### Scenario: Retired variables not required
+- **WHEN** the service starts with only `API_KEY` set
+- **THEN** it starts normally
+
 ### Requirement: Startup validation
 The system SHALL fail to start with an error naming the invalid variables when a required variable is missing or empty, without printing secret values.
 
 #### Scenario: Missing required variable
-- **WHEN** the service starts without `LINK_SIGNING_SECRET`
-- **THEN** startup fails and the error identifies `LINK_SIGNING_SECRET`
+- **WHEN** the service starts without `API_KEY`, or with `API_KEY` empty
+- **THEN** startup fails and the error identifies `API_KEY`
 
 #### Scenario: Optional Anthropic key
 - **WHEN** the service starts without `ANTHROPIC_API_KEY`
 - **THEN** it starts normally
-
-### Requirement: Signed URL TTL bounds
-`SIGNED_URL_TTL_SECONDS` SHALL default to 604800 (7 days) and SHALL be a positive integer no greater than 604800; other values SHALL fail startup.
-
-#### Scenario: Default TTL
-- **WHEN** the variable is unset
-- **THEN** signed URLs are valid for 604800 seconds
-
-#### Scenario: TTL too large
-- **WHEN** the variable is set to 604801
-- **THEN** startup fails with a validation error
 
 ### Requirement: No committed secrets
 The repository SHALL provide a `.env.example` listing every variable with placeholder values only, and real secrets SHALL NOT be committed or logged.
@@ -49,24 +46,6 @@ The repository SHALL provide a `.env.example` listing every variable with placeh
 #### Scenario: Example file
 - **WHEN** a developer opens `.env.example`
 - **THEN** every configuration variable appears with a placeholder value and no real credentials
-
-### Requirement: Signing secret strength
-`LINK_SIGNING_SECRET` SHALL be at least 32 characters long, and startup SHALL fail otherwise.
-
-#### Scenario: Short secret
-- **WHEN** `LINK_SIGNING_SECRET` is 16 characters
-- **THEN** startup fails with an error naming `LINK_SIGNING_SECRET` and not showing its value
-
-### Requirement: Public base URL format
-`PUBLIC_BASE_URL` SHALL be an absolute `http` or `https` URL with no query or fragment. A trailing slash SHALL be ignored, and startup SHALL fail for any other value.
-
-#### Scenario: Tailscale URL accepted
-- **WHEN** `PUBLIC_BASE_URL` is `https://mac-mini.tail1234.ts.net/`
-- **THEN** startup succeeds and download links begin with `https://mac-mini.tail1234.ts.net/files/`
-
-#### Scenario: Relative URL rejected
-- **WHEN** `PUBLIC_BASE_URL` is `mac-mini:8080`
-- **THEN** startup fails with an error naming `PUBLIC_BASE_URL`
 
 ### Requirement: Output directory usable at startup
 At startup the system SHALL create the output directory if it does not exist, with access limited to the service's user, and SHALL fail to start if the directory cannot be created or written.
@@ -78,14 +57,3 @@ At startup the system SHALL create the output directory if it does not exist, wi
 #### Scenario: Unwritable directory
 - **WHEN** `OUTPUT_DIR` points at a directory the service user cannot write
 - **THEN** startup fails with an error naming `OUTPUT_DIR`
-
-### Requirement: Retention covers link lifetime
-`OUTPUT_RETENTION_DAYS` SHALL default to 30, SHALL be a positive integer, and SHALL be long enough that no file is deleted while a link to it can still be valid (`OUTPUT_RETENTION_DAYS * 86400 >= SIGNED_URL_TTL_SECONDS`). Startup SHALL fail otherwise.
-
-#### Scenario: Default retention
-- **WHEN** `OUTPUT_RETENTION_DAYS` is unset
-- **THEN** files are kept for 30 days
-
-#### Scenario: Retention shorter than TTL
-- **WHEN** `OUTPUT_RETENTION_DAYS` is 3 and `SIGNED_URL_TTL_SECONDS` is 604800
-- **THEN** startup fails with an error naming both variables

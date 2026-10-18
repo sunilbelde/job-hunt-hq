@@ -35,7 +35,7 @@ The service process SHALL listen only on the loopback interface, so it is not re
 The service SHALL write its logs, including startup errors and crash output, to files under the owner's `~/Library/Logs/job-hunt-hq/` directory. The main service log SHALL be rotated by size so it does not grow without bound.
 
 #### Scenario: Request logged
-- **WHEN** a `POST /jobs` request completes
+- **WHEN** a `POST /resume` request completes
 - **THEN** its structured log line appears in the service log file
 
 #### Scenario: Rotation
@@ -69,7 +69,7 @@ The install script SHALL refuse to install when `.env` is missing, readable by u
 - **THEN** the install script exits non-zero, explains how to fix the permissions, and installs nothing
 
 ### Requirement: Public HTTPS access through Tailscale Funnel
-The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from both tailnet devices and the public internet, through Tailscale Funnel, while the process itself keeps listening only on loopback. Job creation SHALL still require the API key and downloads SHALL still require a valid signed link.
+The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from both tailnet devices and the public internet, through Tailscale Funnel, while the process itself keeps listening only on loopback. Resume generation and the application endpoints SHALL still require the API key, and generated files SHALL NOT be retrievable over this public address.
 
 #### Scenario: Tailnet device
 - **WHEN** a device signed into the owner's tailnet requests `https://<mac-tailscale-name>/health`
@@ -80,7 +80,7 @@ The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from b
 - **THEN** it receives 200 `{"status": "ok"}`
 
 #### Scenario: Internet client without API key
-- **WHEN** a client outside the tailnet sends `POST /jobs` without a valid `X-API-Key`
+- **WHEN** a client outside the tailnet sends `POST /resume` without a valid `X-API-Key`
 - **THEN** it receives 401 and nothing is generated or stored
 
 #### Scenario: LAN still refused

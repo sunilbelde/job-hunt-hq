@@ -196,7 +196,8 @@ The system SHALL emit exactly one structured log line per `POST /application`, `
 
 #### Scenario: Job requests unaffected
 - **WHEN** a client calls any application endpoint
-- **THEN** no `job_request` log line is emitted
+- **THEN** no `resume_request` log line is emitted
+- **AND** a `POST /resume` request emits no `application_request` log line
 
 ### Requirement: Application status values
 Every application SHALL have a `status` that is exactly one of `verified`, `applied`, `interviewing`, `offer`, `rejected` or `withdrawn`. Matching SHALL be case-sensitive, and any other value supplied by a client SHALL be rejected with 422 naming `status`.
