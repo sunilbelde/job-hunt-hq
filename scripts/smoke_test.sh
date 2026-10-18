@@ -1,14 +1,14 @@
 #!/bin/sh
-# Smoke test: check that API docs are not served, then record a synthetic application on a
-# running service, generate its resume, and check that the file at the returned saved_path is a
-# PDF. Must run on the Mac itself, since it
+# Smoke test: check that the public address serves no API docs and that the docs listener does,
+# then record a synthetic application on a running service, generate its resume, and check that
+# the file at the returned saved_path is a PDF. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
-# Usage: API_KEY=... scripts/smoke_test.sh <base_url>
+# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] scripts/smoke_test.sh <base_url>
 set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  echo "Usage: API_KEY=<key> $0 <base_url>   (run on the Mac hosting the service)"
+  echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] $0 <base_url>   (run on the Mac hosting the service)"
   exit 0
 fi
 if [ $# -ne 1 ]; then
@@ -17,6 +17,8 @@ if [ $# -ne 1 ]; then
 fi
 : "${API_KEY:?API_KEY must be set}"
 base=${1%/}
+docs=${DOCS_URL:-http://127.0.0.1:8081}
+docs=${docs%/}
 link=https://example.com/job-hunt-hq-smoke-test
 
 json_field() {
@@ -46,6 +48,24 @@ for path in /docs /openapi.json; do
     exit 1
   fi
 done
+
+# The docs listener (tailnet only) serves the reference and a schema with the six operations.
+if [ "$docs" != off ]; then
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs/docs" || true)
+  if [ "$status" != "200" ]; then
+    echo "FAIL: GET $docs/docs returned $status, want 200 (is the docs listener running? DOCS_URL=off skips this)" >&2
+    exit 1
+  fi
+  resp=$(curl -sS -w '\n%{http_code}' "$docs/openapi.json" || true)
+  status=$(printf '%s\n' "$resp" | tail -n 1)
+  count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
+methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
+print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
+  if [ "$status" != "200" ] || [ "$count" != "6" ]; then
+    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 6" >&2
+    exit 1
+  fi
+fi
 
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/application" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
