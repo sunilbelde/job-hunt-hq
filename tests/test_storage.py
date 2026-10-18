@@ -3,7 +3,15 @@ import stat
 import pytest
 
 from app.applications import ApplicationStore
-from app.storage import RESUME_FILE_NAME, LocalStorage, StorageError, company_folder, rename_legacy_folders
+from app.storage import (
+    COVER_LETTER_FILE_NAME,
+    RESUME_FILE_NAME,
+    LocalStorage,
+    StorageError,
+    company_folder,
+    cover_letter_path,
+    rename_legacy_folders,
+)
 
 A = "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"
 B = "9a1c7e2d-5b3f-4e8a-a6d0-1c2b3d4e5f60"
@@ -92,6 +100,19 @@ def test_folders_and_file_private(storage, root):
     for folder in (root, path.parent.parent, path.parent):
         assert mode(folder) == 0o700
     assert mode(path) == 0o600
+
+
+@pytest.mark.parametrize("company,folder", [
+    ("Acme Corp", "Acme Corp"),
+    ("AT&T / Mobility: West", "AT&T - Mobility- West"),
+])
+def test_cover_letter_path_beside_resume(storage, root, company, folder):
+    resume = storage.save_resume(company, A, b"x")
+    path = cover_letter_path(resume)
+    assert path == root.resolve() / folder / A / COVER_LETTER_FILE_NAME
+    assert COVER_LETTER_FILE_NAME == "SUNIL BELDE - Cover Letter.pdf"
+    assert not path.exists()
+    assert [p.name for p in resume.parent.iterdir()] == [RESUME_FILE_NAME]
 
 
 def test_traversal_company_stays_inside_root(storage, root, tmp_path):

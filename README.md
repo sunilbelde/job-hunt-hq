@@ -7,7 +7,7 @@ The generation step is a stub: `generate_output` in `app/generation.py` receives
 | Endpoint | Auth | Description |
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
-| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Renders the resume from the stored application and saves it. `201 {"ok": true, "application_id", "saved_path"}`, where `saved_path` is the file's absolute path. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render failure, 502 file write failure, 503 store failure |
+| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Renders the resume from the stored application and saves it. `201 {"ok": true, "application_id", "saved_path", "cover_letter_path"}`, where `saved_path` is the resume's absolute path and `cover_letter_path` is where the cover letter goes, beside it (`SUNIL BELDE - Cover Letter.pdf`). Cover letters are not generated yet, so that path is a placeholder with no file. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render failure, 502 file write failure, 503 store failure |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
@@ -125,7 +125,9 @@ echo "$ID"
 
 curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
-# {"ok":true,"application_id":"3f2b…","saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf"}
+# {"ok":true,"application_id":"3f2b…","saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf",
+#  "cover_letter_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE - Cover Letter.pdf"}
+# (no cover letter is generated yet; nothing exists at cover_letter_path)
 
 curl -X PATCH "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
