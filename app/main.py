@@ -16,7 +16,7 @@ from app.generation import generate_output
 from app.models import ApplicationRow, ApplicationUpdate, ResumeRequest, StoredApplication
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
-from app.storage import LocalStorage, Storage, StorageError
+from app.storage import LocalStorage, Storage, StorageError, rename_legacy_folders
 
 logger = logging.getLogger("app.requests")
 logger.setLevel(logging.INFO)
@@ -25,8 +25,9 @@ if not logger.hasHandlers():  # without --log-config, uvicorn leaves app loggers
     _handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(_handler)
 
-APPLICATION_ID = re.compile(r"[1-9][0-9]{0,18}")
-MAX_APPLICATION_ID = 2**63 - 1  # SQLite's integer range
+# Hyphenated UUIDs only: uuid.UUID() would also take braces, "urn:uuid:" and bare hex,
+# giving one ID several spellings in logs and folder names.
+APPLICATION_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
 def request_event(path: str) -> str | None:
@@ -45,12 +46,9 @@ def application_not_found() -> JSONResponse:
     return application_error(404, "Application not found")
 
 
-def parse_application_id(raw: str) -> int | None:
-    """A stored ID is a positive base-10 integer; anything else cannot name a row."""
-    if not APPLICATION_ID.fullmatch(raw):
-        return None
-    value = int(raw)
-    return value if value <= MAX_APPLICATION_ID else None
+def parse_application_id(raw: str) -> str | None:
+    """A stored ID is a UUID, kept in lower case; anything else cannot name a row."""
+    return raw.lower() if APPLICATION_ID.fullmatch(raw) else None
 
 
 def validation_message(exc: ValidationError) -> str:
@@ -72,6 +70,11 @@ def create_app(
     settings = settings or get_settings()
     storage = storage or LocalStorage(settings.output_dir)
     applications = applications or ApplicationStore(settings.output_dir / "applications.sqlite3")
+    try:
+        # Resume folders made before IDs were UUIDs follow their application to its new ID.
+        rename_legacy_folders(settings.output_dir, applications.legacy_ids())
+    except ApplicationStoreError as exc:
+        logger.error(json.dumps({"event": "application_store_error", "error": str(exc)}))
 
     app = FastAPI(title="Job output service")
     expected_key = settings.api_key.get_secret_value().encode()
@@ -153,7 +156,7 @@ def create_app(
         except ValidationError as exc:
             return None, validation_message(exc)
 
-    # The path ID is taken as a string: a typed int would let FastAPI answer with its own 422 shape.
+    # The path ID is taken as a string: a typed UUID would let FastAPI answer with its own 422 shape.
     @app.patch("/application/{application_id}")
     async def update_application(
         application_id: str, request: Request, x_api_key: str | None = Header(default=None)
@@ -209,13 +212,13 @@ def create_app(
         if not isinstance(payload, dict):
             return application_error(422, "Request body must be a JSON object")
         try:
-            target = ResumeRequest.model_validate(payload).application_id
+            requested = ResumeRequest.model_validate(payload).application_id
         except ValidationError as exc:
             return application_error(422, validation_message(exc))
-        if abs(target) <= MAX_APPLICATION_ID:  # keep a thousand-digit body integer out of the log line
-            request.state.application_id = target
-        if not 1 <= target <= MAX_APPLICATION_ID:  # cannot name a row
+        target = parse_application_id(requested)
+        if target is None:  # cannot name a row; the raw string stays out of the log line
             return application_not_found()
+        request.state.application_id = target
 
         try:
             row = await run_in_threadpool(applications.get, target)

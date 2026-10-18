@@ -1,6 +1,10 @@
 import json
 import logging
+import re
+import sqlite3
 import threading
+import uuid
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +16,8 @@ from app.storage import RESUME_FILE_NAME, LocalStorage
 from tests.conftest import API_KEY, FAKE_PDF, FakeStorage
 
 HEADERS = {"X-API-Key": API_KEY}
+UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+UNKNOWN = str(uuid.uuid4())  # well formed, but names no row
 
 
 @pytest.mark.parametrize("path", ["/healthz", "/health"])
@@ -118,7 +124,7 @@ def test_application_created_then_duplicate(client, settings):
     assert first.status_code == 201
     body = first.json()
     assert set(body) == {"ok", "application_id"} and body["ok"] is True
-    assert isinstance(body["application_id"], int) and body["application_id"] > 0
+    assert isinstance(body["application_id"], str) and UUID4.match(body["application_id"])
     second = post_application(client, {**VALID_APPLICATION, "salary": "$1"})
     assert second.status_code == 200 and second.json() == body
     rows = stored_rows(settings)
@@ -156,6 +162,9 @@ def test_application_job_id_in_query_distinct(client):
 
 
 class FailingApplications:
+    def legacy_ids(self):
+        return {}
+
     def record(self, fields):
         raise ApplicationStoreError("OperationalError: disk I/O error: /secret/out/applications.sqlite3")
 
@@ -236,12 +245,15 @@ def test_patch_auth_rejected(client, settings, headers):
 
 
 def test_patch_auth_checked_before_id_and_body(client):
-    assert_error(patch_application(client, 999999, {"status": "applied"}, {}), 401)
+    assert_error(patch_application(client, UNKNOWN, {"status": "applied"}, {}), 401)
     r = client.patch("/application/1", content=b"{not json", headers={"Content-Type": "application/json"})
     assert_error(r, 401)
 
 
-@pytest.mark.parametrize("application_id", ["999999", "abc", "0", "-1", "1.0", "99999999999999999999"])
+@pytest.mark.parametrize("application_id", [
+    UNKNOWN, "999999", "1", "abc", "0", "-1", "1.0", "99999999999999999999",
+    UNKNOWN.replace("-", ""), "{" + UNKNOWN + "}", "urn:uuid:" + UNKNOWN, UNKNOWN + "0",
+])
 def test_patch_unknown_id_404(client, settings, application_id):
     message = assert_error(patch_application(client, application_id, {"status": "applied"}), 404)
     assert message == "Application not found"
@@ -249,7 +261,7 @@ def test_patch_unknown_id_404(client, settings, application_id):
 
 
 def test_patch_unknown_id_with_bad_body_404(client):
-    r = client.patch("/application/999999", content=b"{not json",
+    r = client.patch(f"/application/{UNKNOWN}", content=b"{not json",
                      headers={**HEADERS, "Content-Type": "application/json"})
     assert_error(r, 404)
 
@@ -324,9 +336,9 @@ def test_duplicate_post_keeps_updated_status(client, settings):
 
 
 @pytest.mark.parametrize("call", [
-    lambda c: patch_application(c, 1, {"status": "applied"}),
-    lambda c: patch_application(c, 1, {"status": "ghosted"}),
-    lambda c: delete_application(c, 1),
+    lambda c: patch_application(c, UNKNOWN, {"status": "applied"}),
+    lambda c: patch_application(c, UNKNOWN, {"status": "ghosted"}),
+    lambda c: delete_application(c, UNKNOWN),
 ])
 def test_patch_and_delete_store_failure_503(settings, storage, caplog, call):
     caplog.set_level(logging.INFO, logger="app.requests")
@@ -341,7 +353,7 @@ def test_patch_and_delete_store_failure_503(settings, storage, caplog, call):
 def test_delete_auth_rejected(client, settings, headers):
     application_id = recorded(client)
     assert_error(delete_application(client, application_id, headers), 401)
-    assert_error(delete_application(client, 999999, headers), 401)
+    assert_error(delete_application(client, UNKNOWN, headers), 401)
     assert len(stored_rows(settings)) == 1
 
 
@@ -358,7 +370,7 @@ def test_re_record_after_delete(client, settings):
     application_id = recorded(client)
     delete_application(client, application_id)
     r = post_application(client, VALID_APPLICATION)
-    assert r.status_code == 201 and r.json()["application_id"] > application_id
+    assert r.status_code == 201 and r.json()["application_id"] != application_id
     assert stored_row(settings, r.json()["application_id"])["status"] == "verified"
 
 
@@ -369,9 +381,28 @@ def test_delete_ignores_body(client, settings):
     assert r.status_code == 200 and stored_rows(settings) == []
 
 
-@pytest.mark.parametrize("application_id", ["abc", "0", "-1"])
-def test_delete_unparseable_id_404(client, application_id):
+@pytest.mark.parametrize("application_id", ["abc", "1", "0", "-1"])
+def test_delete_unparseable_id_404(client, settings, application_id):
+    recorded(client)
     assert assert_error(delete_application(client, application_id), 404) == "Application not found"
+    assert len(stored_rows(settings)) == 1
+
+
+def test_upper_case_path_id_accepted(client, settings):
+    application_id = recorded(client)
+    r = patch_application(client, application_id.upper(), {"status": "applied"})
+    assert r.status_code == 200 and r.json()["application_id"] == application_id
+    r = delete_application(client, application_id.upper())
+    assert r.json() == {"ok": True, "application_id": application_id}
+    assert stored_rows(settings) == []
+
+
+def test_malformed_path_id_not_logged(client, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    delete_application(client, "not-a-uuid")
+    (line,) = application_log_lines(caplog)
+    assert line["method"] == "DELETE" and line["status"] == 404 and "application_id" not in line
+    assert "not-a-uuid" not in caplog.text
 
 
 def test_patch_and_delete_logging(client, caplog):
@@ -380,7 +411,7 @@ def test_patch_and_delete_logging(client, caplog):
     caplog.clear()
     patch_application(client, application_id, {"status": "applied", "salary": "payload-value"})
     patch_application(client, application_id, {"status": "applied"}, {"X-API-Key": "wrong-key-value"})
-    patch_application(client, 999999, {"status": "applied"})
+    patch_application(client, UNKNOWN, {"status": "applied"})
     patch_application(client, application_id, {"status": "ghosted"})
     delete_application(client, application_id)
     delete_application(client, application_id)
@@ -388,7 +419,7 @@ def test_patch_and_delete_logging(client, caplog):
     assert [(l["method"], l["status"]) for l in lines] == [
         ("PATCH", 200), ("PATCH", 401), ("PATCH", 404), ("PATCH", 422), ("DELETE", 200), ("DELETE", 404)]
     assert [l.get("application_id") for l in lines] == [
-        application_id, None, 999999, application_id, application_id, application_id]
+        application_id, None, UNKNOWN, application_id, application_id, application_id]
     assert all("duplicate" not in l and "duration_ms" in l for l in lines)
     assert '"resume_request"' not in caplog.text
     text = caplog.text
@@ -433,7 +464,7 @@ def output_files(settings):
 def test_resume_auth_rejected(client, storage, headers):
     application_id = new_application(client)
     assert_error(post_resume(client, {"application_id": application_id}, headers), 401)
-    assert_error(post_resume(client, {"application_id": 999999}, headers), 401)  # unknown ID not leaked
+    assert_error(post_resume(client, {"application_id": UNKNOWN}, headers), 401)  # unknown ID not leaked
     r = client.post("/resume", content=b"{not json", headers={**headers, "Content-Type": "application/json"})
     assert_error(r, 401)
     assert storage.saved == []
@@ -446,21 +477,21 @@ def test_resume_bad_body_422(client, storage, content):
     assert storage.saved == []
 
 
-@pytest.mark.parametrize("body", [{}, {"application_id": "7"}, {"application_id": 7.5},
-                                  {"application_id": True}, {"application_id": None}])
-def test_resume_non_integer_id_422(client, storage, body):
+@pytest.mark.parametrize("body", [{}, {"application_id": 7}, {"application_id": 7.5}, {"application_id": True},
+                                  {"application_id": None}, {"application_id": {"id": UNKNOWN}}])
+def test_resume_non_string_id_422(client, storage, body):
     message = assert_error(post_resume(client, body), 422)
     assert "application_id" in message
     assert storage.saved == []
 
 
 def test_resume_422_does_not_echo_value(client):
-    r = post_resume(client, {"application_id": "secret-ish-value"})
+    r = post_resume(client, {"application_id": ["secret-ish-value"]})
     assert_error(r, 422)
     assert "secret-ish-value" not in r.text
 
 
-@pytest.mark.parametrize("application_id", [999999, 0, -1, 2**63, 10**30])
+@pytest.mark.parametrize("application_id", [UNKNOWN, "7", "0", "", "not-a-uuid", UNKNOWN.replace("-", "")])
 def test_resume_unknown_id_404(local_client, settings, application_id):
     new_application(local_client)
     r = post_resume(local_client, {"application_id": application_id})
@@ -498,6 +529,13 @@ def test_resume_regenerate_replaces_file(local_client, settings, monkeypatch):
     assert r.status_code == 201 and r.json()["saved_path"] == first
     assert output_files(settings) == [settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME]
     assert output_files(settings)[0].read_bytes() == b"%PDF-second"
+
+
+def test_resume_upper_case_id(client, storage):
+    application_id = new_application(client)
+    r = post_resume(client, {"application_id": application_id.upper()})
+    assert r.status_code == 201 and r.json()["application_id"] == application_id
+    assert storage.saved == [("Acme Corp", application_id, FAKE_PDF)]
 
 
 def test_resume_ignores_extra_fields(client, storage):
@@ -555,6 +593,9 @@ def test_resume_for_closed_application(client, status):
 
 
 class FailingReads:
+    def legacy_ids(self):
+        return {}
+
     def get(self, application_id):
         raise ApplicationStoreError("OperationalError: disk I/O error: /secret/out/applications.sqlite3")
 
@@ -562,7 +603,7 @@ class FailingReads:
 def test_resume_store_failure_503(settings, storage, caplog):
     caplog.set_level(logging.INFO, logger="app.requests")
     client = TestClient(create_app(settings, storage, FailingReads()))
-    r = post_resume(client, {"application_id": 1})
+    r = post_resume(client, {"application_id": UNKNOWN})
     message = assert_error(r, 503)
     assert "/secret" not in r.text and "OperationalError" not in r.text and "disk" not in message
     assert "application_store_error" in caplog.text
@@ -606,15 +647,17 @@ def test_resume_one_log_line_per_request(local_client, caplog):
     caplog.clear()
     post_resume(local_client, {"application_id": application_id, "note": "body-value"})
     post_resume(local_client, {"application_id": application_id}, {"X-API-Key": "wrong-key-value"})
-    post_resume(local_client, {"application_id": "x"})
-    post_resume(local_client, {"application_id": 999999})
+    post_resume(local_client, {"application_id": 7})
+    post_resume(local_client, {"application_id": UNKNOWN.upper()})
+    post_resume(local_client, {"application_id": "not-a-uuid"})
     lines = resume_log_lines(caplog)
-    assert [l["status"] for l in lines] == [201, 401, 422, 404]
-    assert [l.get("application_id") for l in lines] == [application_id, None, None, 999999]
+    assert [l["status"] for l in lines] == [201, 401, 422, 404, 404]
+    assert [l.get("application_id") for l in lines] == [application_id, None, None, UNKNOWN, None]
     assert all({"event", "status", "duration_ms"} <= set(l) <= {"event", "status", "duration_ms", "application_id"}
                for l in lines)
     assert '"application_request"' not in caplog.text and '"job_request"' not in caplog.text
-    for value in ("payload-value", "body-value", "wrong-key-value", API_KEY, "Acme Corp", RESUME_FILE_NAME):
+    for value in ("payload-value", "body-value", "wrong-key-value", API_KEY, "Acme Corp", RESUME_FILE_NAME,
+                  "not-a-uuid"):
         assert value not in caplog.text
 
 
@@ -653,3 +696,44 @@ def test_legacy_paths_gone(client, storage, caplog):
         assert client.get(path).status_code == 404
     assert storage.saved == []
     assert resume_log_lines(caplog) == []
+
+
+# --- integer-ID stores ---
+
+def integer_id_store(path):
+    """A store as written before UUIDs, holding application 1 for Acme Corp."""
+    from app.applications import FIELDS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute(
+            "CREATE TABLE applications (id INTEGER PRIMARY KEY AUTOINCREMENT, job_link_key TEXT NOT NULL UNIQUE, "
+            f"job_link TEXT NOT NULL, {', '.join(f'{n} TEXT' for n in FIELDS)}, created_at TEXT NOT NULL, "
+            "status TEXT NOT NULL DEFAULT 'verified', updated_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO applications (id, job_link_key, job_link, company, role, posting_source_type, "
+            "verification_method, official_apply_url, created_at, status) VALUES (1, ?, ?, 'Acme Corp', 'Engineer', "
+            "'employer_site', 'employer_site', '', '2026-10-01T00:00:00Z', 'applied')",
+            (GH_LINK, GH_LINK),
+        )
+    path.chmod(0o600)
+
+
+def test_startup_migrates_ids_and_resume_folders(settings):
+    integer_id_store(settings.output_dir / "applications.sqlite3")
+    old = settings.output_dir / "Acme Corp" / "1" / RESUME_FILE_NAME
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"%PDF-old")
+    client = TestClient(create_app(settings, LocalStorage(settings.output_dir)))
+
+    (row,) = stored_rows(settings)
+    new_id = row["id"]
+    assert UUID4.match(new_id) and row["status"] == "applied"
+    assert not old.parent.exists()
+    assert (settings.output_dir / "Acme Corp" / new_id / RESUME_FILE_NAME).read_bytes() == b"%PDF-old"
+
+    assert_error(patch_application(client, "1", {"status": "offer"}), 404)
+    assert_error(post_resume(client, {"application_id": 1}), 422)
+    r = post_resume(client, {"application_id": new_id})
+    assert r.status_code == 201 and r.json()["saved_path"].endswith(f"/Acme Corp/{new_id}/{RESUME_FILE_NAME}")
+    assert post_application(client, VALID_APPLICATION).json()["application_id"] == new_id

@@ -1,4 +1,7 @@
+import json
+import logging
 import os
+import re
 import tempfile
 import unicodedata
 from pathlib import Path
@@ -11,6 +14,10 @@ UNKNOWN_COMPANY = "unknown-company"
 # The application store and its -wal/-journal/-shm siblings live in OUTPUT_DIR next to the company folders.
 STORE_FILE_PREFIX = "applications.sqlite3"
 PATH_BREAKING = frozenset("/\\:")
+# How application folders were named before IDs became UUIDs.
+LEGACY_FOLDER = re.compile(r"[1-9][0-9]*")
+
+logger = logging.getLogger("app.storage")
 
 
 class StorageError(Exception):
@@ -18,7 +25,7 @@ class StorageError(Exception):
 
 
 class Storage(Protocol):
-    def save_resume(self, company: str, application_id: int, content: bytes) -> Path:
+    def save_resume(self, company: str, application_id: str, content: bytes) -> Path:
         """Write the resume for an application, replacing any earlier one, and return its absolute path."""
         ...
 
@@ -48,7 +55,7 @@ class LocalStorage:
         except OSError as exc:
             raise StorageError(f"OUTPUT_DIR {self._root} is not writable: {exc}") from exc
 
-    def save_resume(self, company: str, application_id: int, content: bytes) -> Path:
+    def save_resume(self, company: str, application_id: str, content: bytes) -> Path:
         root = self._root.resolve()
         folder = root / company_folder(company) / str(application_id)
         if not folder.resolve().is_relative_to(root):  # company_folder already rules this out
@@ -70,3 +77,50 @@ class LocalStorage:
                 Path(tmp_name).unlink(missing_ok=True)
             raise StorageError(f"write failed: {type(exc).__name__}: {exc}") from exc
         return path
+
+
+def rename_legacy_folders(root: Path, mapping: dict[int, str]) -> int:
+    """Rename application folders still named by an integer ID to the UUID that replaced it.
+
+    Runs at every start while the store remembers integer IDs, so an interrupted run finishes
+    later. Conflicts and errors are logged, never raised: the API does not need old folders.
+    Returns how many folders were renamed.
+    """
+    if not mapping:
+        return 0
+    renamed = 0
+    try:
+        companies = [p for p in Path(root).iterdir() if p.is_dir() and not p.is_symlink()]
+    except OSError as exc:
+        _log_rename_error(root, exc)
+        return 0
+    for company in companies:
+        try:
+            folders = list(company.iterdir())
+        except OSError as exc:
+            _log_rename_error(company, exc)
+            continue
+        for folder in folders:
+            if not LEGACY_FOLDER.fullmatch(folder.name) or folder.is_symlink() or not folder.is_dir():
+                continue
+            new_id = mapping.get(int(folder.name))
+            if new_id is None:
+                continue
+            target = company / new_id
+            # os.rename would silently replace an empty target folder, so check first.
+            if target.exists() or target.is_symlink():
+                logger.warning(json.dumps(
+                    {"event": "legacy_folder_conflict", "folder": str(folder), "target": str(target)}))
+                continue
+            try:
+                os.rename(folder, target)
+            except OSError as exc:
+                _log_rename_error(folder, exc)
+                continue
+            renamed += 1
+            logger.info(json.dumps({"event": "legacy_folder_renamed", "folder": str(folder), "target": str(target)}))
+    return renamed
+
+
+def _log_rename_error(path: Path, exc: OSError) -> None:
+    logger.error(json.dumps({"event": "legacy_folder_error", "path": str(path), "error": f"{type(exc).__name__}: {exc}"}))
