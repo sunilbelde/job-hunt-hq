@@ -5,8 +5,9 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 
 # Stub curl: http://x is the public base URL, http://d the docs listener. Status codes come from
-# STUB_DOCS (public docs) / STUB_DOCS_LISTENER / STUB_APP / STUB_RESUME, the schema from STUB_SCHEMA;
-# POST /application, DELETE and /resume calls are logged to STUB_LOG.
+# STUB_DOCS (public docs) / STUB_DOCS_LISTENER / STUB_APP / STUB_PATCH / STUB_RESUME, the schema from
+# STUB_SCHEMA and match.status from STUB_MATCH; POST /application, PATCH, DELETE and /resume calls are
+# logged to STUB_LOG.
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
@@ -14,10 +15,12 @@ case "$*" in
   *"http://d/openapi.json"*) printf '%s\n%s' "$STUB_SCHEMA" "$STUB_DOCS_LISTENER" ;;
   *"/docs"*|*"/openapi.json"*) printf '%s' "$STUB_DOCS" ;;
   *"-X DELETE"*) echo "DELETE $*" >> "$STUB_LOG" ;;
+  *"-X PATCH"*) echo "PATCH $*" >> "$STUB_LOG"; printf '%s' "${STUB_PATCH:-200}" ;;
   *"/application"*) echo "CREATE $*" >> "$STUB_LOG"
     printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}\n%s' "$STUB_APP" ;;
   *"/resume"*) echo "$*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
-    printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13","saved_path":"%s"}\n%s' "$STUB_SAVED" "$STUB_RESUME" ;;
+    printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13","saved_path":"%s","match":{"status":"%s"}}\n%s' \
+      "$STUB_SAVED" "${STUB_MATCH:-no_job_description}" "$STUB_RESUME" ;;
 esac
 STUB
 chmod +x "$tmp/curl"
@@ -40,6 +43,8 @@ run() {
 created_any() { grep -q "^CREATE" "$tmp/log"; }
 deleted() { grep -q "DELETE.*http://x/application/$id" "$tmp/log"; }
 sent_as_string() { grep -q "/resume .*-d {\"application_id\":\"$id\"}" "$tmp/log"; }
+patched() { grep -q "PATCH .*http://x/application/$id .*-d {\"full_job_description\":null}" "$tmp/log"; }
+patched_before_resume() { [ "$(grep -n "^PATCH" "$tmp/log" | cut -d: -f1)" -lt "$(grep -n "/resume" "$tmp/log" | cut -d: -f1)" ]; }
 ok() { echo "ok $1"; }
 bad() { echo "FAIL $1"; fail=1; }
 
@@ -57,5 +62,9 @@ run 201 201 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 201); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 201); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off STUB_DOCS_LISTENER=404 run 201 201) && ok "DOCS_URL=off skips the docs listener" || bad "docs off"
+run 201 201 && ! patched && ! grep -q "full_job_description" "$tmp/log" && ok "fresh application has no posting text" || bad "fresh posting text"
+run 200 201 && patched && patched_before_resume && ok "leftover application's posting text cleared before the resume" || bad "leftover cleared"
+(STUB_PATCH=500 run 200 201); [ $? -ne 0 ] && ! grep -q "/resume" "$tmp/log" && ok "failed PATCH stops before the resume" || bad "failed patch"
+(STUB_MATCH=tailored run 201 201); [ $? -ne 0 ] && deleted && ok "a tailored smoke resume fails" || bad "match status"
 env -u API_KEY PATH="$tmp:$PATH" sh "$here/smoke_test.sh" http://x >/dev/null 2>&1 && bad "nokey" || ok "nokey"
 exit $fail

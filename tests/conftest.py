@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,11 @@ from app.generation import GeneratedFile
 from app.main import create_app
 from app.settings import Settings
 from app.storage import StorageError
+from app.tailoring import Match, RunStats
+
+# The tailor-resume skill's scripts are standalone modules, not a package; tests import them by name.
+SKILL_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "tailor-resume"
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
 
 API_KEY = "test-api-key"
 # The client's example POST /application body.
@@ -68,10 +74,11 @@ def docs_client(settings, storage):
 FAKE_PDF = b"%PDF-1.5 fake resume"
 
 
+def fake_output(content: bytes = FAKE_PDF, match: Match = Match("no_job_description"), run: RunStats | None = None):
+    return GeneratedFile(content, "application/pdf", "pdf", match=match, run=run)
+
+
 @pytest.fixture(autouse=True)
 def fake_generate(monkeypatch):
-    """Keep API tests independent of tectonic; rendering has its own tests."""
-    monkeypatch.setattr(
-        "app.main.generate_output",
-        lambda application: GeneratedFile(FAKE_PDF, "application/pdf", "pdf"),
-    )
+    """Keep API tests independent of tectonic and Claude; generation and tailoring have their own tests."""
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output())

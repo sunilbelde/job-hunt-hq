@@ -14,7 +14,8 @@ from app.log_filters import RedactQueryString
 from app.main import create_app
 from app.rendering import RenderError
 from app.storage import COVER_LETTER_FILE_NAME, RESUME_FILE_NAME, LocalStorage
-from tests.conftest import API_KEY, FAKE_PDF, FakeStorage
+from app.tailoring import Match, RunStats, TailoringError
+from tests.conftest import API_KEY, FAKE_PDF, FakeStorage, fake_output
 
 HEADERS = {"X-API-Key": API_KEY}
 UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -513,7 +514,9 @@ def test_resume_success_saves_file(local_client, settings):
     r = post_resume(local_client, {"application_id": application_id})
     assert r.status_code == 201
     body = r.json()
-    assert set(body) == {"ok", "application_id", "saved_path", "cover_letter_path"}
+    assert set(body) == {"ok", "application_id", "saved_path", "cover_letter_path", "match"}
+    assert body["match"] == {"status": "no_job_description", "threshold": 70, "base_score": None, "tailored_score": None,
+                             "added_terms": []}
     assert body["ok"] is True and body["application_id"] == application_id
     expected = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME
     assert body["saved_path"] == str(expected)
@@ -536,11 +539,9 @@ def test_resume_cover_letter_path_is_a_placeholder(local_client, settings):
 
 
 def test_resume_regenerate_replaces_file(local_client, settings, monkeypatch):
-    from app.generation import GeneratedFile
     application_id = new_application(local_client)
     first = post_resume(local_client, {"application_id": application_id}).json()["saved_path"]
-    monkeypatch.setattr("app.main.generate_output",
-                        lambda application: GeneratedFile(b"%PDF-second", "application/pdf", "pdf"))
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(b"%PDF-second"))
     r = post_resume(local_client, {"application_id": application_id})
     assert r.status_code == 201 and r.json()["saved_path"] == first
     assert output_files(settings) == [settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME]
@@ -562,12 +563,11 @@ def test_resume_ignores_extra_fields(client, storage):
 
 
 def test_resume_uses_updated_row(client, storage, monkeypatch):
-    from app.generation import GeneratedFile
     seen = []
 
-    def capture(application):
+    def capture(application, settings):
         seen.append(application)
-        return GeneratedFile(FAKE_PDF, "application/pdf", "pdf")
+        return fake_output()
     monkeypatch.setattr("app.main.generate_output", capture)
     application_id = new_application(client)
     patch_application(client, application_id, {"role": "Staff Engineer", "company": "Acme Inc"})
@@ -626,7 +626,7 @@ def test_resume_store_failure_503(settings, storage, caplog):
     assert storage.saved == []
 
 
-def _failing_render(application):
+def _failing_render(application, settings):
     raise RenderError("tectonic exited with 1: /srv/data/BASE.tex:2 ! LaTeX Error")
 
 
@@ -669,7 +669,7 @@ def test_resume_one_log_line_per_request(local_client, caplog):
     lines = resume_log_lines(caplog)
     assert [l["status"] for l in lines] == [201, 401, 422, 404, 404]
     assert [l.get("application_id") for l in lines] == [application_id, None, None, UNKNOWN, None]
-    assert all({"event", "status", "duration_ms"} <= set(l) <= {"event", "status", "duration_ms", "application_id"}
+    assert all({"event", "status", "duration_ms"} <= set(l) <= {"event", "status", "duration_ms", "application_id", "match_status"}
                for l in lines)
     assert '"application_request"' not in caplog.text and '"job_request"' not in caplog.text
     for value in ("payload-value", "body-value", "wrong-key-value", API_KEY, "Acme Corp", RESUME_FILE_NAME,
@@ -678,13 +678,12 @@ def test_resume_one_log_line_per_request(local_client, caplog):
 
 
 def test_resume_health_responds_during_slow_render(settings, storage, monkeypatch):
-    from app.generation import GeneratedFile
     started, release = threading.Event(), threading.Event()
 
-    def slow(application):
+    def slow(application, settings):
         started.set()
         release.wait(timeout=10)
-        return GeneratedFile(b"%PDF-slow", "application/pdf", "pdf")
+        return fake_output(b"%PDF-slow")
 
     monkeypatch.setattr("app.main.generate_output", slow)
     client = TestClient(create_app(settings, storage))
@@ -702,6 +701,69 @@ def test_resume_health_responds_during_slow_render(settings, storage, monkeypatc
         release.set()
         worker.join(timeout=10)
     assert result["r"].status_code == 201
+
+
+# --- tailoring outcomes ---
+
+@pytest.mark.parametrize("match", [Match("no_job_description"), Match("base_meets_threshold", 82), Match("tailored", 58, 77),
+                                   Match("tailored", 49, 73, added_terms=("testing", "TypeScript"))])
+def test_resume_reports_how_it_was_chosen(client, monkeypatch, match):
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(match=match))
+    application_id = new_application(client)
+    body = post_resume(client, {"application_id": application_id}).json()
+    assert body["match"] == {"status": match.status, "threshold": 70, "base_score": match.base_score,
+                             "tailored_score": match.tailored_score, "added_terms": list(match.added_terms)}
+
+
+def _failing_tailoring(application, settings):
+    raise TailoringError("verify", "check_failed", failed_checks=["unknown_skill", "one_page"], run=RunStats(9, 0.43219))
+
+
+def test_resume_tailoring_failure_500_keeps_earlier_resume(local_client, settings, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    application_id = new_application(local_client)
+    saved = post_resume(local_client, {"application_id": application_id}).json()["saved_path"]
+    monkeypatch.setattr("app.main.generate_output", _failing_tailoring)
+    r = post_resume(local_client, {"application_id": application_id})
+    assert r.status_code == 500 and r.json() == {"ok": False, "message": "Resume generation failed"}
+    assert open(saved, "rb").read() == FAKE_PDF
+    assert output_files(settings) == [Path(saved)]
+    (error,) = [json.loads(rec.getMessage()) for rec in caplog.records if '"tailoring_error"' in rec.getMessage()]
+    assert error == {"event": "tailoring_error", "application_id": application_id, "stage": "verify",
+                     "reason": "check_failed", "failed_checks": ["unknown_skill", "one_page"]}
+    line = resume_log_lines(caplog)[-1]
+    assert (line["status"], line["claude_turns"], line["claude_cost_usd"]) == (500, 9, 0.4322)
+
+
+def test_resume_without_claude_credential_500(settings, storage, monkeypatch, caplog):
+    from app.generation import generate_output
+    caplog.set_level(logging.INFO, logger="app.requests")
+    monkeypatch.setattr("app.main.generate_output", generate_output)
+    unconfigured = settings.model_copy(update={"anthropic_api_key": None, "claude_code_oauth_token": None})
+    client = TestClient(create_app(unconfigured, storage))
+    application_id = new_application(client, full_job_description=" ".join(["Python"] * 60))
+    r = post_resume(client, {"application_id": application_id})
+    assert r.status_code == 500 and r.json() == {"ok": False, "message": "Resume generation failed"}
+    assert storage.saved == []
+    (error,) = [json.loads(rec.getMessage()) for rec in caplog.records if '"tailoring_error"' in rec.getMessage()]
+    assert (error["stage"], error["reason"]) == ("claude", "not_configured")
+
+
+def test_resume_log_has_match_details_and_no_text(local_client, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(
+        match=Match("tailored", 58, 77, added_terms=("Airflow",)),
+        run=RunStats(14, 1.234567, ("claude-opus-5-5",), terms_approved=1, terms_rejected=2)))
+    application_id = new_application(local_client, full_job_description="A posting about Kafka streaming platforms.")
+    caplog.clear()
+    post_resume(local_client, {"application_id": application_id})
+    (line,) = resume_log_lines(caplog)
+    assert {k: v for k, v in line.items() if k != "duration_ms"} == {
+        "event": "resume_request", "status": 201, "application_id": application_id, "match_status": "tailored",
+        "base_score": 58, "tailored_score": 77, "claude_turns": 14, "claude_cost_usd": 1.2346,
+        "terms_approved": 1, "terms_rejected": 2}
+    for text in ("Kafka", "Airflow", "Acme Corp", RESUME_FILE_NAME, "claude-opus-5-5"):
+        assert text not in caplog.text
 
 
 def test_legacy_paths_gone(client, storage, caplog):
