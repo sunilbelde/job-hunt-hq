@@ -15,6 +15,27 @@ bullets that use it. A heading that names no job fails resume generation.
 - Ran benchmark evaluations of the mapping agent, comparing different models, reasoning settings and prompt versions.
 - Tuned prompts based on the benchmark results.
 - Built feedback loops that fed evaluation results back into the agent's prompts and configuration.
+- Led LLM performance regression and benchmarking of Mixtral, Llama, GPT-OSS 120B and other open models, comparing latency, accuracy, reasoning quality, hallucination rate and cost/efficiency to select the production model for code generation.
+- The GenAI ETL framework generates production-ready ETL artifacts in PySpark and Scala, enabling no-code ETL workflow creation.
+- Built a two-phase system: a Llama 3.3-70B model translates pseudocode to code, and a deterministic orchestration engine assembles and executes the ETL.
+- Designed the end-to-end ETL DAG topology in Python/NetworkX, modeling dependencies across Source, Joiner, Filter, Transform, Target, Custom and Distinct components for fault-tolerant, lineage-aware workflow orchestration.
+- Built the agentic RAG pipeline with LangChain and SimSearch vector retrieval, using few-shot and Chain-of-Thought prompting for context-grounded code generation.
+- Improved retrieval quality by researching chunking strategies, embedding models and prompt-injection defenses.
+- Ran performance and load testing with Apache JMeter to set SLA metrics for throughput, latency and reliability.
+
+### University of Illinois Chicago
+- Built a social influence prediction model using graph embeddings (node2vec, DeepWalk) and centrality-based features to quantify user impact and information diffusion across large social networks.
+
+### Dockskiff
+- Built a visual segmentation system with Faster-RCNN that identifies contract structure (headers, tables, clause blocks, footers, signature sections) for downstream parsing and analytics.
+- Improved OCR accuracy with image preprocessing that included morphology filters alongside denoising and deskewing, reducing noise in the metadata pipelines.
+- Used the Clause Classification Engine for compliance validation and risk scoring of contract clauses.
+- Designed an automated NER data extraction and auto-labeling pipeline with Prodigy, cutting manual annotation effort by 60%.
+- Enabled structured ingestion of contract tables into analytics databases, cutting manual data entry and review time by 70%.
+
+### Acheron Software Consultancy
+- Developed an internal TimeSheets management app and workflow applications with Spring Boot, Angular 8 and MySQL, delivering secure REST APIs and responsive UI used across project teams.
+- Built and customized solutions on OpenText AppWorks BPM, automating document-centric workflows and speeding up approval cycles for enterprise clients.
 
 ## Skills and abilities
 
@@ -28,7 +49,7 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Code quality
 - Reliability
 - Context engineering
-- Post-training
+- Post-training (supervised fine-tuning)
 - Browser automation
 - Playwright
 - TypeScript
@@ -39,8 +60,8 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Agentic framework and multi-step agent system architecture
 - Agent harness optimization
 - Context optimization (context window management, prompt and tool context design)
-
-- GPT-OSS 120B and Mixtral (benchmarked alongside Llama for production code generation)
+- GPT-OSS 120B
+- Mixtral
 - LLM evaluation and benchmarking (latency, accuracy, reasoning quality, hallucination rate, cost)
 - LLM regression testing across model versions
 - Chain-of-Thought prompting
@@ -83,7 +104,7 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 
 ### Data engineering
 
-- Scala (generated Scala ETL artifacts for AWS Glue)
+- Scala
 - ETL pipeline design (Source, Joiner, Filter, Transform, Target components)
 - DAG orchestration with data lineage and fault tolerance
 - Table extraction from documents into analytics databases
@@ -112,14 +133,15 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Subword tokenization
 - Graph embeddings (node2vec, DeepWalk)
 - Social network analysis (centrality features, influence and information diffusion)
-- Data labeling and auto-labeling pipelines (Prodigy; cut manual annotation by 60%)
+- Data labeling and auto-labeling pipelines (Prodigy)
 
 ### Computer vision
 
 - Computer vision
 - Image denoising (DnCNN, autoencoders)
 - Image preprocessing (denoising, deskewing, morphology filters)
-- Object detection for document layout (Faster-RCNN on headers, tables, clauses, signatures)
+- Object detection (Faster-RCNN)
+- Document layout analysis
 
 ### Software and visualization
 
