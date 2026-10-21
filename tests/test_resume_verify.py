@@ -56,8 +56,11 @@ def test_strong_match_keeps_the_base_resume(tmp_path):
     write_out(work, "analysis.json", ANALYSIS)
     code, out = verify(work, tmp_path / "resume.pdf")
     assert code == 0
+    base = out.pop("base")
     assert out == {"ok": True, "decision": "keep", "base_score": 77, "tailored_score": None, "failed": [], "warnings": [],
-                   "added_terms": []}
+                   "added_terms": [], "tailored": None, "rejected_terms": []}
+    assert (base["score"], [r["evidence"] for r in base["requirements"]]) == (
+        77, [r["evidence"] for r in ANALYSIS["assessment"].values()])
     assert not (tmp_path / "resume.pdf").exists()
 
 
@@ -97,6 +100,7 @@ def test_missing_output_fails(tmp_path, missing):
     code, out = verify(work, tmp_path / "resume.pdf")
     assert code == 1
     assert (out["ok"], out["stage"], out["failed"], out["base_score"]) == (False, "output", ["missing_output"], 57)
+    assert (out["base"]["score"], out["tailored"]) == (57, None)
     assert not (tmp_path / "resume.pdf").exists()
 
 
@@ -129,6 +133,9 @@ def test_approved_keyword_passes_and_is_reported(tmp_path):
     code, out = verify(work, tmp_path / "resume.pdf", "--analysis", gate / "analysis.json", "--terms", gate / "terms.json")
     assert code == 0, out
     assert (out["tailored_score"], out["added_terms"]) == (81, ["Airflow"])
+    assert (out["base"]["score"], out["tailored"]["score"]) == (57, 81)
+    assert [k["term"] for k in out["tailored"]["keywords"] if not k["present"]] == ["Kafka"]
+    assert out["rejected_terms"] == [{"term": "Kafka", "reason": "no verdict"}]
 
 
 @needs_tectonic

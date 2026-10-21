@@ -11,6 +11,7 @@ from app.storage import (
     company_folder,
     cover_letter_path,
     rename_legacy_folders,
+    resume_path,
 )
 
 A = "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"
@@ -51,6 +52,13 @@ def mode(path):
 ])
 def test_company_folder(company, folder):
     assert company_folder(company) == folder
+
+
+def test_resume_path_matches_where_resumes_are_saved(tmp_path):
+    storage = LocalStorage(tmp_path / "out")
+    saved = storage.save_resume("AT&T / Mobility: West", A, b"%PDF")
+    assert resume_path((tmp_path / "out").resolve(), "AT&T / Mobility: West", A) == saved
+    assert saved.parent.parent.name == "AT&T - Mobility- West" and saved.name == RESUME_FILE_NAME
 
 
 def test_company_folder_cut_to_100_characters():

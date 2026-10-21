@@ -519,3 +519,92 @@ def test_failed_migration_leaves_integer_store(int_store_path, monkeypatch):
     assert raw_rows(int_store_path) == before
     monkeypatch.undo()
     assert set(ApplicationStore(int_store_path).legacy_ids()) == {1, 2}
+
+
+# --- generation reports ---
+
+REPORT = {"version": 1, "status": "tailored", "threshold": 70, "base_score": 57, "tailored_score": 81,
+          "base": {"score": 57}, "tailored": {"score": 81}, "added_terms": ["Airflow"], "rejected_terms": []}
+
+
+def reports(db_path):
+    with closing(sqlite3.connect(db_path)) as conn:
+        return conn.execute("SELECT application_id FROM resume_reports").fetchall()
+
+
+def test_report_stored_and_read_back(store):
+    application_id, _ = store.record(row())
+    assert store.get_report(application_id) is None
+    assert store.save_report(application_id, "2026-10-20T10:00:00Z", "/out/Acme/x/SUNIL BELDE.pdf", REPORT)
+    assert store.get_report(application_id) == {**REPORT, "generated_at": "2026-10-20T10:00:00Z",
+                                                "saved_path": "/out/Acme/x/SUNIL BELDE.pdf"}
+
+
+def test_new_report_replaces_the_old_one(store, db_path):
+    application_id, _ = store.record(row())
+    store.save_report(application_id, "2026-10-20T10:00:00Z", "/a.pdf", REPORT)
+    store.save_report(application_id, "2026-10-20T11:00:00Z", "/b.pdf", {**REPORT, "status": "base_meets_threshold"})
+    assert len(reports(db_path)) == 1
+    got = store.get_report(application_id)
+    assert (got["status"], got["saved_path"], got["generated_at"]) == ("base_meets_threshold", "/b.pdf", "2026-10-20T11:00:00Z")
+
+
+def test_report_for_a_missing_application_is_not_stored(store, db_path):
+    assert store.save_report(str(uuid.uuid4()), "2026-10-20T10:00:00Z", "/a.pdf", REPORT) is False
+    assert reports(db_path) == []
+
+
+def test_delete_removes_the_report(store, db_path):
+    application_id, _ = store.record(row())
+    store.save_report(application_id, "2026-10-20T10:00:00Z", "/a.pdf", REPORT)
+    assert store.delete(application_id)
+    assert reports(db_path) == [] and store.get_report(application_id) is None
+
+
+def test_delete_report_only(store):
+    application_id, _ = store.record(row())
+    store.save_report(application_id, "2026-10-20T10:00:00Z", "/a.pdf", REPORT)
+    assert store.delete_report(application_id) and not store.delete_report(application_id)
+    assert store.get(application_id) is not None and store.get_report(application_id) is None
+
+
+def test_update_keeps_the_report(store):
+    application_id, _ = store.record(row())
+    store.save_report(application_id, "2026-10-20T10:00:00Z", "/out/Acme/x/SUNIL BELDE.pdf", REPORT)
+    store.update(application_id, {"company": "Acme Inc"})
+    assert store.get_report(application_id)["saved_path"] == "/out/Acme/x/SUNIL BELDE.pdf"
+
+
+def test_old_store_gets_the_reports_table_with_rows_unchanged(old_store_path):
+    store = ApplicationStore(old_store_path)
+    rows = store.list_with_reports()
+    assert len(rows) == 2 and all(item["report"] is None for item in rows)
+    assert {item["company"] for item in rows} == {"Acme"}
+
+
+def test_list_orders_by_generation_then_recording(store, db_path):
+    first, _ = store.record(row("https://example.com/1"))
+    second, _ = store.record(row("https://example.com/2"))
+    third, _ = store.record(row("https://example.com/3", full_job_description="secret posting"))
+    with closing(sqlite3.connect(db_path)) as conn, conn:  # created_at ties within a test; make the order explicit
+        for n, application_id in enumerate((first, second, third)):
+            conn.execute("UPDATE applications SET created_at = ? WHERE id = ?", (f"2026-10-0{n + 1}T00:00:00Z", application_id))
+    store.save_report(first, "2026-10-20T10:00:00Z", "/a.pdf", REPORT)
+    store.save_report(second, "2026-10-20T09:00:00Z", "/b.pdf", {**REPORT, "status": "no_job_description",
+                                                                 "base_score": None, "tailored_score": None})
+    listed = store.list_with_reports()
+    assert [item["id"] for item in listed] == [first, second, third]
+    assert listed[0]["report"] == {"generated_at": "2026-10-20T10:00:00Z", "status": "tailored", "threshold": 70,
+                                   "base_score": 57, "tailored_score": 81}
+    assert listed[2]["report"] is None
+    assert set(listed[2]) == {"id", "company", "role", "status", "created_at", "updated_at", "report"}
+    assert "secret posting" not in repr(listed)
+
+
+def test_report_read_failure_raises_store_error(store, db_path):
+    db_path.unlink()
+    db_path.mkdir()
+    for call in (lambda: store.get_report(str(uuid.uuid4())), store.list_with_reports,
+                 lambda: store.save_report(str(uuid.uuid4()), "t", "/a.pdf", REPORT)):
+        with pytest.raises(ApplicationStoreError):
+            call()

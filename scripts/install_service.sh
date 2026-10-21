@@ -100,12 +100,16 @@ until curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; do
   [ $i -lt 30 ] || die "service did not answer /health within 30s; see $log_dir/launchd.log and service.log"
   sleep 1
 done
-# The public port is the one Funnel publishes: it must never serve the API docs.
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/docs" || true)
-[ "$code" = 404 ] || die "http://127.0.0.1:$port/docs answered $code, want 404: the public port must not serve API docs"
+# The public port is the one Funnel publishes: it must never serve the API docs or the resume viewer.
+for path in /docs /viewer; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
+  [ "$code" = 404 ] || die "http://127.0.0.1:$port$path answered $code, want 404: the public port must not serve API docs or the viewer"
+done
 if [ "$docs_port" != off ]; then
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$docs_port/docs" || true)
-  [ "$code" = 200 ] || die "docs listener did not answer http://127.0.0.1:$docs_port/docs (got $code); see $log_dir/launchd.log"
+  for path in /docs /viewer; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$docs_port$path" || true)
+    [ "$code" = 200 ] || die "docs listener did not answer http://127.0.0.1:$docs_port$path (got $code); see $log_dir/launchd.log"
+  done
 fi
 echo "OK: service is running on http://127.0.0.1:$port (logs: $log_dir)"
 
@@ -118,13 +122,15 @@ fi
 
 if [ "$docs_port" != off ]; then
   echo "API docs on this Mac: http://127.0.0.1:$docs_port/docs"
+  echo "Resume viewer on this Mac: http://127.0.0.1:$docs_port/viewer"
   if command -v tailscale >/dev/null 2>&1; then
     rc=0
     docs_url=$(tailscale serve status --json 2>/dev/null | "$venv_py" "$repo/deploy/tailscale_docs.py" "$docs_port") || rc=$?
     case $rc in
-      0) echo "API docs on your tailnet: $docs_url/docs" ;;
+      0) echo "API docs on your tailnet: $docs_url/docs"
+         echo "Resume viewer on your tailnet: $docs_url/viewer" ;;
       3) case "$docs_url" in https://*:*) https_port=${docs_url##*:} ;; *) https_port=443 ;; esac
-         echo "WARNING: Funnel publishes the docs listener at $docs_url: the API docs are public." >&2
+         echo "WARNING: Funnel publishes the docs listener at $docs_url: the API docs and resume viewer are public." >&2
          echo "         Run: tailscale funnel --https=$https_port off" >&2
          echo "         then: tailscale serve --bg --https=8444 http://127.0.0.1:$docs_port" >&2 ;;
       *) echo "WARNING: tailscale serve is not proxying the docs port $docs_port." >&2

@@ -174,3 +174,12 @@ def score(keywords: list[dict], requirements: list[dict], assessment: dict, resu
     r = points / req_total if req_total else Fraction(0)
     total = floor(100 * (KEYWORD_SHARE * k + (1 - KEYWORD_SHARE) * r))
     return Score(total, decide(total), k, r, kw_rows, req_rows)
+
+
+def breakdown(result: Score, requirements: list[dict], assessment: dict) -> dict:
+    """The score as JSON, each requirement row also carrying its text and the assessment's quotes."""
+    texts = {req["id"]: req["text"] for req in requirements}
+    out = result.to_json()
+    out["requirements"] = [dict(row, text=texts[row["id"]], evidence=list(assessment[row["id"]].get("evidence") or []))
+                           for row in result.requirements]
+    return out
