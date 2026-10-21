@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 
 ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
+MatchStatus = Literal["no_job_description", "base_meets_threshold", "tailored"]
 
 # Example bodies shown in the API docs; tests send each one to check it is accepted.
 APPLICATION_EXAMPLE = {
@@ -167,6 +168,23 @@ class ApplicationUpdated(BaseModel):
     status: ApplicationStatus
 
 
+class ResumeMatch(BaseModel):
+    status: MatchStatus = Field(
+        description="How the saved resume was chosen. `no_job_description`: the application has no usable "
+        "posting text (missing or under 50 words), so the base resume was saved unscored. "
+        "`base_meets_threshold`: the base resume scored at or above `threshold` and was saved. "
+        "`tailored`: the base resume scored below it, and a tailored resume was saved."
+    )
+    threshold: int = Field(description="The score at or above which the base resume is kept. Always 70.")
+    base_score: int | None = Field(description="The base resume's match score from 0 to 100, or null when not scored.")
+    tailored_score: int | None = Field(description="The tailored resume's match score from 0 to 100, or null unless tailored.")
+    added_terms: list[str] = Field(
+        description="Posting keywords the base resume lacks that the tailored resume adds. A separate Claude judge, "
+        "which sees the resume and the owner's profile list but never the posting, approved each one with evidence. "
+        "Empty unless `status` is `tailored`."
+    )
+
+
 class ResumeCreated(BaseModel):
     ok: Literal[True] = True
     application_id: str
@@ -175,3 +193,4 @@ class ResumeCreated(BaseModel):
         description="Where the cover letter goes, beside the resume. Cover letters are not generated yet, "
         "so no file exists at this path."
     )
+    match: ResumeMatch = Field(description="How the saved resume was chosen, with the match scores.")

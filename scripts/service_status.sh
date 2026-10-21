@@ -1,6 +1,7 @@
 #!/bin/sh
 # Reports whether the launchd job is loaded, its pid, a health check, the docs
-# listener, the size of the launchd log and whether the Mac is set never to sleep.
+# listener, whether resume tailoring is ready, the size of the launchd log and
+# whether the Mac is set never to sleep.
 # Usage: scripts/service_status.sh
 set -u
 
@@ -50,6 +51,18 @@ if [ -f "$plist" ]; then
       3) echo "tailnet:   WARNING: Funnel publishes the docs listener at $docs_url: the API docs are public" ;;
       *) echo "tailnet:   docs not proxied; run: tailscale serve --bg --https=8444 http://127.0.0.1:$docs_port" ;;
     esac
+  fi
+fi
+
+# Offline check of what tailoring needs: the CLI the installed job uses, its version and the credential
+# kind in .env. It makes no model call, so it costs nothing; the install script does the live check.
+if [ -x "$repo/.venv/bin/python" ]; then
+  claude_bin=$( [ -f "$plist" ] && plutil -extract EnvironmentVariables.CLAUDE_BIN raw "$plist" 2>/dev/null)
+  if tailoring=$(cd "$repo" && CLAUDE_BIN="${claude_bin:-claude}" "$repo/.venv/bin/python" -m app.tailoring --check 2>/dev/null); then
+    echo "tailoring: $tailoring"
+  else
+    echo "tailoring: ${tailoring:-FAILING (the check did not run)}"
+    status=1
   fi
 fi
 

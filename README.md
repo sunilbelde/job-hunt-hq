@@ -2,17 +2,17 @@
 
 A small FastAPI service that runs on a Mac mini used as a personal server. `POST /application` records a job posting, and `POST /resume` renders a resume PDF for a recorded application and saves it on the Mac's disk at `OUTPUT_DIR/<company>/<application id>/SUNIL BELDE.pdf`. Nothing depends on a cloud service: storage, secrets and the process all live on the Mac, and it is published over HTTPS through [Tailscale](https://tailscale.com) Funnel, so both your own devices and outside tools (such as Muse) can call it.
 
-The generation step is a stub: `generate_output` in `app/generation.py` receives the stored application but ignores its contents and renders the baseline resume (`data/BASE.tex` + `data/resume.cls`, compiled with [tectonic](https://tectonic-typesetting.github.io/)), so the PDF is equivalent to `data/BASE.pdf`. **Not implemented yet (backlog):** tailoring the resume to the posting; that change will replace the stub with generated TeX rendered through the same path.
+Each resume is matched against the application's posting. Claude scores the base resume (`data/BASE.tex` + `data/resume.cls`, compiled with [tectonic](https://tectonic-typesetting.github.io/)). Below 70 it reworks the wording, order and emphasis of the base resume's own facts into the same one-page template, and scripts check every rule. Posting keywords the base resume lacks get in only when a separate Claude judge finds them in your resume or your profile list (`data/PROFILE.md`). See [How resumes are tailored](#how-resumes-are-tailored). **Backlog:** growing the profile list into a full profile document, a second source of facts that tailoring can add on top of the base resume (marked `TODO(profile-doc)` in the code), and cover letters.
 
 | Endpoint | Auth | Description |
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
-| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Renders the resume from the stored application and saves it. `201 {"ok": true, "application_id", "saved_path", "cover_letter_path"}`, where `saved_path` is the resume's absolute path and `cover_letter_path` is where the cover letter goes, beside it (`SUNIL BELDE - Cover Letter.pdf`). Cover letters are not generated yet, so that path is a placeholder with no file. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render failure, 502 file write failure, 503 store failure |
+| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Scores the base resume against the stored posting, tailors it below 70, and saves it. Takes about 1–5 minutes when it runs Claude, so use a client timeout of at least 10 minutes. `201 {"ok": true, "application_id", "saved_path", "cover_letter_path", "match"}`, where `saved_path` is the resume's absolute path, `cover_letter_path` is where the cover letter goes, beside it (`SUNIL BELDE - Cover Letter.pdf`), and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`. Cover letters are not generated yet, so that path is a placeholder with no file. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render or tailoring failure, 502 file write failure, 503 store failure |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: public and docs listeners), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (stub generator), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets), `deploy/` (launchd and logging templates, Tailscale docs-mapping check), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: public and docs listeners), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (picks the base or tailored resume), `app/tailoring.py` (runs the tailor-resume skill and its judge headlessly, and the final gate), `.claude/skills/tailor-resume/` (the skill and its scripts), `.claude/skills/judge-resume-terms/` (the judge), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets and your profile list), `deploy/` (launchd and logging templates, Tailscale docs-mapping check), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`POST /resume`)
 
@@ -84,6 +84,50 @@ To roll back: run `scripts/uninstall_service.sh`, copy the `.bak` file over `app
 
 Take a backup before upgrading to a build that changes the store. The first start of the status-aware build adds the `status` and `updated_at` columns in place. Older builds ignore them, so rolling back needs no restore.
 
+### How resumes are tailored
+
+`POST /resume` picks the resume to save, and reports which one in `match`:
+
+| `match.status` | When | Saved file |
+|---|---|---|
+| `no_job_description` | `full_job_description` is missing or under 50 words | the base resume, unscored, in seconds |
+| `base_meets_threshold` | the base resume scores 70 or more against the posting | the base resume |
+| `tailored` | the base resume scores below 70 | a tailored resume, same template, one page |
+
+The work is done by two Claude Code skills, which the service runs headlessly with `claude -p`: `tailor-resume` (`.claude/skills/tailor-resume/`) and its judge, `judge-resume-terms`. One resume takes up to three runs:
+
+1. **Analysis.** `tailor-resume` lists the posting's keywords and requirements and scores the base resume. At 70 or more the base resume is saved and nothing else runs.
+2. **Judge.** If the posting uses keywords the base resume lacks, the judge decides which of them you genuinely have. It runs in a folder of its own and sees your resume, your profile list and those keywords, never the posting, so the job can't sway it. It approves a keyword only with evidence, which a script then checks: a passage of your resume that implies it (for example "automated code validation" for testing), or an entry of your profile list.
+3. **Tailoring.** `tailor-resume` runs again and reworks the resume, using approved keywords only where their evidence allows. `match.added_terms` lists the ones it used.
+
+How it decides:
+
+- **The score.** Claude lists the posting's keywords and requirements. A script finds the keywords in the resume (whole words, ignoring case, with listed aliases), and accepts a requirement as met only with a quote that really appears in the resume. The score is half keyword coverage and half requirement coverage, with required items counting double.
+- **No fabrication.**
+  - The name and contact line, education, job headings and certifications are copied from `BASE.tex` and can't change.
+  - Skills may be reordered, regrouped under the existing labels, or dropped. The only new items allowed are keywords the judge approved.
+  - Every bullet cites the base bullets of the same job it comes from, and every number in it must appear in them.
+  - A posting keyword the base resume lacks can appear only if the judge approved it: in a skills line, or in a bullet that comes from the base bullet holding its resume evidence. A keyword approved from your profile list alone goes in a skills line only. No keyword the base resume has can disappear.
+- **Your profile list.** `data/PROFILE.md` lists skills and abilities you have beyond `BASE.tex`, one per line starting with `- `, and the judge treats each one as true. Name the tools you have used: an entry "Browser automation" doesn't tell the judge you have used Playwright. Nothing else reads the file. A keyword the judge rejects is simply left out, and never fails a request.
+- **Same template, one page, used fully.** Claude writes plain text; a script splices it into `BASE.tex`, so preamble, spacing and fonts never change. The result must be exactly one page, fill at least 90% of it and keep every line inside the margins. The skill keeps revising toward 96% fill, and toward no bullet whose last line holds only a word or two.
+- **The final gate.** Before saving, the service re-checks the output with its own untouched copy of the scripts and template, and saves only the PDF it rendered itself. It scores against the analysis as it stood when the judge ruled, and allows only the keywords of its own copy of the ruling, so the tailoring run can't change either.
+- **Failures.** If Claude isn't configured or available, a run hits the time or spend limit, the judge's output is unusable, or the content fails a check, the request fails with 500 `Resume generation failed`. Nothing is saved, any earlier resume is kept, and the log line `tailoring_error` gives the stage (`analysis`, `judge`, `tailoring` or `verify`) and reason codes.
+- **Isolation.** Posting text is treated as untrusted data. Each Claude run works in a temporary folder with an empty `HOME` and its own config folder (`OUTPUT_DIR/.claude-runtime/`). It has no web or MCP tools, can only run the skill's script and read-only commands inside that folder (the judge runs no commands at all), and its commands never see the credential. Your own Claude Code settings, hooks and shell profile are never loaded.
+- **Cost and limits.** With `CLAUDE_CODE_OAUTH_TOKEN`, runs use your Claude plan. On Pro that plan's limits are shared with your own Claude Code use, and a run that hits them fails. With `ANTHROPIC_API_KEY`, runs are billed per use: roughly 1–2 USD per tailored resume, less when the base resume already matches. `TAILORING_TIMEOUT_SECONDS` and `TAILORING_MAX_BUDGET_USD` cover all the runs for one resume together. Each `resume_request` log line records the runs' turns and estimated cost, and how many keywords the judge approved and rejected (counts only, never the keywords).
+
+To run the skill by hand on a posting saved to a file, from the repository root:
+
+```sh
+.claude/skills/tailor-resume/scripts/run prepare --template data --posting posting.txt --out /tmp/tailor-test
+# then, in Claude Code at the repository root:
+/tailor-resume /tmp/tailor-test
+# if it stops to wait for the judge, run the judge in a terminal (it uses .env's credential):
+.venv/bin/python -m app.tailoring --judge /tmp/tailor-test
+# then, back in Claude Code, run /tailor-resume /tmp/tailor-test again to tailor
+```
+
+Everything it writes, including the draft PDF (`out/build/tailored.pdf`), the check report (`out/check.json`) and the judge's verdicts and ruling (`judge/`), lands in that folder. The interactive session uses your own login and asks before writing.
+
 ### Resume files
 
 Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/SUNIL BELDE.pdf`, using the application's company at the time you generate. The folder keeps the company name as written (spaces, case, accents), with `/`, `\`, `:` and control characters replaced by `-`, leading and trailing spaces and dots removed, and the name cut to 100 characters. An empty result becomes `unknown-company`, and a name starting with `applications.sqlite3` gets a leading `_` so it can't collide with the store.
@@ -104,7 +148,12 @@ Copy `.env.example` to `.env` (git-ignored), fill it in and run `chmod 600 .env`
 |---|---|---|
 | `API_KEY` | yes | Sent by clients as `X-API-Key`. Generate it with `openssl rand -hex 32` |
 | `OUTPUT_DIR` | no | Where resumes and the application store live. Default `~/Library/Application Support/job-hunt-hq`. Don't use `~/Documents`, `~/Desktop` or `~/Downloads`: macOS blocks background services from those folders |
-| `ANTHROPIC_API_KEY` | no | Not used yet; reserved for resume tailoring |
+| `CLAUDE_CODE_OAUTH_TOKEN` | no | Claude subscription token for [resume tailoring](#how-resumes-are-tailored), from `claude setup-token`. Paste it as one line: the command's display can wrap it. Without a Claude credential, resumes that need scoring fail with 500 |
+| `ANTHROPIC_API_KEY` | no | Claude Console API key, the other tailoring credential, billed per run. When both are set, the API key is used |
+| `TAILORING_MODEL` | no | Default `claude-opus-5-5`. Claude Code falls back to `claude-sonnet-5-5` when the model is overloaded or unavailable |
+| `TAILORING_TIMEOUT_SECONDS` | no | Default `420`, from `60` to `480`, for all the Claude runs of one resume together. A run still going when it is used up is stopped, and the request fails |
+| `TAILORING_MAX_BUDGET_USD` | no | Default `3`, the estimated spend cap for all the Claude runs of one resume together. When it is reached the request fails. The estimate is checked between turns, so a run can go slightly over |
+| `CLAUDE_BIN` | no | Default `claude`. The installed service gets the path the install script found |
 | `API_DOCS_ENABLED` | no | Default `false`. `true` serves the API reference at `/docs`, `/redoc` and `/openapi.json` on a development server. The installed service ignores it: its public port never serves docs, and its docs port always does |
 
 ## Development
@@ -126,8 +175,9 @@ echo "$ID"
 curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
 # {"ok":true,"application_id":"3f2b…","saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf",
-#  "cover_letter_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE - Cover Letter.pdf"}
-# (no cover letter is generated yet; nothing exists at cover_letter_path)
+#  "cover_letter_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE - Cover Letter.pdf",
+#  "match":{"status":"no_job_description","threshold":70,"base_score":null,"tailored_score":null,"added_terms":[]}}
+# (this posting has no text, so nothing was scored; no cover letter is generated yet)
 
 curl -X PATCH "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
@@ -222,11 +272,16 @@ sudo tailscale funnel --https=443 off
 sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
 ```
 
+Resume tailoring also needs the [Claude Code CLI](https://code.claude.com/docs/en/setup), installed for your user (it usually lands in `~/.local/bin`; the install script finds it there).
+
 ### 3. Configure
 
 ```sh
 cp .env.example .env
 # API_KEY: openssl rand -hex 32
+# A Claude credential for resume tailoring, one of:
+#   CLAUDE_CODE_OAUTH_TOKEN: run `claude setup-token` and paste the token as one line
+#   ANTHROPIC_API_KEY:       a Claude Console API key, billed per run
 chmod 600 .env
 ```
 
@@ -234,14 +289,16 @@ chmod 600 .env
 
 ```sh
 scripts/install_service.sh     # asks for your sudo password for the launchd steps
-scripts/service_status.sh      # launchd state and pid, health check, docs listener, log size, sleep setting
+scripts/service_status.sh      # launchd state and pid, health check, docs listener, tailoring readiness, log size, sleep setting
 scripts/uninstall_service.sh   # stops and removes the daemon; keeps output files and logs
 tailscale serve --https=8444 off   # after uninstalling, if you published the docs
 ```
 
-The install script checks prerequisites and `.env` permissions, creates `.venv`, validates the configuration, does one test render to fill the TeX cache (so later renders work offline), installs `/Library/LaunchDaemons/local.job-hunt-hq.plist`, waits for `/health`, checks that `/docs` is 404 on port 8080 and 200 on port 8081, and prints the docs URLs. It is safe to run again.
+The install script checks prerequisites and `.env` permissions, creates `.venv`, validates the configuration, does one test render to fill the TeX cache (so later renders work offline), installs `/Library/LaunchDaemons/local.job-hunt-hq.plist` with the path of your Claude Code CLI, waits for `/health`, checks that `/docs` is 404 on port 8080 and 200 on port 8081, and prints the docs URLs. Finally it checks resume tailoring: it warns when the Claude Code CLI or a Claude credential is missing, and makes one minimal live call (`python -m app.tailoring --check --live`) to confirm the credential works, warning if it is rejected. None of these warnings stops the install. It is safe to run again.
 
 The daemon runs straight from this checkout. **After `git pull`, run `scripts/install_service.sh` again** (or `sudo launchctl kickstart -k system/local.job-hunt-hq` if only Python code changed).
+
+The status script's `tailoring:` line reads, for example, `ready (subscription token, claude-opus-5-5, Claude Code 2.1.303)`, `not configured` or `FAILING (…)`. It checks the CLI and the credential kind without any model call. To confirm the credential itself works, run `.venv/bin/python -m app.tailoring --check --live` from the repository, which sends one minimal prompt.
 
 Logs are in `~/Library/Logs/job-hunt-hq/`:
 - `service.log`: requests (one JSON line per `POST /resume` or `/application` request, the latter with its `method`) and the access log without query strings. Rotated at 10 MB, 5 kept.
@@ -255,7 +312,7 @@ On the Mac (the smoke test reads the saved PDF from disk, so it must run there):
 API_KEY=... scripts/smoke_test.sh http://127.0.0.1:8080
 ```
 
-First it checks that the given address answers 404 for `/docs` and `/openapi.json`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs` and a schema with the six operations. Then it records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
+First it checks that the given address answers 404 for `/docs` and `/openapi.json`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs` and a schema with the six operations. Then it records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 

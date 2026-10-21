@@ -32,6 +32,9 @@
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TECTONIC_CACHE_DIR</key>
         <string>__HOME__/Library/Caches/job-hunt-hq/tectonic</string>
+        <!-- The Claude Code CLI the install script found (often ~/.local/bin, outside PATH above). -->
+        <key>CLAUDE_BIN</key>
+        <string>__CLAUDE_BIN__</string>
         <!-- Wins over .env. app.serve also forces docs off on the public port, which Funnel
              publishes; only the docs port serves them. -->
         <key>API_DOCS_ENABLED</key>

@@ -16,7 +16,13 @@ class Settings(BaseSettings):
 
     api_key: SecretStr = Field(min_length=1)
     output_dir: Path = DEFAULT_OUTPUT_DIR
+    # Claude credentials for resume tailoring. With both set, Claude runs get only the API key.
     anthropic_api_key: SecretStr | None = None
+    claude_code_oauth_token: SecretStr | None = None  # from `claude setup-token`; uses the owner's Claude plan
+    tailoring_model: str = Field(default="claude-opus-5-5", min_length=1)
+    tailoring_timeout_seconds: int = Field(default=420, ge=60, le=480)
+    tailoring_max_budget_usd: float = Field(default=3.0, gt=0)
+    claude_bin: str = Field(default="claude", min_length=1)
     # Serves /docs, /redoc and /openapi.json. Local development only: the launchd job pins it off.
     api_docs_enabled: bool = False
 
@@ -24,6 +30,12 @@ class Settings(BaseSettings):
     @classmethod
     def _expand_user(cls, value: Path) -> Path:
         return value.expanduser()
+
+    @field_validator("anthropic_api_key", "claude_code_oauth_token", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value):
+        # .env.example ships `ANTHROPIC_API_KEY=`; an empty credential means none.
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 @lru_cache
