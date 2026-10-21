@@ -10,6 +10,11 @@ API_KEY = "k" * 32
 OPTIONAL = [
     "OUTPUT_DIR",
     "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "TAILORING_MODEL",
+    "TAILORING_TIMEOUT_SECONDS",
+    "TAILORING_MAX_BUDGET_USD",
+    "CLAUDE_BIN",
     "API_DOCS_ENABLED",
     "R2_ACCOUNT_ID",
     "R2_ACCESS_KEY_ID",
@@ -105,3 +110,50 @@ def test_invalid_api_docs_value_names_it(env):
     with pytest.raises(ValidationError) as exc:
         Settings(_env_file=None)
     assert "api_docs_enabled" in str(exc.value)
+
+
+# --- resume tailoring ---
+
+def test_tailoring_defaults(env):
+    s = Settings(_env_file=None)
+    assert s.claude_code_oauth_token is None
+    assert (s.tailoring_model, s.tailoring_timeout_seconds, s.tailoring_max_budget_usd, s.claude_bin) == (
+        "claude-opus-5-5", 420, 3.0, "claude")
+
+
+@pytest.mark.parametrize("value", ["30", "481", "abc"])
+def test_invalid_tailoring_timeout_names_it(env, value):
+    env.setenv("TAILORING_TIMEOUT_SECONDS", value)
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None)
+    assert "tailoring_timeout_seconds" in str(exc.value)
+
+
+def test_invalid_budget_names_it(env):
+    env.setenv("TAILORING_MAX_BUDGET_USD", "0")
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None)
+    assert "tailoring_max_budget_usd" in str(exc.value)
+
+
+def test_subscription_token_never_in_errors(env):
+    env.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-secret-token-value")
+    env.setenv("TAILORING_TIMEOUT_SECONDS", "abc")
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None)
+    assert "sk-ant-oat01-secret-token-value" not in str(exc.value)
+
+
+def test_blank_credentials_mean_none(env, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=\nANTHROPIC_API_KEY=   \n")
+    s = Settings(_env_file=env_file)
+    assert s.claude_code_oauth_token is None and s.anthropic_api_key is None
+
+
+def test_env_example_lists_the_tailoring_settings():
+    example = (Path(__file__).resolve().parent.parent / ".env.example").read_text()
+    names = {line.split("=", 1)[0] for line in example.splitlines() if "=" in line and not line.startswith("#")}
+    assert {"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "TAILORING_MODEL", "TAILORING_TIMEOUT_SECONDS",
+            "TAILORING_MAX_BUDGET_USD", "CLAUDE_BIN"} <= names
+    assert "reserved" not in example

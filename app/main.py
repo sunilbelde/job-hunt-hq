@@ -30,6 +30,7 @@ from app.models import (
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
 from app.storage import LocalStorage, Storage, StorageError, cover_letter_path, rename_legacy_folders
+from app.tailoring import TailoringError
 
 logger = logging.getLogger("app.requests")
 logger.setLevel(logging.INFO)
@@ -72,7 +73,9 @@ ERROR_DESCRIPTIONS = {
     401: "Missing or wrong `X-API-Key`. Checked before the body or ID is looked at.",
     404: "No application has this ID. An ID that is not a UUID gets this too.",
     422: "The body is not JSON, not a JSON object, or fails validation. `message` names the fields and rules.",
-    500: "Resume generation failed.",
+    500: "Resume generation failed: rendering, or tailoring (Claude not configured, unavailable or over its time or "
+         "spend limit, the judge's output unusable, or the tailored resume failed a check). Nothing was saved, and an "
+         "earlier resume for the application is unchanged.",
     502: "Storage service unavailable.",
     503: "Application store unavailable.",
 }
@@ -120,6 +123,25 @@ def json_body(model: type[BaseModel], description: str) -> dict[str, Any]:
             },
         }
     }
+
+
+# Request-state values copied into the request's log line when set: IDs, the match result, the Claude
+# runs' size and estimated cost, and how many keywords the judge approved and rejected. Never text from
+# the posting or the resume, keywords included.
+LOGGED_STATE = ("application_id", "duplicate", "match_status", "base_score", "tailored_score",
+                "claude_turns", "claude_cost_usd", "terms_approved", "terms_rejected")
+
+
+def note_generation(request: Request, match=None, run=None) -> None:
+    if match is not None:
+        request.state.match_status = match.status
+        request.state.base_score = match.base_score
+        request.state.tailored_score = match.tailored_score
+    if run is not None:
+        request.state.claude_turns = run.turns
+        request.state.claude_cost_usd = round(run.cost_usd, 4) if run.cost_usd is not None else None
+        request.state.terms_approved = run.terms_approved
+        request.state.terms_rejected = run.terms_rejected
 
 
 def request_event(path: str) -> str | None:
@@ -245,7 +267,7 @@ def create_app(
                 fields["method"] = request.method
             fields["status"] = status
             fields["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
-            for name in ("application_id", "duplicate"):
+            for name in LOGGED_STATE:
                 value = getattr(request.state, name, None)
                 if value is not None:
                     fields[name] = value
@@ -422,8 +444,19 @@ def create_app(
         tags=["resumes"],
         summary="Generate a resume PDF",
         description=(
-            "Renders the resume for a recorded application and saves it on the service host at `saved_path`, "
-            "replacing any earlier render. The application itself is not changed. Rendering takes a few seconds. "
+            "Generates the resume for a recorded application and saves it on the service host at `saved_path`, "
+            "replacing any earlier one. The application itself is not changed.\n\n"
+            "How the resume is chosen, reported in `match.status`:\n"
+            "- `no_job_description`: the application has no posting text, or under 50 words of it, so the base "
+            "resume is saved unscored.\n"
+            "- `base_meets_threshold`: Claude scores the base resume against the posting at 70 or more, so the "
+            "base resume is saved.\n"
+            "- `tailored`: the base resume scores below 70, so a tailored resume is saved. It uses the same "
+            "one-page template, reworded and reordered from the base resume's own facts and checked by script. "
+            "It may also use posting keywords the base resume lacks, when a separate Claude judge that never sees "
+            "the posting finds them in the resume or the owner's profile list; `match.added_terms` lists them.\n\n"
+            "Scoring and tailoring take about 1 to 5 minutes and are capped at about 10, so give the request a "
+            "client timeout of at least 10 minutes. Without usable posting text it returns in seconds.\n\n"
             "`cover_letter_path` is where the application's cover letter goes, beside the resume; "
             "cover letters are not generated yet, so no file exists there."
         ),
@@ -461,11 +494,16 @@ def create_app(
         application = StoredApplication.model_validate(row)
 
         try:
-            # Rendering blocks for seconds; keep it off the event loop so /health stays responsive.
-            generated = await run_in_threadpool(generate_output, application)
+            # Scoring and tailoring take minutes; keep them off the event loop so /health stays responsive.
+            generated = await run_in_threadpool(generate_output, application, settings)
         except RenderError as exc:
             logger.error(json.dumps({"event": "render_error", "application_id": target, "error": str(exc)}))
             return application_error(500, "Resume generation failed")
+        except TailoringError as exc:
+            note_generation(request, run=exc.run)
+            logger.error(json.dumps({"event": "tailoring_error", "application_id": target, **exc.log_fields()}))
+            return application_error(500, "Resume generation failed")
+        note_generation(request, generated.match, generated.run)
         try:
             path = await run_in_threadpool(storage.save_resume, application.company, target, generated.content)
         except StorageError as exc:
@@ -480,6 +518,7 @@ def create_app(
                 "application_id": target,
                 "saved_path": str(path),
                 "cover_letter_path": str(cover_letter_path(path)),
+                "match": generated.match.to_dict(),
             },
         )
 

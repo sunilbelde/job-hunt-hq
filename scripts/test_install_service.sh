@@ -14,6 +14,7 @@ calls="$tmp/calls.log"
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$bin/$1"; chmod +x "$bin/$1"; }
 stub python3.12 'exit 0'
 stub tectonic 'exit 0'
+stub claude 'exit 0'
 # `serve status --json` answers with STUB_SERVE_JSON (default set in run()).
 stub tailscale 'case "$*" in
   *--json*) printf "%s" "$STUB_SERVE_JSON" ;;
@@ -40,12 +41,14 @@ make_repo() {
   cp -R "$src/scripts" "$src/deploy" "$repo/"
   rm -f "$repo/deploy/logging.json"
   touch "$repo/requirements.txt"
-  printf 'API_KEY=k\n' > "$repo/.env"; chmod 600 "$repo/.env"
+  printf 'API_KEY=k\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-secret-token\n' > "$repo/.env"; chmod 600 "$repo/.env"
   # Fake venv python: real python only for the template renderer.
   cat > "$repo/.venv/bin/python" <<'PY'
 #!/bin/sh
 case "$1" in *render_template.py|*tailscale_docs.py) exec /usr/bin/python3 "$@" ;; esac
 case "$*" in *create_app*) [ "${STUB_CONFIG_RC:-0}" = 0 ] || { echo "1 validation error for Settings"; echo "link_signing_secret"; exit 1; } ;; esac
+# app.tailoring --check answers with STUB_TAILORING and exits with STUB_TAILORING_RC.
+case "$*" in *app.tailoring*) echo "python $* CLAUDE_BIN=$CLAUDE_BIN" >> "$CALLS"; echo "${STUB_TAILORING:-ready (subscription token, claude-opus-5-5, Claude Code 2.1.303)}"; exit ${STUB_TAILORING_RC:-0} ;; esac
 exit 0
 PY
   chmod +x "$repo/.venv/bin/python"
@@ -105,6 +108,31 @@ check "invalid config refused and named" '[ $rc -ne 0 ] && grep -q "link_signing
 make_repo
 run install_service.sh STUB_CURL_RC=7; rc=$?
 check "install fails when health never answers" '[ $rc -ne 0 ] && grep -q "did not answer" "$tmp/out"'
+
+# --- resume tailoring prerequisites ---
+make_repo
+run install_service.sh; rc=$?
+check "installed plist names the Claude CLI found" \
+  '[ "$(plutil -extract EnvironmentVariables.CLAUDE_BIN raw "$tmp/installed.plist")" = "$bin/claude" ]'
+check "install runs the live tailoring check" \
+  'grep -q "app.tailoring --check --live" "$calls" && grep -q "OK: tailoring ready (subscription token" "$tmp/out"'
+check "install never prints the credential" '! grep -q "secret-token" "$tmp/out"'
+
+make_repo; mv "$bin/claude" "$tmp/claude.off"
+run install_service.sh; rc=$?
+mv "$tmp/claude.off" "$bin/claude"
+check "missing Claude CLI warns while the install completes" \
+  '[ $rc -eq 0 ] && grep -q "WARNING: Claude Code CLI not found" "$tmp/out" && [ "$(plutil -extract EnvironmentVariables.CLAUDE_BIN raw "$tmp/installed.plist")" = claude ]'
+
+make_repo; printf 'API_KEY=k\nCLAUDE_CODE_OAUTH_TOKEN=\nANTHROPIC_API_KEY=  # later\n' > "$repo/.env"; chmod 600 "$repo/.env"
+run install_service.sh; rc=$?
+check "no credential warns and names both ways to set one" \
+  '[ $rc -eq 0 ] && grep -q "WARNING: .env sets no Claude credential" "$tmp/out" && grep -q "claude setup-token" "$tmp/out" && grep -q "ANTHROPIC_API_KEY" "$tmp/out" && ! grep -q "app.tailoring" "$calls"'
+
+make_repo
+run install_service.sh STUB_TAILORING="FAILING (credential rejected): paste the token from \`claude setup-token\` as one line" STUB_TAILORING_RC=1; rc=$?
+check "rejected credential warns while the install completes" \
+  '[ $rc -eq 0 ] && grep -q "WARNING: tailoring check: FAILING (credential rejected)" "$tmp/out" && grep -q "as one line" "$tmp/out"'
 
 # --- docs listener ---
 make_repo
@@ -173,5 +201,18 @@ make_repo
 run install_service.sh DOCS_PORT=off; cp "$tmp/installed.plist" "$tmp/ld/local.job-hunt-hq.plist"
 run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld"; rc=$?
 check "status reports docs off" '[ $rc -eq 0 ] && grep -q "docs:      off" "$tmp/out"'
+
+make_repo
+run install_service.sh; cp "$tmp/installed.plist" "$tmp/ld/local.job-hunt-hq.plist"; : > "$calls"
+run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld"; rc=$?
+check "status reports tailoring ready" \
+  '[ $rc -eq 0 ] && grep -q "tailoring: ready (subscription token, claude-opus-5-5, Claude Code 2.1.303)" "$tmp/out"'
+check "status checks offline with the CLI the job uses" \
+  'grep -q "app.tailoring --check CLAUDE_BIN=$bin/claude" "$calls" && ! grep -q -- "--live" "$calls"'
+check "status never prints the credential" '! grep -q "secret-token" "$tmp/out"'
+run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld" STUB_TAILORING="not configured: set CLAUDE_CODE_OAUTH_TOKEN (from \`claude setup-token\`) or ANTHROPIC_API_KEY in .env" STUB_TAILORING_RC=1; rc=$?
+check "status reports tailoring not configured" '[ $rc -ne 0 ] && grep -q "tailoring: not configured" "$tmp/out"'
+run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld" STUB_TAILORING="FAILING: Claude Code CLI not found (claude)" STUB_TAILORING_RC=1; rc=$?
+check "status reports tailoring failing" '[ $rc -ne 0 ] && grep -q "tailoring: FAILING: Claude Code CLI not found" "$tmp/out"'
 
 exit $fail
