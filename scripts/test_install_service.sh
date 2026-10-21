@@ -23,11 +23,14 @@ esac'
 # The API funnelled on 443 and the docs listener tailnet-only on 8444.
 serve_json='{"Web":{"mac-mini.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8080"}}},"mac-mini.ts.net:8444":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8081"}}}},"AllowFunnel":{"mac-mini.ts.net:443":true}}'
 stub pmset 'printf " sleep                0\n"'
-# /docs status codes: STUB_PUBLIC_DOCS on the public port 8080, STUB_DOCS on any other port.
+# /docs and /viewer status codes: STUB_PUBLIC_DOCS / STUB_PUBLIC_VIEWER on the public port 8080,
+# STUB_DOCS / STUB_VIEWER on any other port.
 stub curl 'echo "curl $*" >> "$CALLS"
 case "$*" in
   *:8080/docs*) printf "%s" "${STUB_PUBLIC_DOCS:-404}" ;;
+  *:8080/viewer*) printf "%s" "${STUB_PUBLIC_VIEWER:-404}" ;;
   */docs*) printf "%s" "${STUB_DOCS:-200}" ;;
+  */viewer*) printf "%s" "${STUB_VIEWER:-200}" ;;
 esac
 exit ${STUB_CURL_RC:-0}'
 stub launchctl 'echo "launchctl $*" >> "$CALLS"; [ "${STUB_LOADED:-0}" = 1 ] || exit 113; printf "system/local.job-hunt-hq = {\n\tstate = running\n\tpid = 4242\n}\n"'
@@ -80,6 +83,10 @@ check "install checks /docs on both ports" \
   'grep -q "127.0.0.1:8080/docs" "$calls" && grep -q "127.0.0.1:8081/docs" "$calls"'
 check "install prints the docs URLs" \
   'grep -q "http://127.0.0.1:8081/docs" "$tmp/out" && grep -q "https://mac-mini.ts.net:8444/docs" "$tmp/out"'
+check "install checks /viewer on both ports" \
+  'grep -q "127.0.0.1:8080/viewer" "$calls" && grep -q "127.0.0.1:8081/viewer" "$calls"'
+check "install prints the viewer URLs" \
+  'grep -q "http://127.0.0.1:8081/viewer" "$tmp/out" && grep -q "https://mac-mini.ts.net:8444/viewer" "$tmp/out"'
 check "logging config written with home log dir" \
   'grep -q "$home/Library/Logs/job-hunt-hq/service.log" "$repo/deploy/logging.json"'
 check "no tailscale warning when serve is configured" '! grep -q "WARNING" "$tmp/out"'
@@ -158,6 +165,14 @@ check "non-numeric docs port refused" '[ $rc -ne 0 ] && grep -q "DOCS_PORT" "$tm
 make_repo
 run install_service.sh STUB_PUBLIC_DOCS=200; rc=$?
 check "install fails when the public port serves docs" '[ $rc -ne 0 ] && grep -q "must not serve API docs" "$tmp/out"'
+
+make_repo
+run install_service.sh STUB_PUBLIC_VIEWER=200; rc=$?
+check "install fails when the public port serves the viewer" '[ $rc -ne 0 ] && grep -q "must not serve API docs or the viewer" "$tmp/out"'
+
+make_repo
+run install_service.sh STUB_VIEWER=404; rc=$?
+check "install fails when the docs listener does not serve the viewer" '[ $rc -ne 0 ] && grep -q "did not answer http://127.0.0.1:8081/viewer" "$tmp/out"'
 
 make_repo
 run install_service.sh STUB_DOCS=000; rc=$?

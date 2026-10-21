@@ -36,6 +36,7 @@ JUDGE_SKILL_IN_WORK = Path(".claude") / "skills" / "judge-resume-terms"
 PROFILE = TEMPLATE_DIR / "PROFILE.md"  # the owner's profile list; optional
 RUNTIME_DIR = ".claude-runtime"  # in OUTPUT_DIR; company folders never start with a dot
 
+REPORT_VERSION = 1  # the stored report's shape; the viewer shows a report of another version as legacy
 MATCH_THRESHOLD = 70  # resume_score.THRESHOLD in the skill; a test keeps the two equal
 MIN_POSTING_WORDS = 50
 MAX_POSTING_CHARS = 60_000
@@ -65,10 +66,20 @@ class Match:
     tailored_score: int | None = None
     threshold: int = MATCH_THRESHOLD
     added_terms: tuple[str, ...] = ()  # judge-approved posting keywords the tailored resume uses
+    # The gate's score breakdowns and the judge's rejected keywords, for the stored report. They hold posting
+    # text, so they are never logged and stay out of to_dict(), the POST /resume response.
+    base_breakdown: dict | None = None
+    tailored_breakdown: dict | None = None
+    rejected_terms: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {"status": self.status, "threshold": self.threshold, "base_score": self.base_score,
                 "tailored_score": self.tailored_score, "added_terms": list(self.added_terms)}
+
+    def report(self) -> dict:
+        """The generation report the viewer shows: to_dict() plus the breakdowns and rejected keywords."""
+        return {"version": REPORT_VERSION, **self.to_dict(), "base": self.base_breakdown,
+                "tailored": self.tailored_breakdown, "rejected_terms": [dict(term) for term in self.rejected_terms]}
 
 
 @dataclass(frozen=True)
@@ -462,7 +473,8 @@ def run(application: StoredApplication, settings: Settings) -> TailoringResult:
         runs.run("analysis", work, lambda usd: claude_command(settings, binary, work, usd))
         review = _judge_input(work, gate, runs.stats)
         if review["decision"] == "keep":
-            return TailoringResult(Match("base_meets_threshold", review["base_score"]), None, runs.stats)
+            return TailoringResult(Match("base_meets_threshold", review["base_score"], base_breakdown=review.get("base")),
+                                   None, runs.stats)
         verdicts = None
         if review["candidates"]:
             judge = _prepare_judge(gate)
@@ -479,7 +491,8 @@ def run(application: StoredApplication, settings: Settings) -> TailoringResult:
             raise TailoringError("verify", VERIFY_REASONS.get(verdict.get("stage"), "verify_error"),
                                  failed_checks=verdict.get("failed", []), run=stats)
         match = Match("tailored", verdict["base_score"], verdict["tailored_score"],
-                      added_terms=tuple(verdict.get("added_terms", ())))
+                      added_terms=tuple(verdict.get("added_terms", ())), base_breakdown=verdict.get("base"),
+                      tailored_breakdown=verdict.get("tailored"), rejected_terms=tuple(verdict.get("rejected_terms", ())))
         return TailoringResult(match, verdict["pdf"].read_bytes(), stats)
     finally:
         for folder in (work, gate, judge):

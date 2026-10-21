@@ -43,9 +43,11 @@ def test_strong_match_saves_the_base_resume():
 
 
 def test_weak_match_saves_the_tailored_pdf():
-    out, render, _ = generate(application(), TailoringResult(Match("tailored", 58, 77), b"%PDF-tailored", RunStats(12, 0.9)))
+    match = Match("tailored", 58, 77, base_breakdown={"score": 58}, tailored_breakdown={"score": 77},
+                  rejected_terms=({"term": "Kafka", "reason": "rejected by the judge"},))
+    out, render, _ = generate(application(), TailoringResult(match, b"%PDF-tailored", RunStats(12, 0.9)))
     render.assert_not_called()
-    assert (out.content, out.match) == (b"%PDF-tailored", Match("tailored", 58, 77))
+    assert (out.content, out.match) == (b"%PDF-tailored", match)  # breakdowns kept for the report
 
 
 def test_tailoring_errors_propagate():

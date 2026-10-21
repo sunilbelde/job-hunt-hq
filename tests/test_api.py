@@ -715,6 +715,70 @@ def test_resume_reports_how_it_was_chosen(client, monkeypatch, match):
                              "tailored_score": match.tailored_score, "added_terms": list(match.added_terms)}
 
 
+TAILORED = Match("tailored", 58, 77, added_terms=("Airflow",),
+                 base_breakdown={"score": 58, "keywords": [{"term": "Kafka", "importance": "required", "present": False}]},
+                 tailored_breakdown={"score": 77, "requirements": [{"id": "R1", "text": "Runs Kafka streaming"}]},
+                 rejected_terms=({"term": "Kafka", "reason": "rejected by the judge"},))
+
+
+def reports_of(settings):
+    from app.applications import ApplicationStore
+    return ApplicationStore(settings.output_dir / "applications.sqlite3")
+
+
+@pytest.mark.parametrize("match", [Match("no_job_description"), Match("base_meets_threshold", 82, base_breakdown={"score": 82}),
+                                   TAILORED])
+def test_resume_stores_its_report(client, settings, monkeypatch, match):
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(match=match))
+    application_id = new_application(client)
+    body = post_resume(client, {"application_id": application_id}).json()
+    report = reports_of(settings).get_report(application_id)
+    assert report.pop("generated_at")
+    assert report == {"version": 1, **body["match"], "saved_path": body["saved_path"], "base": match.base_breakdown,
+                      "tailored": match.tailored_breakdown, "rejected_terms": [dict(t) for t in match.rejected_terms]}
+    assert set(body["match"]) == {"status", "threshold", "base_score", "tailored_score", "added_terms"}
+
+
+def test_failed_regeneration_keeps_the_report(client, settings, monkeypatch):
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(match=TAILORED))
+    application_id = new_application(client)
+    post_resume(client, {"application_id": application_id})
+    before = reports_of(settings).get_report(application_id)
+    monkeypatch.setattr("app.main.generate_output", _failing_tailoring)
+    assert post_resume(client, {"application_id": application_id}).status_code == 500
+    assert reports_of(settings).get_report(application_id) == before
+
+
+def test_storage_failure_stores_no_report(settings, monkeypatch):
+    client = TestClient(create_app(settings, FakeStorage(fail=True)))
+    application_id = new_application(client)
+    assert post_resume(client, {"application_id": application_id}).status_code == 502
+    assert reports_of(settings).get_report(application_id) is None
+
+
+def test_report_store_failure_still_201(client, settings, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(match=TAILORED))
+    application_id = new_application(client, full_job_description="A posting about Kafka streaming platforms.")
+    expected = post_resume(client, {"application_id": application_id}).json()
+
+    def broken(*args):
+        raise ApplicationStoreError("OperationalError: disk I/O error")
+
+    monkeypatch.setattr("app.applications.ApplicationStore.save_report", broken)
+    caplog.clear()
+    r = post_resume(client, {"application_id": application_id})
+    assert (r.status_code, r.json()) == (201, expected)
+    # The earlier report described a different PDF, so it is removed rather than left stale.
+    assert reports_of(settings).get_report(application_id) is None
+    (error,) = [json.loads(rec.getMessage()) for rec in caplog.records if '"report_store_error"' in rec.getMessage()]
+    assert error == {"event": "report_store_error", "application_id": application_id,
+                     "error": "OperationalError: disk I/O error"}
+    assert resume_log_lines(caplog)[-1]["status"] == 201
+    for text in ("Kafka", "Airflow", "Runs Kafka streaming"):
+        assert text not in caplog.text
+
+
 def _failing_tailoring(application, settings):
     raise TailoringError("verify", "check_failed", failed_checks=["unknown_skill", "one_page"], run=RunStats(9, 0.43219))
 

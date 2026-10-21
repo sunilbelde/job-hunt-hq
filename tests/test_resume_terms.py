@@ -138,7 +138,14 @@ def test_judge_input_on_a_weak_match(tmp_path):
     out.mkdir()
     profile.write_text(PROFILE)
     write_out(work, "analysis.json", weak_analysis())
-    assert judge_input(work, out, profile) == (0, {"ok": True, "decision": "tailor", "base_score": 57, "candidates": 2})
+    code, result = judge_input(work, out, profile)
+    base = result.pop("base")
+    assert (code, result) == (0, {"ok": True, "decision": "tailor", "base_score": 57, "candidates": 2})
+    assert (base["score"], base["decision"]) == (57, "tailor")
+    assert [k["term"] for k in base["keywords"] if not k["present"]] == ["Kafka", "Airflow"]
+    assert [(r["id"], r["text"], r["counted"]) for r in base["requirements"]] == [
+        ("R1", "Builds LLM agents", "met"), ("R2", "Ships PySpark pipelines on AWS", "missing"),
+        ("R3", "Runs streaming systems on Kafka", "missing")]
     assert json.loads((out / "analysis.json").read_text()) == weak_analysis()
     text = (out / "judge-input.md").read_text()
     assert "- Airflow (scheduled ETL DAGs)" in text and text.endswith("- Kafka\n- Airflow\n")
@@ -149,7 +156,9 @@ def test_judge_input_on_a_strong_match_or_a_bad_analysis(tmp_path):
     out.mkdir()
     write_out(work, "analysis.json", ANALYSIS)
     missing_profile = tmp_path / "no-such-profile.md"
-    assert judge_input(work, out, missing_profile) == (0, {"ok": True, "decision": "keep", "base_score": 77, "candidates": 0})
+    code, result = judge_input(work, out, missing_profile)
+    assert (result.pop("base")["score"], code, result) == (
+        77, 0, {"ok": True, "decision": "keep", "base_score": 77, "candidates": 0})
     assert not (out / "judge-input.md").exists()
     write_out(work, "analysis.json", {"keywords": []})
     assert judge_input(work, out, missing_profile) == (1, {"ok": False, "failed": ["analysis_invalid"]})

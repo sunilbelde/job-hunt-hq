@@ -1,5 +1,6 @@
 #!/bin/sh
-# Smoke test: check that the public address serves no API docs and that the docs listener does,
+# Smoke test: check that the public address serves no API docs or resume viewer and that the docs
+# listener serves both,
 # then record a synthetic application on a running service, generate its resume, and check that
 # the file at the returned saved_path is a PDF. The application has no posting text, so the
 # service saves the base resume without starting a Claude run. Must run on the Mac itself, since it
@@ -42,29 +43,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The installed service is public, so it must never serve the API reference or its schema.
-for path in /docs /openapi.json; do
+# The installed service is public, so it must never serve the API reference, its schema or the viewer.
+for path in /docs /openapi.json /viewer; do
   status=$(curl -sS -o /dev/null -w '%{http_code}' "$base$path")
   if [ "$status" != "404" ]; then
-    echo "FAIL: GET $path returned $status, want 404 (API docs must be off on the installed service)" >&2
+    echo "FAIL: GET $path returned $status, want 404 (API docs and the viewer must be off on the public address)" >&2
     exit 1
   fi
 done
 
-# The docs listener (tailnet only) serves the reference and a schema with the six operations.
+# The docs listener (tailnet only) serves the reference, the viewer and a schema with the ten operations.
 if [ "$docs" != off ]; then
-  status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs/docs" || true)
-  if [ "$status" != "200" ]; then
-    echo "FAIL: GET $docs/docs returned $status, want 200 (is the docs listener running? DOCS_URL=off skips this)" >&2
-    exit 1
-  fi
+  for path in /docs /viewer; do
+    status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
+    if [ "$status" != "200" ]; then
+      echo "FAIL: GET $docs$path returned $status, want 200 (is the docs listener running? DOCS_URL=off skips this)" >&2
+      exit 1
+    fi
+  done
   resp=$(curl -sS -w '\n%{http_code}' "$docs/openapi.json" || true)
   status=$(printf '%s\n' "$resp" | tail -n 1)
   count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
 methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
 print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
-  if [ "$status" != "200" ] || [ "$count" != "6" ]; then
-    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 6" >&2
+  if [ "$status" != "200" ] || [ "$count" != "10" ]; then
+    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 10" >&2
     exit 1
   fi
 fi
