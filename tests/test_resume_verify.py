@@ -6,7 +6,8 @@ import pytest
 
 import resume_model
 from app.rendering import TEMPLATE_DIR
-from tests.tailoring_fixtures import ANALYSIS, PROFILE, content_json, prepare, run_tool, weak_analysis, write_out
+from tests.tailoring_fixtures import (ANALYSIS, FACTS_PROFILE, PROFILE, content_json, prepare, run_tool, weak_analysis,
+                                     write_out)
 
 BASE = resume_model.parse_base((TEMPLATE_DIR / "BASE.tex").read_text(encoding="utf-8"))
 needs_tectonic = pytest.mark.skipif(shutil.which("tectonic") is None, reason="tectonic not installed")
@@ -159,3 +160,32 @@ def test_the_work_folders_ruling_and_analysis_are_not_trusted(tmp_path):
     write_out(work, "analysis.json", tampered)  # and it dropped Airflow from the keywords
     code, out = verify(work, tmp_path / "resume.pdf", "--analysis", gate / "analysis.json", "--terms", gate / "terms.json")
     assert code == 1 and out["failed"] == ["unknown_skill", "unsupported_keyword"]
+
+
+FACT_BULLET = ("Evaluated the assistant on cross-domain benchmarks, achieving **75% source-field recall**, and "
+               "tuned prompts against the benchmark after each model change.")
+
+
+def add_fact_bullet(content):
+    content["jobs"][0]["bullets"][2] = {"text": FACT_BULLET, "sources": ["j1.b3", "j1.f2"]}
+
+
+@needs_tectonic
+def test_a_bullet_from_a_profile_fact_passes_with_the_services_profile(tmp_path):
+    work = tailored_run(tmp_path, change=add_fact_bullet)
+    (tmp_path / "PROFILE.md").write_text(FACTS_PROFILE)
+    code, out = verify(work, tmp_path / "resume.pdf", "--profile", tmp_path / "PROFILE.md")
+    assert code == 0 and out["ok"], out
+    assert "tuned prompts against the benchmark after each model change." in pdf_text(tmp_path / "resume.pdf")
+
+
+def test_a_fact_the_run_adds_fails_at_the_gate(tmp_path):
+    """The run writes a fact into its own out/base.json and cites it; the service's profile has no such fact."""
+    work = tailored_run(tmp_path, change=add_fact_bullet)
+    base = json.loads((work / "out" / "base.json").read_text())
+    base["jobs"][0]["facts"] = [{"id": "j1.f2", "text": "Tuned prompts against the benchmark after each model change."}]
+    write_out(work, "base.json", base)
+    (tmp_path / "PROFILE.md").write_text(PROFILE)
+    code, out = verify(work, tmp_path / "resume.pdf", "--profile", tmp_path / "PROFILE.md")
+    assert (code, out["ok"], out["stage"], out["failed"]) == (1, False, "content", ["missing_source"])
+    assert not (tmp_path / "resume.pdf").exists()

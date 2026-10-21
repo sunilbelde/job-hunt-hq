@@ -23,8 +23,19 @@
 
 ## Keywords: 5 to 40
 
-The posting's hard skills, tools, platforms, methods and domain terms: the words a recruiter or an
-applicant-tracking system would search for.
+The posting's hard skills, tools, languages, platforms, methods and standard terms of the field: the words
+a recruiter or an applicant-tracking system would type into a search box.
+
+- Test each candidate: would two unrelated postings in the field use the same term for the same thing? If
+  so, it is a keyword. If it is this posting's own way of describing its work, it is not.
+- Phrasing that is not a keyword goes into a requirement's `text`, where the assessment can judge it by
+  the work the resume shows. A missing keyword pushes tailoring to paste the phrase into a bullet, which
+  reads as copied from the posting.
+- Example, for an applied AI posting about coding agents: `Python`, `evals`, `fine-tuning`,
+  `prompt engineering` and `latency` are keywords. "long-horizon workflows", "failure modes", "context
+  construction", "feedback loops" and "real-world coding tasks" are the posting's phrasing: they belong in
+  requirements such as "Designs and iterates on agent behaviors across real-world coding tasks and
+  long-horizon workflows".
 
 - `importance`: `required` for what the posting requires (requirements, must have, minimum
   qualifications); `preferred` for nice to have, bonus or preferred qualifications.
@@ -41,8 +52,12 @@ seniority, domain, years, education. Give each a short `text` and an `id` (`R1`,
 
 ## Assessment: one entry per requirement
 
-- `status`: `met` when the base resume clearly shows it, `partial` for related or partly matching
-  experience, `missing` when it does not show it.
+- `status`: `met` when the quoted passages together show every part of the requirement, `partial` when
+  they show some parts or related experience, `missing` when the resume does not show it. A requirement
+  such as "Develops evals measuring performance and regressions" needs both parts for `met`: benchmark
+  evaluation alone is `partial`.
+- Judge by the work, not the wording. A passage that describes the work the requirement asks for counts,
+  whatever words it uses: "Evaluated the assistant on cross-domain benchmarks" shows running evals.
 - `evidence`: quotes copied exactly from `out/base.json` `text`, each at least 3 words. Case and spacing
   do not matter, but every quote must appear in the text; otherwise the requirement counts as missing.
   For experience, quote the bullet that proves it, not only a skills line.
@@ -58,7 +73,8 @@ or more the base resume is kept.
 
 ## out/assessment_tailored.json
 
-The same requirement ids with the same rules, quoting the tailored resume instead. `run score tailored`
+The same requirement ids with the same rules, including the every-part rule for `met`, quoting the
+tailored resume instead. `run score tailored`
 checks the quotes against the tailored text.
 
 ```json

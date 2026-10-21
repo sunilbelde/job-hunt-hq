@@ -1,12 +1,13 @@
 """Command line of the tailor-resume skill. Run it through the `run` launcher next to this file.
 
-    run prepare --template <dir> --out <work folder> [--posting <file>]
+    run prepare --template <dir> --out <work folder> [--posting <file>] [--profile <file>]
     run score base|tailored [--work <work folder>]
     run terms [--work <work folder>]
     run build [--work <work folder>]
     run judge-input --template <dir> --profile <file> --work <work folder> --out <dir>
     run judge-result --template <dir> --profile <file> --analysis <file> [--verdicts <file>] --out <file>
-    run verify --template <dir> --work <work folder> [--analysis <file>] [--terms <file>] --pdf-out <file>
+    run verify --template <dir> --work <work folder> [--profile <file>] [--analysis <file>] [--terms <file>]
+               --pdf-out <file>
 
 Subcommands that read a work folder default to the current directory. `judge-input`, `judge-result` and
 `verify` are the service's: they run from the repo's copy of this script, never inside a Claude run.
@@ -24,6 +25,9 @@ import resume_terms
 
 TEMPLATE_FILES = ("BASE.tex", "resume.cls")
 TERMS = Path("judge") / "terms.json"  # in the work folder: the judge's ruling, written by the service
+COVERAGE = Path("out") / "coverage.json"  # in the work folder: the run's plan for the weak requirements
+PROFILE = "PROFILE.md"  # in the work folder's template/: prepare's copy of the owner's profile
+PROFILE_INVALID_EXIT = 4  # prepare's exit code when the profile names an employer the resume lacks
 JUDGE_PENDING = ("The judge has not ruled yet on the posting keywords the base resume lacks ({path} is missing). "
                  "Stop here and reply with one line: waiting for the judge. In the service it runs next and "
                  "this skill starts again; in an interactive session, the owner runs "
@@ -48,8 +52,14 @@ def write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def load_base(template: Path) -> resume_model.BaseResume:
-    return resume_model.parse_base((template / "BASE.tex").read_text(encoding="utf-8"))
+def load_base(template: Path, profile: Path | None = None) -> resume_model.BaseResume:
+    """The base resume, each job carrying the facts `profile` lists for it (none without a profile)."""
+    base = resume_model.parse_base((template / "BASE.tex").read_text(encoding="utf-8"))
+    return resume_terms.attach_facts(base, resume_terms.parse_profile(_profile_text(profile)))
+
+
+def load_work_base(work: Path) -> resume_model.BaseResume:
+    return load_base(work / "template", work / "template" / PROFILE)
 
 
 def load_analysis(work: Path, path: Path | None = None) -> dict:
@@ -68,30 +78,37 @@ def load_terms(path: Path) -> resume_terms.Terms | None:
         raise ToolError(f"{path.name} is not a ruling written by judge-result: {exc}") from None
 
 
+def _profile_text(path: Path | None) -> str | None:
+    return path.read_text(encoding="utf-8") if path is not None and path.is_file() else None
+
+
 def read_profile(path: Path | None) -> list[str]:
-    """The owner's profile list. A missing file is an empty list: the judge then has only the resume."""
-    if path is None or not path.is_file():
-        return []
-    return resume_terms.profile_entries(path.read_text(encoding="utf-8"))
+    """The owner's profile skills. A missing file is an empty list: the judge then has only the resume."""
+    return resume_terms.profile_entries(_profile_text(path))
 
 
 def cmd_prepare(args) -> int:
     template, work = Path(args.template), Path(args.out)
-    base = load_base(template)
+    profile = Path(args.profile) if args.profile else None
+    base = load_base(template, profile)
     (work / "template").mkdir(parents=True, exist_ok=True)
     for name in TEMPLATE_FILES:
         shutil.copyfile(template / name, work / "template" / name)
+    if profile is not None and profile.is_file():
+        shutil.copyfile(profile, work / "template" / PROFILE)
     if args.posting:
         shutil.copyfile(args.posting, work / "posting.md")
     write_json(work / "out" / "base.json", base.to_json())
     bullets = sum(len(job.bullets) for job in base.jobs)
-    print(f"prepared {work}: {len(base.jobs)} jobs, {bullets} bullets, {len(base.skills)} skills lines -> out/base.json")
+    facts = sum(len(job.facts) for job in base.jobs)
+    print(f"prepared {work}: {len(base.jobs)} jobs, {bullets} bullets, {facts} profile facts, "
+          f"{len(base.skills)} skills lines -> out/base.json")
     return 0
 
 
 def cmd_score(args) -> int:
     work = Path(args.work)
-    base = load_base(work / "template")
+    base = load_work_base(work)
     analysis = load_analysis(work)
     if args.which == "base":
         assessment, content = analysis["assessment"], base.content()
@@ -103,6 +120,9 @@ def cmd_score(args) -> int:
                                 resume_model.resume_text(base, content))
     write_json(work / "out" / f"score_{args.which}.json", result.to_json())
     print(result.summary(args.which))
+    if args.which == "tailored" and (work / COVERAGE).is_file():
+        for line in resume_checks.planned_not_met(read_json(work / COVERAGE), assessment):
+            print(line)
     if args.which == "base":
         threshold = resume_score.THRESHOLD
         print(f"decision: {threshold} or more, keep the base resume and stop" if result.decision == "keep"
@@ -111,9 +131,10 @@ def cmd_score(args) -> int:
 
 
 def build_report(base, content, keywords: list[dict], cls: Path, build_dir: Path | None = None,
-                 terms: resume_terms.Terms | None = None) -> tuple[dict, bytes | None]:
-    """Every check on `content`, compiling it unless it cannot be rendered. Returns the report and the PDF."""
-    failed, warnings = resume_checks.check_content(base, content, keywords, terms)
+                 terms: resume_terms.Terms | None = None, posting: str | None = None) -> tuple[dict, bytes | None]:
+    """Every check on `content`, compiling it unless it cannot be rendered. Returns the report and the PDF.
+    `posting` enables the soft echoed phrase check; the gate leaves it out."""
+    failed, warnings = resume_checks.check_content(base, content, keywords, terms, posting)
     layout, pdf = None, None
     if not any(item["code"] in resume_checks.UNRENDERABLE for item in failed):
         rendered = resume_model.render(base, content)
@@ -175,7 +196,7 @@ def cmd_build(args) -> int:
     if terms is None:
         print("build refused. " + JUDGE_PENDING.format(path=TERMS))
         return 1
-    base = load_base(work / "template")
+    base = load_work_base(work)
     analysis = load_analysis(work)
     counter = work / "out" / "build" / "count"
     number = int(counter.read_text()) + 1 if counter.is_file() else 1
@@ -186,8 +207,13 @@ def cmd_build(args) -> int:
     except resume_model.ContentError as exc:
         report = {"passed": False, "failed": [{"code": exc.code, "detail": exc.detail}], "warnings": [], "layout": None}
     else:
+        posting = work / "posting.md"
         report, _ = build_report(base, content, analysis["keywords"], work / "template" / "resume.cls",
-                                 work / "out" / "build", terms)
+                                 work / "out" / "build", terms,
+                                 posting.read_text(encoding="utf-8") if posting.is_file() else None)
+        plan = read_json(work / COVERAGE) if (work / COVERAGE).is_file() else None
+        report["failed"] += resume_checks.check_coverage(plan, analysis, base)
+        report["passed"] = not report["failed"]
     report["build"] = number
     write_json(work / "out" / "check.json", report)
     print(format_report(report))
@@ -207,7 +233,7 @@ def cmd_judge_input(args) -> int:
     the judge's input for the keywords the base resume lacks to --out/judge-input.md. It prints one JSON
     object with the decision, the base score, its breakdown and the number of keywords to judge.
     """
-    base = load_base(Path(args.template))
+    base = load_base(Path(args.template), Path(args.profile))
     out = Path(args.out)
     try:
         analysis = load_analysis(Path(args.work))
@@ -229,11 +255,12 @@ def cmd_judge_input(args) -> int:
 def cmd_judge_result(args) -> int:
     """Check the judge's verdicts and write the ruling the tailoring run and the gate use.
 
-    Without --verdicts (the judge did not run, as when there is nothing to judge), every keyword the base
-    resume lacks is rejected. Prints {"ok", "approved", "rejected"}; a verdicts file that is missing or not
+    Keywords a profile fact states are approved for the bullets citing those facts, without the judge.
+    Without --verdicts (the judge did not run, as when there is nothing to judge), every other keyword the
+    base resume lacks is rejected. Prints {"ok", "approved", "rejected"}; a verdicts file that is missing or not
     a verdicts object fails with "judge_invalid".
     """
-    base = load_base(Path(args.template))
+    base = load_base(Path(args.template), Path(args.profile))
     analysis = load_analysis(None, Path(args.analysis))
     keywords = resume_terms.candidates(base, analysis["keywords"])
     try:
@@ -241,6 +268,7 @@ def cmd_judge_result(args) -> int:
         terms = resume_terms.rule(verdicts, keywords, base, read_profile(Path(args.profile)))
     except (ToolError, resume_terms.VerdictError):
         return _print_json({"ok": False, "failed": ["judge_invalid"]}, False)
+    terms.approved = resume_terms.from_facts(base, analysis["keywords"]) + terms.approved
     write_json(Path(args.out), terms.to_json())
     return _print_json({"ok": True, "approved": len(terms.approved), "rejected": len(terms.rejected)}, True)
 
@@ -248,10 +276,10 @@ def cmd_judge_result(args) -> int:
 def cmd_verify(args) -> int:
     """The service's final gate, run from the repo's own copy of this script.
 
-    It reads only the run's JSON files from --work and builds everything else from --template, so
-    nothing a run changed in its folder can reach the saved resume. --analysis and --terms name the
-    service's own copies of the analysis and the judge's ruling; without --terms no posting keyword the
-    base resume lacks is allowed. It prints one JSON object with scores and their breakdowns, check codes,
+    It reads only the run's JSON files from --work and builds everything else from --template and
+    --profile, so nothing a run changed in its folder can reach the saved resume: a fact the run adds to
+    its out/base.json is not a source here. --analysis and --terms name the service's own copies of the
+    analysis and the judge's ruling; without --terms no posting keyword the base resume lacks is allowed. It prints one JSON object with scores and their breakdowns, check codes,
     the approved keywords used and the rejected ones, never file contents, and writes the PDF only when
     every check passes.
     """
@@ -266,9 +294,11 @@ def cmd_verify(args) -> int:
         return 0 if result["ok"] else 1
 
     try:
-        base = load_base(template)
+        base = load_base(template, Path(args.profile) if args.profile else None)
     except (OSError, resume_model.ModelError):
         return finish("template", ["template_invalid"])
+    except resume_terms.ProfileError:
+        return finish("template", ["profile_invalid"])
     try:
         analysis = load_analysis(work, Path(args.analysis) if args.analysis else None)
         terms = load_terms(Path(args.terms)) if args.terms else None
@@ -313,6 +343,7 @@ def main(argv=None) -> int:
     prepare.add_argument("--template", required=True, help="folder holding BASE.tex and resume.cls")
     prepare.add_argument("--out", required=True, help="work folder to create or refresh")
     prepare.add_argument("--posting", help="posting text to copy to <work folder>/posting.md")
+    prepare.add_argument("--profile", help="the owner's profile (data/PROFILE.md) to copy to template/; may be missing")
     prepare.set_defaults(func=cmd_prepare)
 
     score = sub.add_parser("score", help="score the base or the tailored resume against out/analysis.json")
@@ -346,6 +377,7 @@ def main(argv=None) -> int:
     verify = sub.add_parser("verify", help="the service's gate: recheck a finished run and write the PDF to save")
     verify.add_argument("--template", required=True, help="the service's own folder holding BASE.tex and resume.cls")
     verify.add_argument("--work", required=True, help="the run's work folder; only its out/*.json files are read")
+    verify.add_argument("--profile", help="the service's own profile (data/PROFILE.md); without it no fact may be cited")
     verify.add_argument("--analysis", help="the analysis copy judge-input wrote (default: the work folder's)")
     verify.add_argument("--terms", help="the judge's ruling from judge-result (default: no keyword approved)")
     verify.add_argument("--pdf-out", required=True, help="where to write the PDF when every check passes")
@@ -354,6 +386,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
+    except resume_terms.ProfileError as exc:
+        print(f"{args.command} failed: profile_invalid: {exc}", file=sys.stderr)
+        return PROFILE_INVALID_EXIT
     except (ToolError, resume_model.ModelError, resume_model.ContentError, resume_score.AnalysisError) as exc:
         print(f"{args.command} failed: {exc}", file=sys.stderr)
         return 1

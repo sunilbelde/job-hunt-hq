@@ -48,6 +48,20 @@ Skills beyond the resume. Only the list below counts.
 - Post-training
 """
 
+# PROFILE with an Experience section: two facts for Capital One (j1) and one for Dockskiff (j3).
+FACTS_PROFILE = PROFILE + """
+## Experience
+
+Facts about each job, under the employer's name.
+
+### Capital One
+- Ran **Kafka** replay benchmarks comparing 3 model families on the mapping task.
+- Tuned prompts against the benchmark after each model change.
+
+### Dockskiff
+- Reviewed OCR failures with the labeling team.
+"""
+
 
 def weak_analysis() -> dict:
     """The same posting judged more strictly: requirements 2 of 5, score 57, so the resume gets tailored."""
@@ -60,14 +74,23 @@ def run_tool(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess
     return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True, timeout=180, cwd=cwd)
 
 
-def prepare(work: Path, template: Path = TEMPLATE_DIR) -> Path:
-    result = run_tool("prepare", "--template", str(template), "--out", str(work))
+def prepare(work: Path, template: Path = TEMPLATE_DIR, profile: Path | None = None) -> Path:
+    extra = ["--profile", str(profile)] if profile else []
+    result = run_tool("prepare", "--template", str(template), "--out", str(work), *extra)
     assert result.returncode == 0, result.stderr
     return work
 
 
 def write_out(work: Path, name: str, data) -> None:
     (work / "out" / name).write_text(json.dumps(data), encoding="utf-8")
+
+
+def write_coverage(work: Path, analysis: dict, sources: dict | None = None) -> None:
+    """out/coverage.json planning every requirement `analysis` does not mark met; `sources` maps some of
+    them to bullet or fact IDs, the rest get none."""
+    plan = {rid: {"sources": (sources or {}).get(rid, []), "note": ""}
+            for rid, entry in analysis["assessment"].items() if entry["status"] != "met"}
+    write_out(work, "coverage.json", plan)
 
 
 def write_terms(work: Path, terms: dict | None = None) -> None:

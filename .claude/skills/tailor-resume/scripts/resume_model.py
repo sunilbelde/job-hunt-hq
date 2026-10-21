@@ -5,7 +5,7 @@ into TeX, replacing only the TECHNICAL SKILLS lines and each job's \\item lines 
 header, education, job headings, spacing commands and certifications stay the base file's own lines.
 """
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 SECTIONS = ("EDUCATION", "TECHNICAL SKILLS", "EXPERIENCE", "CERTIFICATIONS")
 TEX_SPECIALS = {"&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_", "{": r"\{", "}": r"\}",
@@ -46,6 +46,12 @@ class Bullet:
 
 
 @dataclass
+class Fact:
+    id: str  # "j1.f1": a fact of job j1 from the owner's profile (data/PROFILE.md), never printed as is
+    text: str  # markup
+
+
+@dataclass
 class Job:
     id: str
     heading: str  # plain text: "Company, Title | Location | Dates"
@@ -53,6 +59,7 @@ class Job:
     span: tuple[int, int]  # indexes of the first \item line and of the line after the last one
     indent: str
     spaced: bool  # BASE.tex leaves blank lines between this job's \item lines
+    facts: list[Fact] = field(default_factory=list)
 
 
 @dataclass
@@ -87,6 +94,10 @@ class BaseResume:
     def bullets(self) -> dict[str, tuple[Job, Bullet]]:
         return {b.id: (job, b) for job in self.jobs for b in job.bullets}
 
+    def sources(self) -> dict[str, tuple[Job, Bullet | Fact]]:
+        """What a tailored bullet may cite: the base bullets and the profile facts, by ID."""
+        return {s.id: (job, s) for job in self.jobs for s in [*job.bullets, *job.facts]}
+
     def content(self) -> Content:
         """The base resume as content, each bullet citing itself."""
         return Content(
@@ -97,7 +108,8 @@ class BaseResume:
     def to_json(self) -> dict:
         return {
             "skills": [{"label": s.label, "items": s.items} for s in self.skills],
-            "jobs": [{"id": j.id, "heading": j.heading, "bullets": [{"id": b.id, "text": b.text} for b in j.bullets]}
+            "jobs": [{"id": j.id, "heading": j.heading, "bullets": [{"id": b.id, "text": b.text} for b in j.bullets],
+                      "facts": [{"id": f.id, "text": f.text} for f in j.facts]}
                      for j in self.jobs],
             "text": resume_text(self, self.content()),
         }

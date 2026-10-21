@@ -116,6 +116,7 @@ def test_work_folder_layout(temp_root):
         assert not list(skill.rglob("__pycache__"))
         assert (work / "template" / "BASE.tex").is_file() and (work / "out" / "base.json").is_file()
         assert (work / "posting.md").read_text().startswith("# Job posting")
+        assert (work / "template" / "PROFILE.md").read_text() == PROFILE
         assert (work / ".tmp").is_dir()
     finally:
         shutil.rmtree(work)
@@ -129,6 +130,23 @@ def test_failed_prepare_removes_the_folder(temp_root, tmp_path, monkeypatch):
         tailoring._prepare_work(application())
     assert (exc.value.reason, exc.value.exit_code) == ("prepare_failed", 3)
     assert list(temp_root.iterdir()) == []
+
+
+def test_a_profile_naming_an_unknown_employer_starts_no_run(tmp_path, temp_root, profile):
+    profile.write_text("## Experience\n\n### Globex\n- Shipped a thing.\n")
+    claude = fake_claude.install(tmp_path / "fake", "keep")
+    with pytest.raises(TailoringError) as exc:
+        tailoring.run(application(), settings_for(tmp_path, claude))
+    assert (exc.value.stage, exc.value.reason, exc.value.exit_code) == ("prepare", "profile_invalid", 4)
+    assert roles(claude) == [] and list(temp_root.iterdir()) == []
+
+
+def test_the_gate_checks_against_the_services_profile(tmp_path, monkeypatch, profile):
+    seen = []
+    monkeypatch.setattr(tailoring, "_tool", lambda args, timeout: seen.append(list(map(str, args))) or {"ok": True})
+    tailoring._verify(tmp_path / "work", tmp_path / "gate", RunStats())
+    (args,) = seen
+    assert args[0] == "verify" and flag(args, "--profile") == str(profile)
 
 
 # --- the Claude run ---
@@ -204,7 +222,7 @@ def test_weak_match_returns_the_gate_pdf(tmp_path, temp_root):
     assert (result.match.base_breakdown["score"], result.match.tailored_breakdown["score"]) == (57, 81)
     assert [r["text"] for r in result.match.tailored_breakdown["requirements"]] == [
         r["text"] for r in weak_analysis()["requirements"]]
-    assert result.match.rejected_terms == ({"term": "Kafka", "reason": "rejected by the judge"},)
+    assert result.match.rejected_terms == ({"term": "Kafka", "reason": "Nothing shows Kafka."},)
     assert set(result.match.to_dict()) == {"status", "threshold", "base_score", "tailored_score", "added_terms"}
     assert result.pdf.startswith(b"%PDF")
     assert roles(claude) == ["analysis", "judge", "tailoring"]
