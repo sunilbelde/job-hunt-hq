@@ -5,8 +5,9 @@ Every finding is a dict with a `code`, an optional `where` (a skills line, a key
 "j2#1") and a `detail` that says what to change. Hard findings reject the content; soft ones are targets
 and warnings the skill keeps revising toward.
 
-The facts come from the base resume. The one addition is the posting keywords the judge approved
-(resume_terms.Terms), each only where the judge's evidence allows it.
+The facts come from the base resume and the owner's profile facts (jN.fK), which a bullet of the same
+job may cite like a base bullet. The one addition is the posting keywords the judge or a profile fact
+approved (resume_terms.Terms), each only where its evidence allows it.
 """
 import io
 import re
@@ -28,6 +29,12 @@ MAX_SKILL_CHARS = 80
 UNRENDERABLE = {"structure_mismatch", "invalid_text"}  # content with these cannot be compiled
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
+_WORD = re.compile(r"\w+")
+ECHO_WORDS = 3  # soft: a run of this many words copied from the posting reads as pasted
+ECHO_CONTENT_WORDS = 2  # ... when at least this many of them are not stopwords
+STOPWORDS = frozenset(
+    "a an and are as at be by for from has have in into is it its of on or our over than that the their this "
+    "to via was we were what when which while who will with you your".split())
 
 COMPILE_TIMEOUT = 90
 MARGIN_PT = 36.0  # the 0.5 in geometry margins of BASE.tex
@@ -41,23 +48,23 @@ _OVERFULL = re.compile(r"Overfull \\hbox \((?P<by>[\d.]+)pt too wide\).*?at line
 
 
 def check_content(base: BaseResume, content: Content, keywords: list[dict],
-                  terms: Terms | None = None) -> tuple[list[dict], list[dict]]:
-    """Hard findings and warnings for tailored content, checked against the base resume and the posting
-    keywords the judge approved (`terms`; None means none were).
+                  terms: Terms | None = None, posting: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Hard findings and warnings for tailored content, checked against the base resume with its profile
+    facts and the approved posting keywords (`terms`; None means none were). With the posting text, bullets
+    that copy its phrasing are warned about too (`echoed_phrase`).
 
     The header, education, job headings and certifications are not in the content at all, so they
     cannot change; these checks cover what can.
     """
-    # TODO(profile-doc): the owner's profile list (data/PROFILE.md) reaches tailoring only through the
-    # judge's approved keywords. Once it grows into the full profile document, bullet sources and numbers
-    # may also come from it, and every check here compares against the base resume and the profile together.
     terms = terms or Terms()
     errors, warnings = _structure(base, content), []
     if any(e["code"] == "structure_mismatch" for e in errors):
         return errors, warnings
     base_text = normalize(resume_text(base, base.content()))
     errors += _skills(base, content, base_text, terms)
-    bullet_errors, bullet_warnings = _bullets(base, content, base_text, terms)
+    facts_text = "\n".join(normalize(markup_to_plain(f.text)) for job in base.jobs for f in job.facts)
+    echoes = _grams(posting) if posting else set()
+    bullet_errors, bullet_warnings = _bullets(base, content, f"{base_text}\n{facts_text}", terms, echoes)
     errors += bullet_errors
     warnings += bullet_warnings
     if not any(e["code"] == "invalid_text" for e in errors):
@@ -107,9 +114,12 @@ def _skills(base: BaseResume, content: Content, base_text: str, terms: Terms) ->
     return errors
 
 
-def _bullets(base: BaseResume, content: Content, base_text: str, terms: Terms) -> tuple[list[dict], list[dict]]:
+def _bullets(base: BaseResume, content: Content, source_text: str, terms: Terms,
+             posting_grams: set[tuple[str, ...]]) -> tuple[list[dict], list[dict]]:
+    """`source_text`: the base resume and the profile facts, normalized, for the bold phrase check.
+    `posting_grams`: the posting's word runs, for the echoed phrase check (empty to skip it)."""
     errors, warnings = [], []
-    base_bullets = base.bullets()
+    base_sources = base.sources()
     for job in content.jobs:
         for n, bullet in enumerate(job.bullets, 1):
             where = f"{job.id}#{n}"
@@ -119,28 +129,67 @@ def _bullets(base: BaseResume, content: Content, base_text: str, terms: Terms) -
                 continue
             sources = []
             if not bullet.sources:
-                errors.append({"code": "missing_source", "where": where, "detail": f"cite the {job.id}.bN bullets it comes from"})
+                errors.append({"code": "missing_source", "where": where,
+                               "detail": f"cite the {job.id}.bN bullets or {job.id}.fN facts it comes from"})
             for source in bullet.sources:
-                if source not in base_bullets:
-                    errors.append({"code": "missing_source", "where": where, "detail": f"{source} is not a base bullet"})
-                elif base_bullets[source][0].id != job.id:
+                if source not in base_sources:
+                    errors.append({"code": "missing_source", "where": where,
+                                   "detail": f"{source} is not a base bullet or a profile fact"})
+                elif base_sources[source][0].id != job.id:
                     errors.append({"code": "foreign_source", "where": where,
-                                   "detail": f"{source} belongs to {base_bullets[source][0].id}; a bullet stays under its own job"})
+                                   "detail": f"{source} belongs to {base_sources[source][0].id}; a bullet stays under its own job"})
                 else:
-                    sources.append(markup_to_plain(base_bullets[source][1].text))
+                    sources.append(markup_to_plain(base_sources[source][1].text))
             if sources:
                 allowed = {n for text in sources for n in _NUMBER.findall(text)}
                 extra = sorted(set(_NUMBER.findall(markup_to_plain(bullet.text))) - allowed)
                 if extra:
                     errors.append({"code": "unsupported_number", "where": where,
                                    "detail": f"{', '.join(extra)} not in its sources; keep numbers exactly as in the sources"})
+            for phrase in _echoes(bullet.text, " ".join(sources), posting_grams):
+                warnings.append({"code": "echoed_phrase", "where": where,
+                                 "detail": f'"{phrase}" is copied from the posting; describe the work in the '
+                                           "owner's own words"})
             for phrase in _BOLD.findall(bullet.text):
-                if not keyword_present(base_text, {"term": phrase}) and normalize(phrase) not in terms.forms():
+                if not keyword_present(source_text, {"term": phrase}) and normalize(phrase) not in terms.forms():
                     warnings.append({"code": "new_bold_phrase", "where": where,
-                                     "detail": f"**{phrase}** is not a phrase of the base resume; make sure it states the same fact"})
+                                     "detail": f"**{phrase}** is not a phrase of the base resume or the profile facts; "
+                                               "make sure it states the same fact"})
             if not bullet.text.endswith("."):
                 warnings.append({"code": "no_final_period", "where": where, "detail": "base bullets end with a period"})
     return errors, warnings
+
+
+def _words(text: str) -> list[str]:
+    """Words for phrase matching: normalized, hyphens and slashes split, punctuation dropped."""
+    return _WORD.findall(normalize(markup_to_plain(text)).replace("-", " ").replace("/", " "))
+
+
+def _grams(text: str) -> set[tuple[str, ...]]:
+    words = _words(text)
+    return {tuple(words[i:i + ECHO_WORDS]) for i in range(len(words) - ECHO_WORDS + 1)}
+
+
+def _echoes(bullet: str, sources: str, posting_grams: set[tuple[str, ...]]) -> list[str]:
+    """The runs of the bullet's words that the posting has and its sources do not, each at least ECHO_WORDS
+    long with ECHO_CONTENT_WORDS words that are not stopwords. Overlapping runs are joined into one phrase."""
+    if not posting_grams:
+        return []
+    words, own = _words(bullet), _grams(sources)
+    hits = [i for i in range(len(words) - ECHO_WORDS + 1)
+            if (gram := tuple(words[i:i + ECHO_WORDS])) in posting_grams and gram not in own
+            and sum(w not in STOPWORDS for w in gram) >= ECHO_CONTENT_WORDS]
+    phrases, start, end = [], None, None
+    for i in hits:
+        if start is not None and i <= end:
+            end = i + ECHO_WORDS
+            continue
+        if start is not None:
+            phrases.append(" ".join(words[start:end]))
+        start, end = i, i + ECHO_WORDS
+    if start is not None:
+        phrases.append(" ".join(words[start:end]))
+    return phrases
 
 
 def _keywords(base_text: str, tailored_text: str, keywords: list[dict], terms: Terms) -> list[dict]:
@@ -158,18 +207,63 @@ def _keywords(base_text: str, tailored_text: str, keywords: list[dict], terms: T
 
 
 def _placement(content: Content, terms: Terms) -> list[dict]:
-    """An approved keyword may appear in a bullet only when the bullet cites a base bullet holding the
-    judge's resume evidence for it. Skills lines may hold it anywhere (see _skills)."""
+    """An approved keyword may appear in a bullet only when the bullet cites a base bullet or fact holding
+    its evidence. Skills lines may hold it anywhere (see _skills)."""
     errors = []
     for job in content.jobs:
         for n, bullet in enumerate(job.bullets, 1):
             text = normalize(markup_to_plain(bullet.text))
             for approved in terms.approved:
-                if keyword_present(text, approved.keyword()) and not set(approved.bullets) & set(bullet.sources):
+                if keyword_present(text, approved.keyword()) and not set(approved.sources) & set(bullet.sources):
                     errors.append({"code": "misplaced_keyword", "where": f"{job.id}#{n}",
                                    "detail": f"{approved.term!r} was approved for {approved.where()}; "
                                              "remove it from this bullet"})
     return errors
+
+
+def check_coverage(plan, analysis: dict, base: BaseResume) -> list[dict]:
+    """Hard findings for out/coverage.json, the run's plan for the requirements the base resume does not
+    meet: {"R4": {"sources": ["j1.b1", "j1.f2"], "note": "..."}}. Every such requirement must be planned,
+    with the base bullets and profile facts that show it (an empty list when none do)."""
+    if plan is None:
+        return [{"code": "coverage_plan", "detail": "write out/coverage.json first: each requirement the base "
+                                                    "assessment does not mark met, with the bullets and facts that show it"}]
+    if not isinstance(plan, dict):
+        return [{"code": "coverage_plan", "detail": 'expected {"R1": {"sources": [...], "note": "..."}, ...}'}]
+    errors = []
+    ids = [req["id"] for req in analysis["requirements"]]
+    weak = [rid for rid in ids if analysis["assessment"][rid]["status"] != "met"]
+    known = base.sources()
+    for rid in weak:
+        if rid not in plan:
+            errors.append({"code": "coverage_plan", "where": rid, "detail": "the base resume does not meet it; plan it"})
+    for rid, entry in plan.items():
+        if rid not in ids:
+            errors.append({"code": "coverage_plan", "where": rid, "detail": "not a requirement of out/analysis.json"})
+            continue
+        sources = entry.get("sources") if isinstance(entry, dict) else None
+        if not isinstance(sources, list) or not all(isinstance(x, str) for x in sources):
+            errors.append({"code": "coverage_plan", "where": rid, "detail": 'expected {"sources": ["jN.bK", "jN.fK", ...]}'})
+            continue
+        unknown = [x for x in sources if x not in known]
+        if unknown:
+            errors.append({"code": "coverage_plan", "where": rid,
+                           "detail": f"{', '.join(unknown)} is not a base bullet or a profile fact"})
+    return errors
+
+
+def planned_not_met(plan, assessment: dict) -> list[str]:
+    """Lines for `run score tailored`: planned requirements with sources that the tailored assessment does
+    not mark met."""
+    if not isinstance(plan, dict):
+        return []
+    lines = []
+    for rid, entry in plan.items():
+        sources = entry.get("sources") if isinstance(entry, dict) else None
+        status = (assessment.get(rid) or {}).get("status")
+        if sources and status != "met":
+            lines.append(f"planned, not met: {rid} ({', '.join(sources)}); assessed {status or 'missing'}")
+    return lines
 
 
 def added_keywords(base: BaseResume, content: Content, terms: Terms) -> list[str]:

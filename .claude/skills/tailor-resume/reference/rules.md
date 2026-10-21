@@ -37,18 +37,20 @@ section order and job order come from the base resume. They are not in this file
 
 ## Bullets
 
-- `sources` lists the base bullets a bullet comes from, all of the same job (`missing_source`,
-  `foreign_source`). A merged bullet cites both of its sources; a split bullet cites its one source in
-  both halves.
-- Allowed: rewording with the posting's terms when they name the same thing; reordering bullets by
-  relevance; merging, splitting and dropping bullets.
+- `sources` lists the base bullets (`j1.b3`) and profile facts (`j1.f2`) a bullet comes from, all of the
+  same job (`missing_source`, `foreign_source`). A merged bullet cites both of its sources; a split
+  bullet cites its one source in both halves. A bullet may come from facts alone, or join a fact to the
+  base bullet about the same work.
+- Allowed: rewording so the work a requirement asks for is plain to see; using a standard term of the
+  field when it names the same thing; reordering bullets by relevance; merging, splitting and dropping
+  bullets.
 - Never: adding a tool, skill, metric, scope, team size, customer or outcome that the sources do not
-  state, or moving a bullet to another job.
+  state, moving a bullet to another job, or copying the posting's own phrasing (`echoed_phrase`).
 - Numbers: every number must appear in the bullet's sources, written the same way (`unsupported_number`).
 - Keywords: never mention a posting keyword that the base resume lacks (`unsupported_keyword`) unless
   `run terms` lists it as approved. Then use it only where it says: in a skills line, or in a bullet
-  that cites one of the base bullets it names (`misplaced_keyword`), and only for what its evidence
-  shows. Keep at least one mention of each posting keyword the base resume has (`lost_keyword`).
+  that cites one of the base bullets or facts it names (`misplaced_keyword`), and only for what its
+  evidence shows. Keep at least one mention of each posting keyword the base resume has (`lost_keyword`).
 - Text: plain text with `**bold**` and `*italic*` only. No backslashes and no TeX; `%`, `&` and `$` print
   as written. At most 400 characters, ending with a period like the base bullets.
 - Bold the terms the posting cares about, using phrases from the base resume (`new_bold_phrase` warns
@@ -59,6 +61,12 @@ section order and job order come from the base resume. They are not in this file
 - Allowed: the posting asks for "LLM agents" and j1.b1 says "using the **ReAct agentic AI pattern**". The
   same work may be called an LLM agent. List `agentic AI` as an alias of the keyword in `analysis.json`,
   so the scripts can see the base resume already has it.
+- Allowed: the posting asks for evals across model versions, and fact j1.f1 says the owner compared
+  models and prompts on the benchmark. A bullet citing j1.b3 and j1.f1 may say "Evaluated the assistant on
+  cross-domain benchmarks, comparing models, reasoning settings and prompt versions".
+- Not allowed: the posting says "failure modes and edge cases" and the bullet repeats it. Say what the
+  sources show instead: "assessed mapping accuracy across structural correctness, source-field selection,
+  and transformation conditions".
 - Allowed: the posting stresses document AI. Move j3.b1 ("Built **document intelligence pipelines** …")
   to the top of its job, and drop j3.b3 to make room.
 - Allowed: the judge approved `testing` with the evidence "automated code validation", from j1.b5. The
