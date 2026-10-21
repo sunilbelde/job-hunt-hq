@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import uuid
@@ -56,6 +57,20 @@ CREATE TABLE {LEGACY_IDS_TABLE} (
 )
 """
 
+# The latest generation report per application, for the resume viewer. `report` is a JSON document;
+# generated_at and saved_path are columns too, so listing can sort without parsing it. Removed by delete().
+REPORTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS resume_reports (
+    application_id TEXT PRIMARY KEY REFERENCES applications(id),
+    generated_at TEXT NOT NULL,
+    saved_path TEXT NOT NULL,
+    report TEXT NOT NULL
+)
+"""
+# What the application list carries from each report: scores and status, never posting text.
+REPORT_SUMMARY = ("status", "threshold", "base_score", "tailored_score")
+LIST_COLUMNS = ("id", "company", "role", "status", "created_at", "updated_at")
+
 # Stores created before statuses existed get the columns added in place; SQLite fills existing
 # rows with the default, so they all read as verified.
 MIGRATION = (
@@ -68,7 +83,7 @@ class ApplicationStoreError(Exception):
     """Raised when the application store cannot be read or written."""
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -124,6 +139,7 @@ class ApplicationStore:
                 conn.execute(SCHEMA)
                 self._migrate(conn)
                 self._migrate_ids(conn)
+                conn.execute(REPORTS_SCHEMA)
                 conn.execute("BEGIN IMMEDIATE")  # write probe: fails on a read-only store
                 conn.rollback()
         except (sqlite3.Error, OSError) as exc:
@@ -205,7 +221,7 @@ class ApplicationStore:
         """Store the application unless its link is already known. Returns (id, created)."""
         job_link = fields["job_link"]
         key = dedupe_key(job_link)
-        created_at = _now()
+        created_at = utc_now()
         columns = ("id", "job_link_key", "job_link", *FIELDS, "created_at")
         values = (str(uuid.uuid4()), key, job_link, *(fields.get(name) for name in FIELDS), created_at)
         try:
@@ -232,7 +248,7 @@ class ApplicationStore:
         # Column names come from UPDATABLE_FIELDS only, never from the client.
         columns = sorted(changes)
         assignments = ", ".join(f"{name} = ?" for name in (*columns, "updated_at"))
-        values = (*(changes[name] for name in columns), _now(), application_id)
+        values = (*(changes[name] for name in columns), utc_now(), application_id)
         try:
             with closing(self._connect()) as conn, conn:
                 result = conn.execute(
@@ -246,6 +262,7 @@ class ApplicationStore:
         """Remove the row for good, freeing its job_link. Returns whether a row was removed."""
         try:
             with closing(self._connect()) as conn, conn:
+                conn.execute("DELETE FROM resume_reports WHERE application_id = ?", (application_id,))
                 cursor = conn.execute("DELETE FROM applications WHERE id = ?", (application_id,))
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
@@ -270,3 +287,67 @@ class ApplicationStore:
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
         return dict(zip(columns, row)) if row else None
+
+    def save_report(self, application_id: str, generated_at: str, saved_path: str, report: dict) -> bool:
+        """Store the application's generation report, replacing any earlier one. Returns False, storing
+        nothing, when the application no longer exists."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                cursor = conn.execute(
+                    "INSERT INTO resume_reports (application_id, generated_at, saved_path, report) "
+                    "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM applications WHERE id = ?) "
+                    "ON CONFLICT(application_id) DO UPDATE SET generated_at = excluded.generated_at, "
+                    "saved_path = excluded.saved_path, report = excluded.report",
+                    (application_id, generated_at, saved_path, json.dumps(report), application_id),
+                )
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return cursor.rowcount == 1
+
+    def delete_report(self, application_id: str) -> bool:
+        try:
+            with closing(self._connect()) as conn, conn:
+                cursor = conn.execute("DELETE FROM resume_reports WHERE application_id = ?", (application_id,))
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return cursor.rowcount == 1
+
+    def get_report(self, application_id: str) -> dict | None:
+        """The stored report with its generated_at and saved_path, or None if there is none."""
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute(
+                    "SELECT generated_at, saved_path, report FROM resume_reports WHERE application_id = ?",
+                    (application_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        if row is None:
+            return None
+        generated_at, saved_path, report = row
+        return {**json.loads(report), "generated_at": generated_at, "saved_path": saved_path}
+
+    def list_with_reports(self) -> list[dict]:
+        """Every application without its posting text, most recently generated first, then most recently
+        recorded; each with a summary of its report, or report None."""
+        columns = ", ".join(f"a.{name}" for name in LIST_COLUMNS)
+        try:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    f"SELECT {columns}, r.generated_at, r.report FROM applications a "
+                    "LEFT JOIN resume_reports r ON r.application_id = a.id "
+                    "ORDER BY r.generated_at IS NULL, r.generated_at DESC, a.created_at DESC"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        listed = []
+        for row in rows:
+            item = dict(zip(LIST_COLUMNS, row))
+            generated_at, report = row[len(LIST_COLUMNS):]
+            if report is None:
+                item["report"] = None
+            else:
+                data = json.loads(report)
+                item["report"] = {"generated_at": generated_at, **{name: data.get(name) for name in REPORT_SUMMARY}}
+            listed.append(item)
+        return listed

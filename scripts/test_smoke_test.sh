@@ -5,15 +5,17 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 
 # Stub curl: http://x is the public base URL, http://d the docs listener. Status codes come from
-# STUB_DOCS (public docs) / STUB_DOCS_LISTENER / STUB_APP / STUB_PATCH / STUB_RESUME, the schema from
+# STUB_DOCS (public docs and viewer) / STUB_DOCS_LISTENER / STUB_VIEWER_LISTENER / STUB_APP / STUB_PATCH / STUB_RESUME, the schema from
 # STUB_SCHEMA and match.status from STUB_MATCH; POST /application, PATCH, DELETE and /resume calls are
 # logged to STUB_LOG.
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
   *"http://d/docs"*) printf '%s' "$STUB_DOCS_LISTENER" ;;
+  *"http://d/viewer"*) printf '%s' "${STUB_VIEWER_LISTENER:-$STUB_DOCS_LISTENER}" ;;
   *"http://d/openapi.json"*) printf '%s\n%s' "$STUB_SCHEMA" "$STUB_DOCS_LISTENER" ;;
   *"/docs"*|*"/openapi.json"*) printf '%s' "$STUB_DOCS" ;;
+  *"/viewer"*) printf '%s' "${STUB_VIEWER:-$STUB_DOCS}" ;;
   *"-X DELETE"*) echo "DELETE $*" >> "$STUB_LOG" ;;
   *"-X PATCH"*) echo "PATCH $*" >> "$STUB_LOG"; printf '%s' "${STUB_PATCH:-200}" ;;
   *"/application"*) echo "CREATE $*" >> "$STUB_LOG"
@@ -27,7 +29,7 @@ chmod +x "$tmp/curl"
 
 id=3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13
 saved="$tmp/out/Smoke Test Co/$id/SUNIL BELDE.pdf"
-six='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{}},"/resume":{"post":{}}}}'
+ten='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/resume/base.pdf":{"get":{}}}}'
 
 # run <app status> <resume status> [file content | "none"]
 # Call with prefixed variables inside ( ): sh keeps VAR=x assignments made before a function call.
@@ -37,7 +39,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$six} DOCS_URL=${DOCS_URL:-http://d} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$ten} DOCS_URL=${DOCS_URL:-http://d} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -59,6 +61,9 @@ run 201 201 '{"not":"pdf"}'; [ $? -ne 0 ] && ok "notpdf" || bad "notpdf"
 (STUB_DOCS=200 run 201 201); [ $? -ne 0 ] && ! deleted && ok "docs served fails before creating anything" || bad "docs served"
 run 201 201 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes" || bad "docs listener healthy"
 (STUB_DOCS_LISTENER=404 run 201 201); [ $? -ne 0 ] && ! created_any && ok "docs listener missing fails before creating anything" || bad "docs listener missing"
+(STUB_VIEWER=200 run 201 201); [ $? -ne 0 ] && ! created_any && ok "public viewer fails before creating anything" || bad "public viewer"
+(STUB_VIEWER_LISTENER=404 run 201 201); [ $? -ne 0 ] && ! created_any && ok "viewer missing on the docs listener fails" || bad "viewer missing"
+(STUB_SCHEMA="$(printf '%s' "$ten" | sed 's/,"\/resume\/base.pdf":{"get":{}}//')" run 201 201); [ $? -ne 0 ] && ! created_any && ok "nine operations fail" || bad "nine operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 201); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 201); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off STUB_DOCS_LISTENER=404 run 201 201) && ok "DOCS_URL=off skips the docs listener" || bad "docs off"

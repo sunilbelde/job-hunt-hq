@@ -194,3 +194,93 @@ class ResumeCreated(BaseModel):
         "so no file exists at this path."
     )
     match: ResumeMatch = Field(description="How the saved resume was chosen, with the match scores.")
+
+
+# The viewer's read endpoints. Like the models above, these only describe responses.
+
+
+class KeywordRow(BaseModel):
+    term: str
+    importance: Literal["required", "preferred"]
+    present: bool = Field(description="Whether this resume's text contains the keyword or one of its aliases.")
+
+
+class RequirementRow(BaseModel):
+    id: str
+    text: str = Field(description="The requirement as read from the posting.")
+    importance: Literal["required", "preferred"]
+    status: Literal["met", "partial", "missing"] = Field(description="How Claude assessed this resume against it.")
+    counted: Literal["met", "partial", "missing"] = Field(
+        description="What the score counted: `missing` when the assessment's quotes are not in the resume."
+    )
+    unverified: bool
+    reason: str | None = Field(description="Why the assessment was not counted, or null.")
+    evidence: list[str] = Field(description="The assessment's quotes from this resume.")
+
+
+class ScoreBreakdown(BaseModel):
+    score: int = Field(description="The match score from 0 to 100.")
+    decision: Literal["keep", "tailor"]
+    threshold: int
+    keyword_coverage: float = Field(description="Weighted share of the posting's keywords covered, from 0 to 1.")
+    requirement_coverage: float = Field(description="Weighted share of the posting's requirements met, from 0 to 1.")
+    keywords: list[KeywordRow]
+    requirements: list[RequirementRow]
+
+
+class RejectedTerm(BaseModel):
+    term: str
+    reason: str = Field(description="Why the judge did not approve the keyword.")
+
+
+class ResumeReport(BaseModel):
+    version: int = Field(description="The report's shape. Always 1.")
+    status: MatchStatus
+    threshold: int
+    base_score: int | None
+    tailored_score: int | None
+    added_terms: list[str]
+    base: ScoreBreakdown | None = Field(description="The base resume's breakdown, or null when not scored.")
+    tailored: ScoreBreakdown | None = Field(description="The tailored resume's breakdown, or null unless tailored.")
+    rejected_terms: list[RejectedTerm] = Field(description="Posting keywords the judge rejected. Empty unless tailored.")
+    generated_at: str = Field(description="When the resume was generated, UTC, ISO 8601.")
+    saved_path: str = Field(description="Where the resume was saved on the service host.")
+
+
+class ReportSummary(BaseModel):
+    generated_at: str
+    status: MatchStatus
+    threshold: int
+    base_score: int | None
+    tailored_score: int | None
+
+
+class ApplicationListItem(BaseModel):
+    id: str
+    company: str
+    role: str
+    status: ApplicationStatus
+    created_at: str
+    updated_at: str | None
+    report: ReportSummary | None = Field(description="The latest generation's summary, or null if none is stored.")
+
+
+class ApplicationList(BaseModel):
+    ok: Literal[True] = True
+    applications: list[ApplicationListItem] = Field(
+        description="Every application, most recently generated first, then most recently recorded. No posting text."
+    )
+
+
+class ApplicationRecord(StoredApplication):
+    created_at: str
+    updated_at: str | None = None
+
+
+class ApplicationDetail(BaseModel):
+    ok: Literal[True] = True
+    application: ApplicationRecord = Field(description="Every stored field of the application.")
+    report: ResumeReport | None = Field(
+        description="The latest generation report, or null when none is stored (never generated, or generated "
+        "before reports existed)."
+    )
