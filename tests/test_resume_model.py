@@ -128,7 +128,7 @@ def test_prepare_makes_a_work_folder(tmp_path):
     work = tmp_path / "work"
     r = run_tool("prepare", "--template", str(TEMPLATE_DIR), "--out", str(work), "--posting", str(posting))
     assert r.returncode == 0, r.stderr
-    assert "4 jobs, 16 bullets, 7 skills lines" in r.stdout
+    assert "4 jobs, 16 bullets, 0 profile facts, 7 skills lines" in r.stdout
     assert (work / "template" / "BASE.tex").read_text(encoding="utf-8") == BASE_TEX
     assert (work / "template" / "resume.cls").is_file()
     assert (work / "posting.md").read_text() == "We need Python."
