@@ -115,8 +115,10 @@ def test_compile_reports_a_timeout(monkeypatch):
 
 # --- the no-fabrication guards ---
 
+import resume_terms  # noqa: E402
 from resume_terms import Approved, Terms  # noqa: E402
-from tests.tailoring_fixtures import ANALYSIS, content_json, prepare, run_tool, write_out, write_terms  # noqa: E402
+from tests.tailoring_fixtures import (ANALYSIS, FACTS_PROFILE, content_json, prepare, run_tool,  # noqa: E402
+                                     weak_analysis, write_coverage, write_out, write_terms)
 
 KEYWORDS = ANALYSIS["keywords"]
 # Airflow approved with resume evidence from j1.b5 ("DAG orchestration"); Kafka rejected.
@@ -230,12 +232,103 @@ def test_soft_warnings(base):
     assert {w["code"] for w in warnings} == {"new_bold_phrase", "no_final_period"}
 
 
+# --- echoed posting phrasing ---
+
+POSTING = ("Work with research to develop and run evals to measure agent performance, regressions, failure modes, "
+           "and edge cases. You turn natural-language mapping instructions into PySpark code deployable as AWS Glue jobs.")
+
+
+def echoes(base, content):
+    errors, warnings = resume_checks.check_content(base, content, KEYWORDS, posting=POSTING)
+    return errors, [(w["where"], w["detail"].split('"')[1]) for w in warnings if w["code"] == "echoed_phrase"]
+
+
+def test_a_phrase_copied_from_the_posting_is_flagged(base):
+    content = edited(base, add_to_bullet(0, 2, ", measuring regressions, failure modes and edge cases."))
+    errors, found = echoes(base, content)
+    assert errors == [] and found == [("j1#3", "regressions failure modes and edge cases")]
+
+
+def test_a_phrase_the_sources_already_use_is_not_flagged(base):
+    assert echoes(base, base.content()) == ([], [])  # j1.b4 says "PySpark code deployable as AWS Glue jobs" too
+
+
+def test_short_or_stopword_runs_are_not_flagged(base):
+    content = edited(base, add_to_bullet(0, 2, ", with failure modes in mind."))  # "failure modes" alone: 2 words
+    assert echoes(base, content) == ([], [])
+
+
+def test_without_the_posting_nothing_is_flagged(base):
+    content = edited(base, add_to_bullet(0, 2, ", measuring regressions, failure modes and edge cases."))
+    _, warnings = resume_checks.check_content(base, content, KEYWORDS)
+    assert warnings == []
+
+
+@needs_tectonic
+def test_build_reads_the_posting_and_reports_echoes_as_aims(base, tmp_path):
+    work = prepare(tmp_path / "work")
+    (work / "posting.md").write_text(POSTING)
+    write_out(work, "analysis.json", ANALYSIS)
+    data = content_json(base)
+    data["jobs"][0]["bullets"][2]["text"] = data["jobs"][0]["bullets"][2]["text"].removesuffix(".") + \
+        ", measuring failure modes and edge cases."
+    write_out(work, "tailored.json", data)
+    write_terms(work)
+    write_coverage(work, ANALYSIS)
+    r = run_tool("build", "--work", str(work))
+    assert r.returncode == 0 and 'aim  echoed_phrase j1#3: "failure modes and edge cases"' in r.stdout
+
+
+# --- profile facts as sources ---
+
+@pytest.fixture(scope="module")
+def base_facts():
+    base = resume_model.parse_base((TEMPLATE_DIR / "BASE.tex").read_text(encoding="utf-8"))
+    return resume_terms.attach_facts(base, resume_terms.parse_profile(FACTS_PROFILE))
+
+
+def from_fact(text: str, sources=("j1.f1",), job: int = 0):
+    def change(c):
+        c.jobs[job].bullets.insert(0, resume_model.ContentBullet(text, list(sources)))
+    return change
+
+
+def test_a_bullet_may_come_from_a_profile_fact(base_facts):
+    content = edited(base_facts, from_fact("Ran replay benchmarks comparing **3 model families** on the mapping task."))
+    errors, warnings = resume_checks.check_content(base_facts, content, KEYWORDS)
+    assert (errors, warnings) == ([], [])
+
+
+def test_a_fact_stays_under_its_own_job(base_facts):
+    content = edited(base_facts, from_fact("Ran replay benchmarks on the mapping task.", job=2))
+    assert codes(base_facts, content) == ["foreign_source"]
+
+
+def test_numbers_may_come_from_a_cited_fact(base_facts):
+    assert codes(base_facts, edited(base_facts, from_fact("Compared 4 model families."))) == ["unsupported_number"]
+    merged = from_fact("Compared 3 model families, reaching 75% source-field recall.", sources=("j1.f1", "j1.b3"))
+    assert codes(base_facts, edited(base_facts, merged)) == []
+
+
+def test_a_keyword_a_fact_states_goes_where_the_fact_is(base_facts):
+    terms = Terms(resume_terms.from_facts(base_facts, KEYWORDS), [])
+    cited = edited(base_facts, from_fact("Ran Kafka replay benchmarks on the mapping task."))
+    assert codes(base_facts, cited, terms) == []
+    elsewhere = edited(base_facts, from_fact("Ran Kafka replay benchmarks on the mapping task.", sources=("j1.b3",)))
+    assert codes(base_facts, elsewhere, terms) == ["misplaced_keyword"]
+
+
+def test_a_fact_the_profile_lacks_is_no_source(base):
+    assert codes(base, edited(base, from_fact("Ran replay benchmarks on the mapping task."))) == ["missing_source"]
+
+
 @needs_tectonic
 def test_build_on_the_base_content_passes_and_names_short_lines(base, tmp_path):
     work = prepare(tmp_path / "work")
     write_out(work, "analysis.json", ANALYSIS)
     write_out(work, "tailored.json", content_json(base))
     write_terms(work)
+    write_coverage(work, ANALYSIS)
     r = run_tool("build", "--work", str(work))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "build 1: passed every hard check" in r.stdout
@@ -265,3 +358,45 @@ def test_build_waits_for_the_judge(base, tmp_path):
     r = run_tool("build", "--work", str(work))
     assert r.returncode == 1 and "build refused" in r.stdout and "waiting for the judge" in r.stdout
     assert not (work / "out" / "check.json").exists()
+
+
+# --- the coverage plan ---
+
+def plan_findings(base, plan, analysis=None):
+    return [(e.get("where"), e["detail"]) for e in resume_checks.check_coverage(plan, analysis or weak_analysis(), base)]
+
+
+def test_a_complete_plan_passes(base_facts):
+    plan = {"R2": {"sources": ["j1.b4", "j1.f1"], "note": "the Glue platform"}, "R3": {"sources": []}}
+    assert plan_findings(base_facts, plan) == []
+
+
+def test_plan_problems_are_named(base):
+    assert plan_findings(base, None)[0][0] is None
+    assert plan_findings(base, {"R2": {"sources": ["j1.b9"]}, "R7": {"sources": []}}) == [
+        ("R3", "the base resume does not meet it; plan it"),
+        ("R2", "j1.b9 is not a base bullet or a profile fact"),
+        ("R7", "not a requirement of out/analysis.json")]
+    assert plan_findings(base, {"R2": {"sources": "j1.b4"}, "R3": {}})[0][0] == "R2"
+
+
+def test_planned_requirements_still_not_met_are_listed():
+    plan = {"R2": {"sources": ["j1.b4"]}, "R3": {"sources": []}}
+    assessment = {"R2": {"status": "partial", "evidence": []}, "R3": {"status": "missing", "evidence": []}}
+    assert resume_checks.planned_not_met(plan, assessment) == ["planned, not met: R2 (j1.b4); assessed partial"]
+    assert resume_checks.planned_not_met(plan, {"R2": {"status": "met"}}) == []
+
+
+@needs_tectonic
+def test_build_needs_the_plan_and_score_reports_it(base, tmp_path):
+    work = prepare(tmp_path / "work")
+    write_out(work, "analysis.json", weak_analysis())
+    write_out(work, "tailored.json", content_json(base))
+    write_terms(work)
+    r = run_tool("build", "--work", str(work))
+    assert r.returncode == 1 and "fix  coverage_plan: write out/coverage.json first" in r.stdout
+    write_coverage(work, weak_analysis(), {"R2": ["j1.b4"]})
+    assert run_tool("build", "--work", str(work)).returncode == 0
+    write_out(work, "assessment_tailored.json", weak_analysis()["assessment"])
+    r = run_tool("score", "tailored", "--work", str(work))
+    assert r.returncode == 0 and "planned, not met: R2 (j1.b4); assessed missing" in r.stdout

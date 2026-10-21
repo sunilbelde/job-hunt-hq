@@ -33,7 +33,8 @@ TOOL = SKILL_DIR / "scripts" / "resume_tool.py"
 SKILL_IN_WORK = Path(".claude") / "skills" / "tailor-resume"
 JUDGE_SKILL_DIR = SKILL_DIR.parent / "judge-resume-terms"
 JUDGE_SKILL_IN_WORK = Path(".claude") / "skills" / "judge-resume-terms"
-PROFILE = TEMPLATE_DIR / "PROFILE.md"  # the owner's profile list; optional
+PROFILE = TEMPLATE_DIR / "PROFILE.md"  # the owner's profile: skills for the judge, facts for bullets; optional
+PROFILE_INVALID_EXIT = 4  # resume_tool's exit code for a profile naming an employer the resume lacks
 RUNTIME_DIR = ".claude-runtime"  # in OUTPUT_DIR; company folders never start with a dot
 
 REPORT_VERSION = 1  # the stored report's shape; the viewer shows a report of another version as legacy
@@ -371,10 +372,11 @@ def _prepare_work(application: StoredApplication) -> Path:
         shutil.copytree(SKILL_DIR, work / SKILL_IN_WORK, ignore=shutil.ignore_patterns("__pycache__"))
         (work / ".tmp").mkdir()
         (work / "posting.md").write_text(posting_markdown(application), encoding="utf-8")
-        # TODO(profile-doc): copy the owner's full profile document into the work folder here once it
-        # exists, so the skill can use it as a second source of facts on top of the base resume.
-        result = subprocess.run([sys.executable, str(TOOL), "prepare", "--template", str(TEMPLATE_DIR), "--out", str(work)],
-                                capture_output=True, text=True, timeout=PREPARE_TIMEOUT)
+        # prepare copies the owner's profile too: its facts are bullet sources, beside the base bullets.
+        result = subprocess.run([sys.executable, str(TOOL), "prepare", "--template", str(TEMPLATE_DIR), "--out", str(work),
+                                 "--profile", str(PROFILE)], capture_output=True, text=True, timeout=PREPARE_TIMEOUT)
+        if result.returncode == PROFILE_INVALID_EXIT:
+            raise TailoringError("prepare", "profile_invalid", exit_code=result.returncode)
         if result.returncode != 0:
             raise TailoringError("prepare", "prepare_failed", exit_code=result.returncode)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -437,9 +439,11 @@ def _judge_result(gate: Path, verdicts: Path | None, terms: Path, stats: RunStat
 
 def _verify(work: Path, gate: Path, stats: RunStats) -> dict:
     """Run the repo's own copy of the skill script on the finished run (design.md, Decision 8). It scores
-    against the service's analysis snapshot and allows only the keywords of the service's ruling."""
+    against the service's analysis snapshot, allows only the keywords of the service's ruling and the facts
+    of the service's profile."""
     pdf = gate / "resume.pdf"
-    verdict = _tool(["verify", "--template", TEMPLATE_DIR, "--work", work, "--analysis", gate / "analysis.json",
+    verdict = _tool(["verify", "--template", TEMPLATE_DIR, "--profile", PROFILE, "--work", work,
+                     "--analysis", gate / "analysis.json",
                      "--terms", gate / "terms.json", "--pdf-out", pdf], VERIFY_TIMEOUT)
     if verdict is None:
         raise TailoringError("verify", "verify_error", run=stats)

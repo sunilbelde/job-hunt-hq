@@ -22,6 +22,10 @@ on the page and their sources, for example `j4#1 (from j4.b1)` for the first bul
   sources. Never add filler.
 - `short_last_line`: the bullet's last line holds only a word or two. Trim a few words so it ends a line
   earlier, which frees a line, or extend it with detail from its own sources to fill the line.
+- `echoed_phrase`: the bullet copies a run of the posting's own words that its sources never use. A
+  recruiter reads that as pasted from the posting. Describe the same work as the sources do, in the owner's
+  words, so a reader can see it meets the requirement without the posting's phrasing. Keep only phrases
+  that are standard terms of the field, and keywords from `run terms`.
 
 ## Sizes
 
