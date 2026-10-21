@@ -26,7 +26,7 @@
 - [x] 4.1 Create `app/viewer.py` with the page HTML (inline CSS and JS, no external URLs) and serve it at `GET /viewer` (docs-enabled only, not in the schema) with a per-response nonce CSP, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; verify in `tests/test_viewer.py`: 200 without a key, 404 when docs disabled, no `http(s)://` asset URL in the HTML, CSP header allows no other origin for scripts, styles and frames, no application data in the HTML
 - [x] 4.2 Implement the key prompt (memory only, `X-API-Key` header, 401 clears the key and asks again) and the application list with match status and base → generated scores; verify in a browser against a local `API_DOCS_ENABLED=true` server with a fake store: wrong key rejected, reload asks again, no key in any request URL (devtools network tab)
 - [x] 4.3 Implement the detail view: application details with links and the posting text collapsed, inserted only via `textContent`; score cards with threshold and coverages; "Added" (added keywords, requirements improved by counted status); "Gaps" (uncovered keywords with importance, partial/missing requirements, rejected keywords with reason); requirement table with expandable evidence; legacy and `no_job_description` messages; verify in a browser with seeded tailored, base-kept, unscored and legacy applications, and that a posting containing `<script>` shows as text
-- [ ] 4.4 Implement the side-by-side PDF panes from blob URLs (labels "Base" and "Generated", "base unchanged" note, "not generated" placeholder, stacked base-first below the breakpoint, object URLs revoked on change, `#<id>` deep link); verify in Chrome and Safari on the Mac that both PDFs render inline, the panes stack at narrow width, and opening `/viewer#<id>` selects that application after the key is entered
+- [x] 4.4 Implement the side-by-side PDF panes from blob URLs (labels "Base" and "Generated", "base unchanged" note, "not generated" placeholder, stacked base-first below the breakpoint, object URLs revoked on change, `#<id>` deep link); verify in Chrome and Safari on the Mac that both PDFs render inline, the panes stack at narrow width, and opening `/viewer#<id>` selects that application after the key is entered
 
 ## 5. Hosting, scripts and docs
 
@@ -37,7 +37,7 @@
 ## 6. Integration
 
 - [x] 6.1 Run the full test suite (`pytest`) with docs enabled and disabled and verify every existing API test passes unmodified
-- [ ] 6.2 On the Mac mini: reinstall, run the smoke test, generate a resume for one tailored and one base-kept application, then open the viewer from another tailnet device and verify details, scores, added terms, gaps and both PDFs side by side; verify `https://<mac-tailscale-name>/viewer` and `/applications` answer 404 from outside the tailnet
+- [x] 6.2 On the Mac mini: reinstall, run the smoke test, generate a resume for one tailored and one base-kept application, then open the viewer from another tailnet device and verify details, scores, added terms, gaps and both PDFs side by side; verify `https://<mac-tailscale-name>/viewer` and `/applications` answer 404 from outside the tailnet
 
 ## Workflow follow-up
 
