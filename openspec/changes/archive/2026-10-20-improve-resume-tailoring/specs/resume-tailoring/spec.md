@@ -52,6 +52,17 @@ An assessment SHALL mark a requirement `met` only when its quoted passages toget
 - **WHEN** the tailored quotes show benchmark evaluation and comparisons between models and prompt versions
 - **THEN** R5 may be assessed `met`
 
+### Requirement: Keywords stated in profile facts
+A posting keyword absent from the base resume but stated in a profile fact SHALL need no judge, and SHALL appear in a tailored resume only in the skills section or in a bullet citing that fact.
+
+#### Scenario: Keyword stated in a fact
+- **WHEN** the posting asks for "evals", the base resume lacks it, profile fact j1.f1 says "ran evals", and a tailored bullet citing j1.f1 says evals
+- **THEN** the content is accepted without a judge ruling on evals
+
+#### Scenario: Fact keyword elsewhere
+- **WHEN** the same "evals" appears in a bullet that cites only j1.b2
+- **THEN** the content is rejected
+
 ## MODIFIED Requirements
 
 ### Requirement: Bullets trace to the same job
@@ -93,7 +104,7 @@ Every number in a tailored bullet, such as a percentage, count, size or duration
 - **THEN** it is accepted
 
 ### Requirement: New posting keywords need the judge's approval
-A posting keyword whose term and aliases are all absent from the base resume and from the profile facts SHALL appear in a tailored resume only when the judge approved it, and then only in the skills section or in a bullet that cites a base bullet or profile fact holding the judge's evidence for it. A keyword approved from the profile skills list alone SHALL appear only in the skills section. A keyword stated in a profile fact SHALL need no judge, and SHALL appear only in the skills section or in a bullet citing that fact.
+A posting keyword whose term and aliases are all absent from the base resume and from the profile facts SHALL appear in a tailored resume only when the judge approved it, and then only in the skills section or in a bullet that cites a base bullet or profile fact holding the judge's evidence for it. A keyword approved from the profile skills list alone SHALL appear only in the skills section.
 
 #### Scenario: Keyword the candidate lacks
 - **WHEN** the posting asks for Kafka, the base resume never mentions it, the judge rejected it, and tailored content mentions Kafka
@@ -110,14 +121,6 @@ A posting keyword whose term and aliases are all absent from the base resume and
 #### Scenario: Approved from the profile alone
 - **WHEN** the judge approved "post-training" from a profile skills entry only, and a tailored bullet mentions post-training
 - **THEN** the content is rejected, while the same keyword in a skills line is accepted
-
-#### Scenario: Keyword stated in a fact
-- **WHEN** the posting asks for "evals", the base resume lacks it, profile fact j1.f1 says "ran evals", and a tailored bullet citing j1.f1 says evals
-- **THEN** the content is accepted without a judge ruling on evals
-
-#### Scenario: Fact keyword elsewhere
-- **WHEN** the same "evals" appears in a bullet that cites only j1.b2
-- **THEN** the content is rejected
 
 ### Requirement: Judge for keywords the base resume lacks
 When the base resume scores below 70 and the posting analysis lists keywords absent from both the base resume and the profile facts, the service SHALL have a separate Claude run, the judge, rule on each of them before tailoring. The judge SHALL receive only the base resume's text, the owner's profile document (skills list and experience facts) and those keywords, without their importance and never the posting text. When no keyword is missing, no judge run SHALL start.
