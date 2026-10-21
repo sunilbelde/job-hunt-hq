@@ -97,6 +97,34 @@ def test_quotes_ignore_case_whitespace_and_markup():
     assert row["counted"] == "met"
 
 
+# --- the breakdown the service stores ---
+
+def test_breakdown_adds_requirement_text_and_evidence():
+    text = "shipped the billing service on time with zero downtime"
+    requirements = [req("R1"), req("R2"), req("R3", "preferred")]
+    assessment = {"R1": {"status": "met", "evidence": ["shipped the billing service"]},
+                  "R2": {"status": "partial", "evidence": ["with zero downtime"]},
+                  "R3": MISSING}
+    out = resume_score.breakdown(score([kw("billing"), kw("Go")], requirements, assessment, text), requirements, assessment)
+    assert out["keywords"] == [{"term": "billing", "importance": "required", "present": True},
+                               {"term": "Go", "importance": "required", "present": False}]
+    assert [(r["id"], r["text"], r["status"], r["counted"], r["evidence"]) for r in out["requirements"]] == [
+        ("R1", "requirement R1", "met", "met", ["shipped the billing service"]),
+        ("R2", "requirement R2", "partial", "partial", ["with zero downtime"]),
+        ("R3", "requirement R3", "missing", "missing", []),
+    ]
+    assert (out["score"], out["threshold"], out["keyword_coverage"]) == (55, 70, 0.5)
+
+
+def test_breakdown_keeps_the_reason_for_an_unverified_quote():
+    requirements = [req("R1")]
+    assessment = {"R1": {"status": "met", "evidence": ["led a team of fifty engineers"]}}
+    row = resume_score.breakdown(score([kw("x")], requirements, assessment, "built internal tools"),
+                                 requirements, assessment)["requirements"][0]
+    assert (row["status"], row["counted"], row["reason"], row["evidence"]) == (
+        "met", "missing", "a quote is not in the resume", ["led a team of fifty engineers"])
+
+
 # --- validation ---
 
 def test_fixture_analysis_is_valid():

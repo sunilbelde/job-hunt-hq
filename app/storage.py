@@ -31,6 +31,11 @@ class Storage(Protocol):
         ...
 
 
+def resume_path(root: Path, company: str, application_id: str) -> Path:
+    """Where an application's resume is saved for its company as it is now."""
+    return Path(root) / company_folder(company) / str(application_id) / RESUME_FILE_NAME
+
+
 def cover_letter_path(resume_path: Path) -> Path:
     """Where the application's cover letter goes: beside its resume. Nothing writes it yet."""
     return resume_path.parent / COVER_LETTER_FILE_NAME
@@ -63,10 +68,10 @@ class LocalStorage:
 
     def save_resume(self, company: str, application_id: str, content: bytes) -> Path:
         root = self._root.resolve()
-        folder = root / company_folder(company) / str(application_id)
+        path = resume_path(root, company, application_id)
+        folder = path.parent
         if not folder.resolve().is_relative_to(root):  # company_folder already rules this out
             raise StorageError("resume path escapes OUTPUT_DIR")
-        path = folder / RESUME_FILE_NAME
         tmp_name = None
         try:
             folder.parent.mkdir(mode=0o700, exist_ok=True)

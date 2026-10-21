@@ -1,22 +1,25 @@
 import json
 import logging
+import pathlib
 import re
 import secrets
 import sys
 import time
 from typing import Any
 
-from fastapi import FastAPI, Path, Request, Security
+from fastapi import FastAPI, HTTPException, Path, Request, Security
 from fastapi.concurrency import run_in_threadpool
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ValidationError
 from pydantic.json_schema import models_json_schema
 
-from app.applications import ApplicationStore, ApplicationStoreError
+from app.applications import ApplicationStore, ApplicationStoreError, utc_now
 from app.generation import generate_output
 from app.models import (
+    ApplicationDetail,
+    ApplicationList,
     ApplicationRecorded,
     ApplicationRow,
     ApplicationUpdate,
@@ -29,8 +32,9 @@ from app.models import (
 )
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
-from app.storage import LocalStorage, Storage, StorageError, cover_letter_path, rename_legacy_folders
+from app.storage import LocalStorage, Storage, StorageError, cover_letter_path, rename_legacy_folders, resume_path
 from app.tailoring import TailoringError
+from app.viewer import BaseResumeCache, content_security_policy, page
 
 logger = logging.getLogger("app.requests")
 logger.setLevel(logging.INFO)
@@ -67,11 +71,15 @@ TAGS = [
     {"name": "health", "description": "Liveness checks. No API key needed."},
     {"name": "applications", "description": "Record, update and delete verified job applications."},
     {"name": "resumes", "description": "Generate a resume PDF for a recorded application."},
+    {"name": "viewer", "description": "Read applications, their generation reports and resume PDFs, for the resume "
+                                      "viewer at `/viewer`. Served only where these docs are."},
 ]
 
 ERROR_DESCRIPTIONS = {
     401: "Missing or wrong `X-API-Key`. Checked before the body or ID is looked at.",
     404: "No application has this ID. An ID that is not a UUID gets this too.",
+    "404_resume": "No application has this ID (`Application not found`), or it has no saved resume (`Resume not found`).",
+    "500_base": "The base resume could not be rendered.",
     422: "The body is not JSON, not a JSON object, or fails validation. `message` names the fields and rules.",
     500: "Resume generation failed: rendering, or tailoring (Claude not configured, unavailable or over its time or "
          "spend limit, the judge's output unusable, or the tailored resume failed a check). Nothing was saved, and an "
@@ -105,8 +113,22 @@ def with_integrity(page: HTMLResponse, *assets: tuple[str, str]) -> HTMLResponse
     return HTMLResponse(html)
 
 
-def errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
-    return {status: {"model": ErrorResponse, "description": ERROR_DESCRIPTIONS[status]} for status in statuses}
+def errors(*statuses: int | str) -> dict[int | str, dict[str, Any]]:
+    """Error responses by status; a key such as "404_resume" documents its status with that variant's text."""
+    return {int(str(status).split("_")[0]): {"model": ErrorResponse, "description": ERROR_DESCRIPTIONS[status]}
+            for status in statuses}
+
+
+PDF_HEADERS = {"Cache-Control": "no-store", "Content-Disposition": "inline"}
+
+
+def pdf_response(content: bytes) -> Response:
+    return Response(content, media_type="application/pdf", headers=PDF_HEADERS)
+
+
+def pdf_ok(description: str) -> dict[int | str, dict[str, Any]]:
+    return {200: {"description": description,
+                  "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}}}
 
 
 def json_body(model: type[BaseModel], description: str) -> dict[str, Any]:
@@ -145,9 +167,9 @@ def note_generation(request: Request, match=None, run=None) -> None:
 
 
 def request_event(path: str) -> str | None:
-    if path == "/resume":
+    if path in ("/resume", "/resume/base.pdf"):
         return "resume_request"
-    if path == "/application" or path.startswith("/application/"):
+    if path in ("/application", "/applications") or path.startswith("/application/"):
         return "application_request"
     return None
 
@@ -439,6 +461,18 @@ def create_app(
         return {"ok": True, "application_id": target}
 
 
+    async def save_report(application_id: str, path, match) -> None:
+        """Store the generation report for the viewer. The resume is already saved, so a failure only logs:
+        the old report is removed if possible, so the viewer never shows scores for a different PDF."""
+        try:
+            await run_in_threadpool(applications.save_report, application_id, utc_now(), str(path), match.report())
+        except ApplicationStoreError as exc:
+            logger.error(json.dumps({"event": "report_store_error", "application_id": application_id, "error": str(exc)}))
+            try:
+                await run_in_threadpool(applications.delete_report, application_id)
+            except ApplicationStoreError:
+                pass
+
     @app.post(
         "/resume",
         tags=["resumes"],
@@ -509,6 +543,7 @@ def create_app(
         except StorageError as exc:
             logger.error(json.dumps({"event": "storage_error", "application_id": target, "error": str(exc)}))
             return application_error(502, "Storage service unavailable")
+        await save_report(target, path, generated.match)
         # TODO: generate the cover letter and save it at cover_letter_path(path), alongside the resume.
         # Until then the path is returned as a placeholder and no file is written there.
         return JSONResponse(
@@ -522,4 +557,154 @@ def create_app(
             },
         )
 
+    if docs:
+        register_viewer(app, settings, applications, api_key_valid, store_unavailable, application_id_path)
+    else:
+        # PATCH and DELETE share this path, so without a GET route it would answer 405 and reveal that the
+        # viewer's read exists somewhere. Answer exactly as for an unknown path instead.
+        @app.get("/application/{application_id}", include_in_schema=False)
+        def no_application_read(application_id: str):
+            raise HTTPException(status_code=404)
+
     return app
+
+
+def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationStore, api_key_valid,
+                    store_unavailable, application_id_path) -> None:
+    """The resume viewer's read endpoints. Only for an app with docs enabled: on the public listener none of
+    these paths exist, so saved resumes and posting text never leave the tailnet."""
+    base_resume = BaseResumeCache()
+    output_root = settings.output_dir.resolve()
+
+    # The page holds no data and needs no key to load: it asks for the key and reads the endpoints below.
+    @app.get("/viewer", include_in_schema=False)
+    def viewer_page() -> HTMLResponse:
+        nonce = secrets.token_urlsafe(18)
+        return HTMLResponse(page(nonce), headers={
+            "Content-Security-Policy": content_security_policy(nonce),
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        })
+
+    @app.get(
+        "/applications",
+        tags=["viewer"],
+        summary="List applications",
+        description=(
+            "Every recorded application with its ID, company, role, status and recording times, most recently "
+            "generated first and then most recently recorded. `report` summarises the latest generation (when, "
+            "how the resume was chosen, the scores), or is null when none is stored. No posting text."
+        ),
+        responses={200: {"model": ApplicationList, "description": "The applications."}, **errors(401, 503)},
+    )
+    async def list_applications(x_api_key: str | None = Security(api_key_header)):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        try:
+            listed = await run_in_threadpool(applications.list_with_reports)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        return {"ok": True, "applications": listed}
+
+    async def find(request: Request, application_id: str) -> tuple[str | None, dict | None, JSONResponse | None]:
+        """The ID, stored row and report of an application, or the error response to send instead."""
+        target = parse_application_id(application_id)
+        if target is None:
+            return None, None, application_not_found()
+        request.state.application_id = target
+        try:
+            row = await run_in_threadpool(applications.get, target)
+            report = await run_in_threadpool(applications.get_report, target) if row else None
+        except ApplicationStoreError as exc:
+            return None, None, store_unavailable(exc)
+        if row is None:
+            return None, None, application_not_found()
+        return target, {"application": row, "report": report}, None
+
+    @app.get(
+        "/application/{application_id}",
+        tags=["viewer"],
+        summary="Read an application and its report",
+        description=(
+            "Every stored field of the application, the posting text included, and its latest generation report: "
+            "how the resume was chosen, the base and tailored score breakdowns (each posting keyword and whether "
+            "the resume covers it, each requirement with its assessment and quoted evidence), the keywords added "
+            "and the keywords the judge rejected. `report` is null when none is stored: never generated, or "
+            "generated before reports were kept."
+        ),
+        responses={200: {"model": ApplicationDetail, "description": "The application and its report."},
+                   **errors(401, 404, 503)},
+    )
+    async def read_application(
+        request: Request,
+        application_id: str = application_id_path,
+        x_api_key: str | None = Security(api_key_header),
+    ):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        _, found, error = await find(request, application_id)
+        if error is not None:
+            return error
+        return {"ok": True, **found}
+
+    def read_resume(path: pathlib.Path) -> bytes | None:
+        """The saved resume's bytes, or None when there is no regular file there inside OUTPUT_DIR."""
+        try:
+            resolved = path.resolve()
+            if not resolved.is_relative_to(output_root) or not resolved.is_file():
+                return None
+            return resolved.read_bytes()
+        except OSError:
+            return None
+
+    @app.get(
+        "/application/{application_id}/resume.pdf",
+        tags=["viewer"],
+        summary="Read an application's saved resume",
+        description=(
+            "The resume PDF saved for the application by its latest generation, read from the path recorded in "
+            "its report, so a company renamed since still finds it. Without a report, the resume path for the "
+            "current company is used. Sent inline with `Cache-Control: no-store`."
+        ),
+        responses={**pdf_ok("The saved resume."), **errors(401, "404_resume", 503)},
+        response_class=Response,
+    )
+    async def read_saved_resume(
+        request: Request,
+        application_id: str = application_id_path,
+        x_api_key: str | None = Security(api_key_header),
+    ):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        target, found, error = await find(request, application_id)
+        if error is not None:
+            return error
+        report = found["report"]
+        path = pathlib.Path(report["saved_path"]) if report else resume_path(output_root, found["application"]["company"], target)
+        content = await run_in_threadpool(read_resume, path)
+        if content is None:
+            return application_error(404, "Resume not found")
+        return pdf_response(content)
+
+    @app.get(
+        "/resume/base.pdf",
+        tags=["viewer"],
+        summary="Read the base resume",
+        description=(
+            "The base resume, rendered from the bundled template: the same PDF `POST /resume` saves when it keeps "
+            "the base resume. Rendered again whenever a template file changes. Sent inline with "
+            "`Cache-Control: no-store`."
+        ),
+        responses={**pdf_ok("The base resume."), **errors(401, "500_base")},
+        response_class=Response,
+    )
+    async def read_base_resume(x_api_key: str | None = Security(api_key_header)):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        try:
+            content = await run_in_threadpool(base_resume.get)
+        except RenderError as exc:
+            logger.error(json.dumps({"event": "render_error", "error": str(exc)}))
+            return application_error(500, "Resume generation failed")
+        return pdf_response(content)

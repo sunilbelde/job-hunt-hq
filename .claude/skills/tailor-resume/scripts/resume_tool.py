@@ -205,7 +205,7 @@ def cmd_judge_input(args) -> int:
     It validates the run's analysis and keeps a copy in --out (the gate scores against that copy, so a
     later run cannot change the posting's keywords), decides keep or tailor, and when tailoring, writes
     the judge's input for the keywords the base resume lacks to --out/judge-input.md. It prints one JSON
-    object with the decision, the base score and the number of keywords to judge.
+    object with the decision, the base score, its breakdown and the number of keywords to judge.
     """
     base = load_base(Path(args.template))
     out = Path(args.out)
@@ -214,13 +214,15 @@ def cmd_judge_input(args) -> int:
     except (ToolError, resume_score.AnalysisError):
         return _print_json({"ok": False, "failed": ["analysis_invalid"]}, False)
     write_json(out / "analysis.json", analysis)
-    score = resume_score.score(analysis["keywords"], analysis["requirements"], analysis["assessment"],
+    requirements, assessment = analysis["requirements"], analysis["assessment"]
+    score = resume_score.score(analysis["keywords"], requirements, assessment,
                                resume_model.resume_text(base, base.content()))
     keywords = resume_terms.candidates(base, analysis["keywords"]) if score.decision == "tailor" else []
     if keywords:
         (out / "judge-input.md").write_text(resume_terms.judge_input(base, read_profile(Path(args.profile)), keywords),
                                             encoding="utf-8")
     return _print_json({"ok": True, "decision": score.decision, "base_score": score.score,
+                        "base": resume_score.breakdown(score, requirements, assessment),
                         "candidates": len(keywords)}, True)
 
 
@@ -249,12 +251,13 @@ def cmd_verify(args) -> int:
     It reads only the run's JSON files from --work and builds everything else from --template, so
     nothing a run changed in its folder can reach the saved resume. --analysis and --terms name the
     service's own copies of the analysis and the judge's ruling; without --terms no posting keyword the
-    base resume lacks is allowed. It prints one JSON object with scores, check codes and the approved
-    keywords used, never file contents, and writes the PDF only when every check passes.
+    base resume lacks is allowed. It prints one JSON object with scores and their breakdowns, check codes,
+    the approved keywords used and the rejected ones, never file contents, and writes the PDF only when
+    every check passes.
     """
     template, work = Path(args.template), Path(args.work)
     result = {"ok": False, "decision": None, "base_score": None, "tailored_score": None, "failed": [], "warnings": [],
-              "added_terms": []}
+              "added_terms": [], "base": None, "tailored": None, "rejected_terms": []}
 
     def finish(stage: str | None = None, failed: list[str] | None = None) -> int:
         if stage:
@@ -274,7 +277,8 @@ def cmd_verify(args) -> int:
     keywords, requirements = analysis["keywords"], analysis["requirements"]
     base_score = resume_score.score(keywords, requirements, analysis["assessment"],
                                     resume_model.resume_text(base, base.content()))
-    result.update(decision=base_score.decision, base_score=base_score.score)
+    result.update(decision=base_score.decision, base_score=base_score.score,
+                  base=resume_score.breakdown(base_score, requirements, analysis["assessment"]))
     if base_score.decision == "keep":
         result["ok"] = True
         return finish()
@@ -292,9 +296,11 @@ def cmd_verify(args) -> int:
     if not report["passed"]:
         codes = sorted({item["code"] for item in report["failed"]})
         return finish("render" if "compile_failed" in codes else "content", codes)
-    result.update(ok=True, tailored_score=resume_score.score(
-        keywords, requirements, assessment, resume_model.resume_text(base, content)).score,
-        added_terms=resume_checks.added_keywords(base, content, terms) if terms else [])
+    tailored_score = resume_score.score(keywords, requirements, assessment, resume_model.resume_text(base, content))
+    result.update(ok=True, tailored_score=tailored_score.score,
+                  tailored=resume_score.breakdown(tailored_score, requirements, assessment),
+                  added_terms=resume_checks.added_keywords(base, content, terms) if terms else [],
+                  rejected_terms=[dict(r) for r in terms.rejected] if terms else [])
     Path(args.pdf_out).write_bytes(pdf)
     return finish()
 

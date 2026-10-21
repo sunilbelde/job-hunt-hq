@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -179,9 +180,17 @@ def test_api_key_wins_when_both_are_set(tmp_path, temp_root):
     assert env["ANTHROPIC_API_KEY"] == "sk-ant-api03-test" and "CLAUDE_CODE_OAUTH_TOKEN" not in env
 
 
+def scores(match: Match) -> Match:
+    """The match without its breakdowns, which tests check separately."""
+    return replace(match, base_breakdown=None, tailored_breakdown=None, rejected_terms=())
+
+
 def test_strong_match_keeps_the_base_resume(tmp_path, temp_root):
     _, result = run_with(tmp_path, "keep")
-    assert result.match == Match("base_meets_threshold", 77)
+    assert scores(result.match) == Match("base_meets_threshold", 77)
+    assert (result.match.base_breakdown["score"], result.match.tailored_breakdown) == (77, None)
+    assert result.match.to_dict() == {"status": "base_meets_threshold", "threshold": 70, "base_score": 77,
+                                      "tailored_score": None, "added_terms": []}
     assert result.pdf is None
     assert result.run == RunStats(turns=6, cost_usd=0.12, models=("claude-opus-5-5",))
     assert list(temp_root.iterdir()) == []
@@ -191,7 +200,12 @@ def test_strong_match_keeps_the_base_resume(tmp_path, temp_root):
 def test_weak_match_returns_the_gate_pdf(tmp_path, temp_root):
     claude, result = run_with(tmp_path, "tailor")
     # Airflow, approved from the profile, joins a skills line: keywords 10 of 12, requirements 4 of 5.
-    assert result.match == Match("tailored", 57, 81, added_terms=("Airflow",))
+    assert scores(result.match) == Match("tailored", 57, 81, added_terms=("Airflow",))
+    assert (result.match.base_breakdown["score"], result.match.tailored_breakdown["score"]) == (57, 81)
+    assert [r["text"] for r in result.match.tailored_breakdown["requirements"]] == [
+        r["text"] for r in weak_analysis()["requirements"]]
+    assert result.match.rejected_terms == ({"term": "Kafka", "reason": "rejected by the judge"},)
+    assert set(result.match.to_dict()) == {"status", "threshold", "base_score", "tailored_score", "added_terms"}
     assert result.pdf.startswith(b"%PDF")
     assert roles(claude) == ["analysis", "judge", "tailoring"]
     assert (result.run.turns, result.run.models) == (18, ("claude-opus-5-5",))
@@ -233,7 +247,8 @@ def test_nothing_to_judge_skips_the_judge(tmp_path, temp_root):
     analysis["assessment"]["R1"] = {"status": "missing", "evidence": []}  # keywords 9 of 9, requirements 0 of 5: 50
     claude, result = run_with(tmp_path, "tailor", {"analysis": analysis, "add_skill": None})
     assert roles(claude) == ["analysis", "tailoring"]
-    assert result.match == Match("tailored", 50, 90)
+    assert scores(result.match) == Match("tailored", 50, 90)
+    assert result.match.rejected_terms == ()
     assert (result.run.terms_approved, result.run.terms_rejected) == (0, 0)
 
 
@@ -250,7 +265,7 @@ def test_a_keyword_the_judge_rejected_fails_the_gate(tmp_path, temp_root):
 def test_gate_scores_against_the_analysis_as_judged(tmp_path, temp_root):
     # The tailoring run drops the keywords it lacks from out/analysis.json, which would score 90.
     _, result = run_with(tmp_path, "tailor", {"tamper_analysis": True})
-    assert result.match == Match("tailored", 57, 81, added_terms=("Airflow",))
+    assert scores(result.match) == Match("tailored", 57, 81, added_terms=("Airflow",))
 
 
 @pytest.mark.parametrize("scenario, reason, subtype", [

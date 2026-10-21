@@ -15,6 +15,10 @@ PROTECTED = [
     ("patch", "/application/{application_id}"),
     ("delete", "/application/{application_id}"),
     ("post", "/resume"),
+    ("get", "/applications"),
+    ("get", "/application/{application_id}"),
+    ("get", "/application/{application_id}/resume.pdf"),
+    ("get", "/resume/base.pdf"),
 ]
 HEALTH = [("get", "/health"), ("get", "/healthz")]
 RESPONSES = {
@@ -24,7 +28,12 @@ RESPONSES = {
     ("patch", "/application/{application_id}"): {"200", "401", "404", "422", "503"},
     ("delete", "/application/{application_id}"): {"200", "401", "404", "503"},
     ("post", "/resume"): {"201", "401", "404", "422", "500", "502", "503"},
+    ("get", "/applications"): {"200", "401", "503"},
+    ("get", "/application/{application_id}"): {"200", "401", "404", "503"},
+    ("get", "/application/{application_id}/resume.pdf"): {"200", "401", "404", "503"},
+    ("get", "/resume/base.pdf"): {"200", "401", "500"},
 }
+PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/resume/base.pdf")]
 IMMUTABLE = {"job_link", "posting_source_type", "verification_method", "official_apply_url"}
 
 
@@ -70,8 +79,30 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_six_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES)
+def test_documents_exactly_the_ten_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 10
+
+
+def test_viewer_page_is_not_an_operation(schema):
+    assert "/viewer" not in schema["paths"]
+
+
+def test_pdf_responses(schema):
+    ops = operations(schema)
+    for key in PDF_OPERATIONS:
+        assert set(ops[key]["responses"]["200"]["content"]) == {"application/pdf"}, key
+
+
+def test_viewer_reads_document_the_report(schema):
+    ops = operations(schema)
+    detail = ops[("get", "/application/{application_id}")]["responses"]["200"]["content"]["application/json"]
+    assert detail["schema"]["$ref"] == "#/components/schemas/ApplicationDetail"
+    schemas = schema["components"]["schemas"]
+    assert {"base", "tailored", "added_terms", "rejected_terms", "saved_path"} <= set(schemas["ResumeReport"]["properties"])
+    assert {"text", "status", "counted", "evidence"} <= set(schemas["RequirementRow"]["properties"])
+    listed = ops[("get", "/applications")]["responses"]["200"]["content"]["application/json"]
+    assert listed["schema"]["$ref"] == "#/components/schemas/ApplicationList"
+    assert "full_job_description" not in schemas["ApplicationListItem"]["properties"]
 
 
 def test_every_operation_has_tag_summary_description(schema):
