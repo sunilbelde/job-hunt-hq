@@ -34,6 +34,14 @@ case "$docs_port" in
 esac
 command -v python3.12 >/dev/null 2>&1 || die "python3.12 not found. Install it: brew install python@3.12"
 command -v tectonic >/dev/null 2>&1 || die "tectonic not found. Install it: brew install tectonic"
+# Resume tailoring needs the Claude Code CLI and a credential; without them the service still runs,
+# but resumes that need scoring fail, so these are warnings at the end rather than errors here.
+claude_bin=$(command -v claude 2>/dev/null || true)
+if grep -Eq '^[[:space:]]*(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)[[:space:]]*=[[:space:]]*[^[:space:]#]' "$repo/.env" 2>/dev/null; then
+  has_credential=yes
+else
+  has_credential=no
+fi
 [ -f "$repo/.env" ] || die ".env not found. Create it: cp .env.example .env, fill it in, then chmod 600 .env"
 mode=$(stat -f %Lp "$repo/.env")
 [ $((0$mode & 077)) -eq 0 ] || die ".env is readable by other users (mode $mode). Fix it: chmod 600 .env"
@@ -70,7 +78,8 @@ else
   cp "$repo/deploy/local.job-hunt-hq.plist.template" "$tmp_template"
 fi
 "$venv_py" "$repo/deploy/render_template.py" "$tmp_template" \
-  "$tmp_plist" REPO="$repo" USER="$(id -un)" HOME="$HOME" PORT="$port" DOCS_PORT="$docs_port"
+  "$tmp_plist" REPO="$repo" USER="$(id -un)" HOME="$HOME" PORT="$port" DOCS_PORT="$docs_port" \
+  CLAUDE_BIN="${claude_bin:-claude}"
 plutil -lint "$tmp_plist" >/dev/null || die "generated plist is invalid"
 : > "$log_dir/launchd.log"
 
@@ -121,5 +130,23 @@ if [ "$docs_port" != off ]; then
       *) echo "WARNING: tailscale serve is not proxying the docs port $docs_port." >&2
          echo "         Run: tailscale serve --bg --https=8444 http://127.0.0.1:$docs_port" >&2 ;;
     esac
+  fi
+fi
+
+# Resume tailoring: the CLI, a credential, and one minimal live call to see the credential works.
+if [ -z "$claude_bin" ]; then
+  echo "WARNING: Claude Code CLI not found; resumes that need tailoring will fail." >&2
+  echo "         Install Claude Code (https://code.claude.com/docs/en/setup), then run this script again." >&2
+elif [ "$has_credential" = no ]; then
+  echo "WARNING: .env sets no Claude credential; resumes that need tailoring will fail." >&2
+  echo "         Run claude setup-token and add CLAUDE_CODE_OAUTH_TOKEN=<token> to .env as one line," >&2
+  echo "         or set ANTHROPIC_API_KEY. Then run this script again." >&2
+else
+  rc=0
+  tailoring=$(cd "$repo" && CLAUDE_BIN="$claude_bin" "$venv_py" -m app.tailoring --check --live 2>/dev/null) || rc=$?
+  if [ $rc -eq 0 ]; then
+    echo "OK: tailoring $tailoring"
+  else
+    echo "WARNING: tailoring check: ${tailoring:-did not run}" >&2
   fi
 fi

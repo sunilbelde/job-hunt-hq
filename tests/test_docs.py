@@ -132,8 +132,30 @@ def test_resume_response_documents_cover_letter_path(schema):
     response = operations(schema)[("post", "/resume")]["responses"]["201"]
     ref = response["content"]["application/json"]["schema"]["$ref"]
     created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
-    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "cover_letter_path"}
+    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "cover_letter_path", "match"}
     assert "not generated yet" in created["properties"]["cover_letter_path"]["description"]
+
+
+def test_resume_response_documents_match(schema):
+    response = operations(schema)[("post", "/resume")]["responses"]["201"]
+    ref = response["content"]["application/json"]["schema"]["$ref"]
+    created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
+    match = schema["components"]["schemas"][created["properties"]["match"]["$ref"].rsplit("/", 1)[1]]
+    assert set(match["properties"]) == set(match["required"]) == {"status", "threshold", "base_score", "tailored_score",
+                                                                  "added_terms"}
+    assert match["properties"]["added_terms"]["type"] == "array"
+    assert match["properties"]["added_terms"]["items"] == {"type": "string"}
+    assert set(match["properties"]["status"]["enum"]) == {"no_job_description", "base_meets_threshold", "tailored"}
+    for score in ("base_score", "tailored_score"):
+        assert {t["type"] for t in match["properties"][score]["anyOf"]} == {"integer", "null"}
+    assert all(match["properties"][name].get("description") for name in match["properties"])
+
+
+def test_resume_description_states_duration_and_failures(schema):
+    op = operations(schema)[("post", "/resume")]
+    assert "at least 10 minutes" in op["description"]
+    assert all(status in op["description"] for status in ("no_job_description", "base_meets_threshold", "tailored"))
+    assert "tailoring" in op["responses"]["500"]["description"]
 
 
 def test_path_ids_stay_plain_strings(schema):

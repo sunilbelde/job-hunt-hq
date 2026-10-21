@@ -1,7 +1,8 @@
 #!/bin/sh
 # Smoke test: check that the public address serves no API docs and that the docs listener does,
 # then record a synthetic application on a running service, generate its resume, and check that
-# the file at the returned saved_path is a PDF. Must run on the Mac itself, since it
+# the file at the returned saved_path is a PDF. The application has no posting text, so the
+# service saves the base resume without starting a Claude run. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
 # Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] scripts/smoke_test.sh <base_url>
@@ -9,6 +10,7 @@ set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] $0 <base_url>   (run on the Mac hosting the service)"
+  echo "The synthetic application has no posting text, so the check never starts a Claude run."
   exit 0
 fi
 if [ $# -ne 1 ]; then
@@ -69,7 +71,7 @@ fi
 
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/application" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"company":"Smoke Test Co","role":"Software Engineer","job_link":"'"$link"'","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":"","full_job_description":"Smoke test posting."}')
+  -d '{"company":"Smoke Test Co","role":"Software Engineer","job_link":"'"$link"'","posting_source_type":"employer_site","verification_method":"employer_site","official_apply_url":""}')
 status=$(printf '%s\n' "$resp" | tail -n 1)
 body=$(printf '%s\n' "$resp" | sed '$d')
 case "$status" in
@@ -79,6 +81,17 @@ case "$status" in
 esac
 application_id=$(printf '%s' "$body" | json_field application_id)
 
+# An older smoke test stored posting text, which would make the service score and tailor (a paid
+# Claude run). Clear it on a reused application, so the resume is always the unscored base one.
+if [ "$created" != 1 ]; then
+  status=$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "$base/application/$application_id" \
+    -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' -d '{"full_job_description":null}')
+  if [ "$status" != "200" ]; then
+    echo "FAIL: PATCH /application returned $status while clearing the smoke test's posting text" >&2
+    exit 1
+  fi
+fi
+
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/resume" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
   -d "{\"application_id\":\"$application_id\"}")
@@ -86,6 +99,12 @@ status=$(printf '%s\n' "$resp" | tail -n 1)
 body=$(printf '%s\n' "$resp" | sed '$d')
 if [ "$status" != "201" ]; then
   echo "FAIL: POST /resume returned $status" >&2
+  exit 1
+fi
+
+match=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("match", {}).get("status"))')
+if [ "$match" != "no_job_description" ]; then
+  echo "FAIL: POST /resume reported match.status $match, want no_job_description (no Claude run)" >&2
   exit 1
 fi
 
