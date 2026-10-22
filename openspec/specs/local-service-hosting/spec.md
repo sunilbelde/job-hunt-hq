@@ -180,10 +180,10 @@ The status script SHALL report whether the docs port answers `/docs`, alongside 
 - **THEN** the status output shows the docs listener as failing and the script exits non-zero
 
 ### Requirement: Smoke test checks the docs listener
-The smoke test SHALL check that the docs listener serves the reference page, the viewer page and an OpenAPI document with the ten documented operations, in addition to its public-address checks.
+The smoke test SHALL check that the docs listener serves the reference page, the viewer page and an OpenAPI document with the thirteen documented operations, in addition to its public-address checks.
 
 #### Scenario: Docs listener healthy
-- **WHEN** the smoke test runs and the docs listener answers `/docs` and `/viewer` with 200 and `/openapi.json` with the ten operations
+- **WHEN** the smoke test runs and the docs listener answers `/docs` and `/viewer` with 200 and `/openapi.json` with the thirteen operations
 - **THEN** the docs check passes
 
 #### Scenario: Docs listener missing
@@ -232,7 +232,7 @@ The status script SHALL report whether tailoring is ready: the Claude CLI path a
 - **THEN** the status output shows tailoring as not configured
 
 ### Requirement: Smoke test never starts a Claude run
-The smoke test SHALL generate its resume for an application with no posting text and check that `match.status` is `no_job_description`. If it reuses a leftover application that has posting text, it SHALL clear that text before generating, so it never starts a Claude run.
+The smoke test SHALL generate its resume for an application with no posting text and check that `match.status` is `no_job_description`. If it reuses a leftover application that has posting text, it SHALL clear that text before generating, so it never starts a Claude run. For the same application it SHALL request a cover letter and check that the service answers 422 and writes no cover letter file.
 
 #### Scenario: Fresh smoke test
 - **WHEN** the smoke test runs against a service with no leftover smoke-test application
@@ -241,3 +241,7 @@ The smoke test SHALL generate its resume for an application with no posting text
 #### Scenario: Leftover application with posting text
 - **WHEN** an earlier version of the smoke test left its application with posting text
 - **THEN** the smoke test clears that text before requesting the resume
+
+#### Scenario: Cover letter refused without posting text
+- **WHEN** the smoke test requests a cover letter for its application
+- **THEN** the service answers 422, no Claude run starts, and no cover letter file appears in the application's folder

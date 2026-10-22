@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from app.applications import ApplicationStore, ApplicationStoreError
 from app.main import create_app
 from app.rendering import RenderError
-from app.storage import RESUME_FILE_NAME, LocalStorage
+from app.storage import COVER_LETTER_FILE_NAME, RESUME_FILE_NAME, LocalStorage
 from app.tailoring import Match
 from tests.conftest import API_KEY, FAKE_PDF, GH_LINK, VALID_APPLICATION, fake_output
 
@@ -26,13 +26,24 @@ TAILORED = Match(
                         "requirements": [{"id": "R1", "text": "Runs Kafka streaming", "status": "met"}]},
     rejected_terms=({"term": "Kafka", "reason": "rejected by the judge"},),
 )
-READ_PATHS = ["/applications", f"/application/{UNKNOWN}", f"/application/{UNKNOWN}/resume.pdf", "/resume/base.pdf"]
+READ_PATHS = ["/applications", f"/application/{UNKNOWN}", f"/application/{UNKNOWN}/resume.pdf",
+              f"/application/{UNKNOWN}/cover-letter.pdf", "/resume/base.pdf", "/cover-letter/base.pdf"]
 
 
 @pytest.fixture
 def viewer(settings):
     """The docs listener's app: viewer on, saving real files under OUTPUT_DIR."""
     return TestClient(create_app(settings.model_copy(update={"api_docs_enabled": True}), LocalStorage(settings.output_dir)))
+
+
+@pytest.fixture
+def base_letter(tmp_path, monkeypatch):
+    """A stand-in for the committed data/COVER_LETTER.pdf."""
+    path = tmp_path / "data" / "COVER_LETTER.pdf"
+    path.parent.mkdir()
+    path.write_bytes(b"%PDF-base-letter")
+    monkeypatch.setattr("app.viewer.BASE_COVER_LETTER", path)
+    return path
 
 
 @pytest.fixture
@@ -63,6 +74,14 @@ def generate(client, monkeypatch, application_id, match=TAILORED, content=FAKE_P
     return r.json()
 
 
+def save_letter(settings, application_id, content=b"%PDF letter", company="Acme Corp") -> Path:
+    """A cover letter where POST /cover-letter saves it."""
+    path = settings.output_dir / company / application_id / COVER_LETTER_FILE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
 def store_of(settings) -> ApplicationStore:
     return ApplicationStore(settings.output_dir / "applications.sqlite3")
 
@@ -83,10 +102,13 @@ def test_not_served_without_docs(settings, storage, path, headers):
 
 
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
-def test_reads_need_no_key(viewer, base_pdf, headers):
-    record(viewer)
+def test_reads_need_no_key(viewer, settings, base_pdf, base_letter, headers):
+    application_id = record(viewer)
+    save_letter(settings, application_id)
     assert viewer.get("/applications", headers=headers).status_code == 200
     assert viewer.get("/resume/base.pdf", headers=headers).content == b"%PDF-base"
+    assert viewer.get("/cover-letter/base.pdf", headers=headers).content == b"%PDF-base-letter"
+    assert viewer.get(f"/application/{application_id}/cover-letter.pdf", headers=headers).content == b"%PDF letter"
     assert_error(viewer.get(f"/application/{UNKNOWN}", headers=headers), 404, "Application not found")
     assert_error(viewer.get(f"/application/{UNKNOWN}/resume.pdf", headers=headers), 404, "Application not found")
 
@@ -148,6 +170,7 @@ def test_detail_unknown_id(viewer, application_id):
     record(viewer)
     assert_error(viewer.get(f"/application/{application_id}"), 404, "Application not found")
     assert_error(viewer.get(f"/application/{application_id}/resume.pdf"), 404, "Application not found")
+    assert_error(viewer.get(f"/application/{application_id}/cover-letter.pdf"), 404, "Application not found")
 
 
 def test_detail_store_unavailable(viewer, monkeypatch):
@@ -157,7 +180,8 @@ def test_detail_store_unavailable(viewer, monkeypatch):
         raise ApplicationStoreError("OperationalError: unable to open database file")
 
     monkeypatch.setattr(ApplicationStore, "get_report", broken)
-    for path in (f"/application/{application_id}", f"/application/{application_id}/resume.pdf"):
+    for path in (f"/application/{application_id}", f"/application/{application_id}/resume.pdf",
+                 f"/application/{application_id}/cover-letter.pdf"):
         assert_error(viewer.get(path), 503, "Application store unavailable")
 
 
@@ -213,6 +237,81 @@ def test_saved_path_must_be_a_file_inside_output_dir(viewer, settings, tmp_path,
     assert b"not yours" not in r.content
 
 
+# --- GET /application/{id}/cover-letter.pdf ---
+
+def test_saved_cover_letter_returned(viewer, settings):
+    application_id = record(viewer)
+    save_letter(settings, application_id, b"%PDF-1.5 letter bytes")
+    r = viewer.get(f"/application/{application_id}/cover-letter.pdf")
+    assert (r.status_code, r.content) == (200, b"%PDF-1.5 letter bytes")
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.headers["cache-control"] == "no-store" and r.headers["content-disposition"] == "inline"
+
+
+def test_letter_written_before_a_rename_found_beside_the_resume(viewer, settings, monkeypatch):
+    application_id = record(viewer)
+    generate(viewer, monkeypatch, application_id)
+    save_letter(settings, application_id, b"%PDF old company letter")
+    viewer.patch(f"/application/{application_id}", json={"company": "Acme Inc"}, headers=HEADERS)
+    assert viewer.get(f"/application/{application_id}/cover-letter.pdf").content == b"%PDF old company letter"
+
+
+def test_letter_for_the_current_company_comes_first(viewer, settings, monkeypatch):
+    application_id = record(viewer)
+    generate(viewer, monkeypatch, application_id)
+    save_letter(settings, application_id, b"%PDF old company letter")
+    viewer.patch(f"/application/{application_id}", json={"company": "Acme Inc"}, headers=HEADERS)
+    save_letter(settings, application_id, b"%PDF new company letter", company="Acme Inc")
+    assert viewer.get(f"/application/{application_id}/cover-letter.pdf").content == b"%PDF new company letter"
+
+
+def test_no_cover_letter_generated(viewer, monkeypatch):
+    application_id = record(viewer)
+    assert_error(viewer.get(f"/application/{application_id}/cover-letter.pdf"), 404, "Cover letter not found")
+    generate(viewer, monkeypatch, application_id)  # a resume alone is not a letter
+    assert_error(viewer.get(f"/application/{application_id}/cover-letter.pdf"), 404, "Cover letter not found")
+
+
+@pytest.mark.parametrize("where", ["report_outside", "symlink_out", "folder"])
+def test_cover_letter_must_be_a_file_inside_output_dir(viewer, settings, tmp_path, where):
+    application_id = record(viewer)
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / COVER_LETTER_FILE_NAME).write_bytes(b"%PDF not yours")
+    inside = settings.output_dir / "Acme Corp" / application_id / COVER_LETTER_FILE_NAME
+    inside.parent.mkdir(parents=True)
+    if where == "report_outside":
+        store_of(settings).save_report(application_id, "2026-10-20T10:00:00Z", str(secret / RESUME_FILE_NAME),
+                                       TAILORED.report())
+    elif where == "symlink_out":
+        inside.symlink_to(secret / COVER_LETTER_FILE_NAME)
+    else:
+        inside.mkdir()
+    r = viewer.get(f"/application/{application_id}/cover-letter.pdf")
+    assert_error(r, 404, "Cover letter not found")
+    assert b"not yours" not in r.content
+
+
+# --- GET /cover-letter/base.pdf ---
+
+def test_base_cover_letter_returned_as_committed(viewer, base_letter):
+    r = viewer.get("/cover-letter/base.pdf")
+    assert (r.status_code, r.content, r.headers["content-type"]) == (200, b"%PDF-base-letter", "application/pdf")
+    assert r.headers["cache-control"] == "no-store"
+    base_letter.write_bytes(b"%PDF-re-rendered")
+    assert viewer.get("/cover-letter/base.pdf").content == b"%PDF-re-rendered"
+
+
+def test_base_cover_letter_missing(viewer, base_letter):
+    base_letter.unlink()
+    assert_error(viewer.get("/cover-letter/base.pdf"), 404, "Base cover letter not found")
+
+
+def test_base_cover_letter_is_the_committed_file():
+    from app.viewer import BASE_COVER_LETTER
+    assert BASE_COVER_LETTER == Path(__file__).resolve().parent.parent / "data" / "COVER_LETTER.pdf"
+
+
 # --- GET /resume/base.pdf ---
 
 def test_base_resume_rendered_once(viewer, base_pdf):
@@ -258,32 +357,36 @@ def snapshot(settings) -> tuple:
     return rows, reports, files
 
 
-def test_reads_change_nothing(viewer, settings, monkeypatch, base_pdf):
+def test_reads_change_nothing(viewer, settings, monkeypatch, base_pdf, base_letter):
     first, second = record(viewer, 1), record(viewer, 2)
     generate(viewer, monkeypatch, first)
-    before = snapshot(settings)
-    for path in ["/applications", "/resume/base.pdf", "/viewer",
-                 *(p for i in (first, second) for p in (f"/application/{i}", f"/application/{i}/resume.pdf"))]:
+    save_letter(settings, first)
+    before = snapshot(settings), base_letter.read_bytes()
+    for path in ["/applications", "/resume/base.pdf", "/cover-letter/base.pdf", "/viewer",
+                 *(p for i in (first, second) for p in (f"/application/{i}", f"/application/{i}/resume.pdf",
+                                                        f"/application/{i}/cover-letter.pdf"))]:
         viewer.get(path)
-    assert snapshot(settings) == before
+    assert (snapshot(settings), base_letter.read_bytes()) == before
 
 
 def request_lines(caplog):
     return [json.loads(r.getMessage()) for r in caplog.records
             if r.name == "app.requests" and r.getMessage().startswith('{"event": "')
-            and json.loads(r.getMessage())["event"] in ("application_request", "resume_request")]
+            and json.loads(r.getMessage())["event"] in ("application_request", "resume_request", "cover_letter_request")]
 
 
-def test_each_read_logged_once_without_content(viewer, monkeypatch, base_pdf, caplog):
+def test_each_read_logged_once_without_content(viewer, settings, monkeypatch, base_pdf, base_letter, caplog):
     application_id = record(viewer, full_job_description="A posting about Kafka streaming platforms.")
     generate(viewer, monkeypatch, application_id)
+    save_letter(settings, application_id, b"%PDF Dear Hiring Manager")
     caplog.set_level(logging.INFO, logger="app.requests")
     caplog.clear()
     viewer.get("/viewer")
     assert request_lines(caplog) == []
     for path, event in [("/applications", "application_request"), (f"/application/{application_id}", "application_request"),
                         (f"/application/{application_id}/resume.pdf", "application_request"),
-                        ("/resume/base.pdf", "resume_request")]:
+                        (f"/application/{application_id}/cover-letter.pdf", "application_request"),
+                        ("/resume/base.pdf", "resume_request"), ("/cover-letter/base.pdf", "cover_letter_request")]:
         caplog.clear()
         viewer.get(path)
         (line,) = request_lines(caplog)
@@ -293,7 +396,8 @@ def test_each_read_logged_once_without_content(viewer, monkeypatch, base_pdf, ca
         if path.startswith("/application/"):
             expected["application_id"] = application_id
         assert {k: v for k, v in line.items() if k != "duration_ms"} == expected
-    for text in ("Kafka", "Airflow", "Acme Corp", API_KEY, "Runs Kafka streaming"):
+    for text in ("Kafka", "Airflow", "Acme Corp", API_KEY, "Runs Kafka streaming", "Dear Hiring Manager",
+                 "base-letter", COVER_LETTER_FILE_NAME, str(settings.output_dir)):
         assert text not in caplog.text
 
 
@@ -342,3 +446,10 @@ def test_page_asks_for_no_key_and_stores_nothing(viewer):
     html = viewer.get("/viewer").text
     for text in ("X-API-Key", 'type="password"', "?key", "api_key=", "localStorage", "sessionStorage", "document.cookie"):
         assert text not in html, text
+
+
+def test_page_switches_between_resume_and_cover_letter(viewer):
+    html = viewer.get("/viewer").text
+    assert '"Resume"' in html and '"Cover letter"' in html and '"aria-pressed": "true"' in html
+    assert "/cover-letter/base.pdf" in html and '/cover-letter.pdf"' in html
+    assert "No cover letter has been generated for this application yet." in html
