@@ -3,7 +3,8 @@
 # listener serves both,
 # then record a synthetic application on a running service, generate its resume, and check that
 # the file at the returned saved_path is a PDF. The application has no posting text, so the
-# service saves the base resume without starting a Claude run. Must run on the Mac itself, since it
+# service saves the base resume without starting a Claude run, and refuses a cover letter (422)
+# without starting one either. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
 # Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] scripts/smoke_test.sh <base_url>
@@ -11,7 +12,7 @@ set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] $0 <base_url>   (run on the Mac hosting the service)"
-  echo "The synthetic application has no posting text, so the check never starts a Claude run."
+  echo "The synthetic application has no posting text, so the check never starts a Claude run, for the resume or the cover letter."
   exit 0
 fi
 if [ $# -ne 1 ]; then
@@ -52,7 +53,7 @@ for path in /docs /openapi.json /viewer; do
   fi
 done
 
-# The docs listener (tailnet only) serves the reference, the viewer and a schema with the ten operations.
+# The docs listener (tailnet only) serves the reference, the viewer and a schema with the eleven operations.
 if [ "$docs" != off ]; then
   for path in /docs /viewer; do
     status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
@@ -66,8 +67,8 @@ if [ "$docs" != off ]; then
   count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
 methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
 print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
-  if [ "$status" != "200" ] || [ "$count" != "10" ]; then
-    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 10" >&2
+  if [ "$status" != "200" ] || [ "$count" != "11" ]; then
+    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 11" >&2
     exit 1
   fi
 fi
@@ -122,3 +123,19 @@ if [ "$(head -c 4 "$saved")" != "%PDF" ]; then
   exit 1
 fi
 echo "OK: resume saved as a PDF ($(wc -c < "$saved" | tr -d ' ') bytes)"
+
+# A cover letter is always tailored, so without posting text the service refuses it before any Claude run.
+letter="$(dirname "$saved")/SUNIL BELDE - Cover Letter.pdf"
+resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/cover-letter" \
+  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+  -d "{\"application_id\":\"$application_id\"}")
+status=$(printf '%s\n' "$resp" | tail -n 1)
+if [ "$status" != "422" ]; then
+  echo "FAIL: POST /cover-letter returned $status, want 422 (no posting text, so no Claude run)" >&2
+  exit 1
+fi
+if [ -e "$letter" ]; then
+  echo "FAIL: a cover letter file exists beside the smoke test's resume" >&2
+  exit 1
+fi
+echo "OK: cover letter refused without posting text (422), no file written"

@@ -15,6 +15,7 @@ PROTECTED = [
     ("patch", "/application/{application_id}"),
     ("delete", "/application/{application_id}"),
     ("post", "/resume"),
+    ("post", "/cover-letter"),
 ]
 VIEWER_READS = [
     ("get", "/applications"),
@@ -30,6 +31,7 @@ RESPONSES = {
     ("patch", "/application/{application_id}"): {"200", "401", "404", "422", "503"},
     ("delete", "/application/{application_id}"): {"200", "401", "404", "503"},
     ("post", "/resume"): {"201", "401", "404", "422", "500", "502", "503"},
+    ("post", "/cover-letter"): {"201", "401", "404", "422", "500", "502", "503"},
     ("get", "/applications"): {"200", "503"},
     ("get", "/application/{application_id}"): {"200", "404", "503"},
     ("get", "/application/{application_id}/resume.pdf"): {"200", "404", "503"},
@@ -81,8 +83,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_ten_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 10
+def test_documents_exactly_the_eleven_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 11
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -161,12 +163,31 @@ def test_resume_body_schema(schema):
     assert body["required"] == ["application_id"]
 
 
-def test_resume_response_documents_cover_letter_path(schema):
+def test_cover_letter_body_schema(schema):
+    body = component(schema, operations(schema)[("post", "/cover-letter")])
+    assert body["required"] == ["application_id"] and body["properties"]["application_id"]["type"] == "string"
+
+
+def test_cover_letter_response_and_description(schema):
+    op = operations(schema)[("post", "/cover-letter")]
+    ref = op["responses"]["201"]["content"]["application/json"]["schema"]["$ref"]
+    created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
+    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "text"}
+    assert created["properties"]["text"]["description"] and created["properties"]["saved_path"]["description"]
+    description = " ".join(op["description"].split())
+    for phrase in ("always tailored", "posting text", "beside the application's resume", "`text`",
+                   "at least 10 minutes", "`POST /resume` never writes one"):
+        assert phrase in description, phrase
+    assert "posting text" in op["responses"]["422"]["description"]
+    assert "Cover letter generation failed" in op["responses"]["500"]["description"]
+    assert op["tags"] == ["cover letters"]
+
+
+def test_resume_response_has_no_cover_letter_path(schema):
     response = operations(schema)[("post", "/resume")]["responses"]["201"]
     ref = response["content"]["application/json"]["schema"]["$ref"]
     created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
-    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "cover_letter_path", "match"}
-    assert "not generated yet" in created["properties"]["cover_letter_path"]["description"]
+    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "match"}
 
 
 def test_resume_response_documents_match(schema):
@@ -216,6 +237,11 @@ def test_documented_examples_are_accepted(schema, docs_client):
     assert set(resume) == set(example(("post", "/resume")))
     r = docs_client.post("/resume", json=resume, headers=HEADERS)
     assert r.status_code == 201, r.json()
+    # The example application's posting is too short for a letter, so a 422 is fine, but only for that reason.
+    letter = {**example(("post", "/cover-letter")), "application_id": application_id}
+    assert set(letter) == set(example(("post", "/cover-letter")))
+    r = docs_client.post("/cover-letter", json=letter, headers=HEADERS)
+    assert r.status_code == 201 or "posting text" in r.json()["message"], r.json()
 
 
 # --- responses ---

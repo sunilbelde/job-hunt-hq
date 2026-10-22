@@ -16,6 +16,8 @@ from pydantic import BaseModel, ValidationError
 from pydantic.json_schema import models_json_schema
 
 from app.applications import ApplicationStore, ApplicationStoreError, utc_now
+from app.cover_letter import posting_usable as letter_posting_usable
+from app.cover_letter import run as write_cover_letter
 from app.generation import generate_output
 from app.models import (
     ApplicationDetail,
@@ -24,6 +26,8 @@ from app.models import (
     ApplicationRow,
     ApplicationUpdate,
     ApplicationUpdated,
+    CoverLetterCreated,
+    CoverLetterRequest,
     ErrorResponse,
     HealthStatus,
     ResumeCreated,
@@ -32,7 +36,7 @@ from app.models import (
 )
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
-from app.storage import LocalStorage, Storage, StorageError, cover_letter_path, rename_legacy_folders, resume_path
+from app.storage import LocalStorage, Storage, StorageError, rename_legacy_folders, resume_path
 from app.tailoring import TailoringError
 from app.viewer import BaseResumeCache, content_security_policy, page
 
@@ -58,19 +62,21 @@ api_key_header = APIKeyHeader(
 )
 
 # Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
-BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest)
+BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequest)
 
-DESCRIPTION = """Records verified job applications and generates resume PDFs for them.
+DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
 Every endpoint except the health checks and the viewer reads needs the `X-API-Key` header. Every error is a JSON object
 `{"ok": false, "message": "..."}`; the message names fields and rules but never echoes submitted values.
 
-Requests sent from this page are real: they change the application store and write resume files."""
+Requests sent from this page are real: they change the application store and write resume and cover letter files."""
 
 TAGS = [
     {"name": "health", "description": "Liveness checks. No API key needed."},
     {"name": "applications", "description": "Record, update and delete verified job applications."},
     {"name": "resumes", "description": "Generate a resume PDF for a recorded application."},
+    {"name": "cover letters", "description": "Write a cover letter for a recorded application, only when it asks "
+                                             "for one."},
     {"name": "viewer", "description": "Read applications, their generation reports and resume PDFs, for the resume "
                                       "viewer at `/viewer`. Served only where these docs are."},
 ]
@@ -81,9 +87,14 @@ ERROR_DESCRIPTIONS = {
     "404_resume": "No application has this ID (`Application not found`), or it has no saved resume (`Resume not found`).",
     "500_base": "The base resume could not be rendered.",
     422: "The body is not JSON, not a JSON object, or fails validation. `message` names the fields and rules.",
+    "422_letter": "The body is not JSON, not a JSON object, or fails validation, or the application has no usable "
+                  "posting text (missing, under 50 words, or over 60,000 characters). `message` says which.",
     500: "Resume generation failed: rendering, or tailoring (Claude not configured, unavailable or over its time or "
          "spend limit, the judge's output unusable, or the tailored resume failed a check). Nothing was saved, and an "
          "earlier resume for the application is unchanged.",
+    "500_letter": "Cover letter generation failed: Claude not configured, unavailable or over its time or spend "
+                  "limit, or the letter failed a check. Nothing was saved, and an earlier letter for the application "
+                  "is unchanged.",
     502: "Storage service unavailable.",
     503: "Application store unavailable.",
 }
@@ -169,6 +180,8 @@ def note_generation(request: Request, match=None, run=None) -> None:
 def request_event(path: str) -> str | None:
     if path in ("/resume", "/resume/base.pdf"):
         return "resume_request"
+    if path == "/cover-letter":
+        return "cover_letter_request"
     if path in ("/application", "/applications") or path.startswith("/application/"):
         return "application_request"
     return None
@@ -461,6 +474,31 @@ def create_app(
         return {"ok": True, "application_id": target}
 
 
+    async def requested_application(request: Request, model: type[BaseModel]) -> tuple[StoredApplication | None,
+                                                                                       JSONResponse | None]:
+        """The stored application a POST body names, or the error response to send instead."""
+        try:
+            payload = await request.json()
+        except ValueError:
+            return None, application_error(422, "Request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return None, application_error(422, "Request body must be a JSON object")
+        try:
+            requested = model.model_validate(payload).application_id
+        except ValidationError as exc:
+            return None, application_error(422, validation_message(exc))
+        target = parse_application_id(requested)
+        if target is None:  # cannot name a row; the raw string stays out of the log line
+            return None, application_not_found()
+        request.state.application_id = target
+        try:
+            row = await run_in_threadpool(applications.get, target)
+        except ApplicationStoreError as exc:
+            return None, store_unavailable(exc)
+        if row is None:
+            return None, application_not_found()
+        return StoredApplication.model_validate(row), None
+
     async def save_report(application_id: str, path, match) -> None:
         """Store the generation report for the viewer. The resume is already saved, so a failure only logs:
         the old report is removed if possible, so the viewer never shows scores for a different PDF."""
@@ -490,9 +528,7 @@ def create_app(
             "It may also use posting keywords the base resume lacks, when a separate Claude judge that never sees "
             "the posting finds them in the resume or the owner's profile list; `match.added_terms` lists them.\n\n"
             "Scoring and tailoring take about 1 to 5 minutes and are capped at about 10, so give the request a "
-            "client timeout of at least 10 minutes. Without usable posting text it returns in seconds.\n\n"
-            "`cover_letter_path` is where the application's cover letter goes, beside the resume; "
-            "cover letters are not generated yet, so no file exists there."
+            "client timeout of at least 10 minutes. Without usable posting text it returns in seconds."
         ),
         status_code=201,
         responses={
@@ -504,29 +540,10 @@ def create_app(
     async def create_resume(request: Request, x_api_key: str | None = Security(api_key_header)):
         if not api_key_valid(x_api_key):
             return application_error(401, "Invalid or missing API key")
-        try:
-            payload = await request.json()
-        except ValueError:
-            return application_error(422, "Request body must be valid JSON")
-        if not isinstance(payload, dict):
-            return application_error(422, "Request body must be a JSON object")
-        try:
-            requested = ResumeRequest.model_validate(payload).application_id
-        except ValidationError as exc:
-            return application_error(422, validation_message(exc))
-        target = parse_application_id(requested)
-        if target is None:  # cannot name a row; the raw string stays out of the log line
-            return application_not_found()
-        request.state.application_id = target
-
-        try:
-            row = await run_in_threadpool(applications.get, target)
-        except ApplicationStoreError as exc:
-            return store_unavailable(exc)
-        if row is None:
-            return application_not_found()
-        application = StoredApplication.model_validate(row)
-
+        application, error = await requested_application(request, ResumeRequest)
+        if error is not None:
+            return error
+        target = application.id
         try:
             # Scoring and tailoring take minutes; keep them off the event loop so /health stays responsive.
             generated = await run_in_threadpool(generate_output, application, settings)
@@ -544,17 +561,68 @@ def create_app(
             logger.error(json.dumps({"event": "storage_error", "application_id": target, "error": str(exc)}))
             return application_error(502, "Storage service unavailable")
         await save_report(target, path, generated.match)
-        # TODO: generate the cover letter and save it at cover_letter_path(path), alongside the resume.
-        # Until then the path is returned as a placeholder and no file is written there.
         return JSONResponse(
             status_code=201,
             content={
                 "ok": True,
                 "application_id": target,
                 "saved_path": str(path),
-                "cover_letter_path": str(cover_letter_path(path)),
                 "match": generated.match.to_dict(),
             },
+        )
+
+    @app.post(
+        "/cover-letter",
+        tags=["cover letters"],
+        summary="Write a cover letter PDF",
+        description=(
+            "Writes a one-page cover letter for a recorded application, tailored to its stored posting, and saves "
+            "it on the service host at `saved_path`, beside the application's resume (`SUNIL BELDE - Cover "
+            "Letter.pdf`), replacing any earlier one. Call it only for applications that ask for a cover letter: "
+            "`POST /resume` never writes one. The application itself is not changed, and no resume is needed.\n\n"
+            "The letter is always tailored, never generic: an application without usable posting text "
+            "(`full_job_description` missing, under 50 words or over 60,000 characters) gets a 422, so add the "
+            "posting with `PATCH /application/{application_id}` first. Claude writes the paragraphs from the "
+            "owner's base resume and profile only, and scripts check them: every number comes from a cited "
+            "source, no posting keyword the owner lacks, no phrasing copied from the posting, the company and "
+            "role named, 250 to 400 words on one page.\n\n"
+            "`text` is the same letter as plain text, for application forms that take pasted text. Writing takes "
+            "about 1 to 3 minutes and is capped at about 10, so give the request a client timeout of at least "
+            "10 minutes."
+        ),
+        status_code=201,
+        responses={
+            201: {"model": CoverLetterCreated, "description": "Written and saved."},
+            **errors(401, 404, "422_letter", "500_letter", 502, 503),
+        },
+        openapi_extra=json_body(CoverLetterRequest, "The application to write a cover letter for."),
+    )
+    async def create_cover_letter(request: Request, x_api_key: str | None = Security(api_key_header)):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        application, error = await requested_application(request, CoverLetterRequest)
+        if error is not None:
+            return error
+        target = application.id
+        if not letter_posting_usable(application.full_job_description):
+            return application_error(422, "Application has no usable posting text: add full_job_description "
+                                          "(at least 50 words) with PATCH /application/{application_id} first")
+        try:
+            # One Claude run of a few minutes; keep it off the event loop so /health stays responsive.
+            written = await run_in_threadpool(write_cover_letter, application, settings)
+        except TailoringError as exc:
+            note_generation(request, run=exc.run)
+            logger.error(json.dumps({"event": "cover_letter_error", "application_id": target, **exc.log_fields()}))
+            return application_error(500, "Cover letter generation failed")
+        note_generation(request, run=written.run)
+        try:
+            path = await run_in_threadpool(storage.save_cover_letter, application.company, target, written.pdf)
+        except StorageError as exc:
+            logger.error(json.dumps({"event": "storage_error", "application_id": target, "error": str(exc)}))
+            return application_error(502, "Storage service unavailable")
+        return JSONResponse(
+            status_code=201,
+            content={"ok": True, "application_id": target, "saved_path": str(path), "text": written.text},
         )
 
     if docs:

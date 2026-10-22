@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs letter_tool.py with the service's interpreter (TAILOR_PYTHON, set by app/cover_letter.py) or, when
+# run by hand in the repo, with the repo's .venv four levels up. Never python3 from PATH, which a
+# shell profile could change. letter_tool.py finds the tailor-resume skill's modules beside this skill.
+exec "${TAILOR_PYTHON:-$(dirname "$0")/../../../../.venv/bin/python}" "$(dirname "$0")/letter_tool.py" "$@"

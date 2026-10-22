@@ -5,9 +5,9 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 
 # Stub curl: http://x is the public base URL, http://d the docs listener. Status codes come from
-# STUB_DOCS (public docs and viewer) / STUB_DOCS_LISTENER / STUB_VIEWER_LISTENER / STUB_APP / STUB_PATCH / STUB_RESUME, the schema from
-# STUB_SCHEMA and match.status from STUB_MATCH; POST /application, PATCH, DELETE and /resume calls are
-# logged to STUB_LOG.
+# STUB_DOCS (public docs and viewer) / STUB_DOCS_LISTENER / STUB_VIEWER_LISTENER / STUB_APP / STUB_PATCH / STUB_RESUME /
+# STUB_LETTER, the schema from STUB_SCHEMA and match.status from STUB_MATCH; POST /application, PATCH, DELETE,
+# /resume and /cover-letter calls are logged to STUB_LOG. STUB_LETTER_FILE makes /cover-letter write a file.
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
@@ -18,6 +18,9 @@ case "$*" in
   *"/viewer"*) printf '%s' "${STUB_VIEWER:-$STUB_DOCS}" ;;
   *"-X DELETE"*) echo "DELETE $*" >> "$STUB_LOG" ;;
   *"-X PATCH"*) echo "PATCH $*" >> "$STUB_LOG"; printf '%s' "${STUB_PATCH:-200}" ;;
+  *"/cover-letter"*) echo "LETTER $*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
+    [ -n "${STUB_LETTER_FILE:-}" ] && printf '%%PDF' > "$(dirname "$STUB_SAVED")/SUNIL BELDE - Cover Letter.pdf"
+    printf '{"ok":false,"message":"no posting text"}\n%s' "${STUB_LETTER:-422}" ;;
   *"/application"*) echo "CREATE $*" >> "$STUB_LOG"
     printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}\n%s' "$STUB_APP" ;;
   *"/resume"*) echo "$*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
@@ -29,7 +32,7 @@ chmod +x "$tmp/curl"
 
 id=3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13
 saved="$tmp/out/Smoke Test Co/$id/SUNIL BELDE.pdf"
-ten='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/resume/base.pdf":{"get":{}}}}'
+eleven='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/cover-letter":{"post":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/resume/base.pdf":{"get":{}}}}'
 
 # run <app status> <resume status> [file content | "none"]
 # Call with prefixed variables inside ( ): sh keeps VAR=x assignments made before a function call.
@@ -39,7 +42,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$ten} DOCS_URL=${DOCS_URL:-http://d} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$eleven} DOCS_URL=${DOCS_URL:-http://d} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -63,7 +66,7 @@ run 201 201 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_DOCS_LISTENER=404 run 201 201); [ $? -ne 0 ] && ! created_any && ok "docs listener missing fails before creating anything" || bad "docs listener missing"
 (STUB_VIEWER=200 run 201 201); [ $? -ne 0 ] && ! created_any && ok "public viewer fails before creating anything" || bad "public viewer"
 (STUB_VIEWER_LISTENER=404 run 201 201); [ $? -ne 0 ] && ! created_any && ok "viewer missing on the docs listener fails" || bad "viewer missing"
-(STUB_SCHEMA="$(printf '%s' "$ten" | sed 's/,"\/resume\/base.pdf":{"get":{}}//')" run 201 201); [ $? -ne 0 ] && ! created_any && ok "nine operations fail" || bad "nine operations"
+(STUB_SCHEMA="$(printf '%s' "$eleven" | sed 's/,"\/cover-letter":{"post":{}}//')" run 201 201); [ $? -ne 0 ] && ! created_any && ok "ten operations (no cover letter) fail" || bad "ten operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 201); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 201); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off STUB_DOCS_LISTENER=404 run 201 201) && ok "DOCS_URL=off skips the docs listener" || bad "docs off"
@@ -71,5 +74,12 @@ run 201 201 && ! patched && ! grep -q "full_job_description" "$tmp/log" && ok "f
 run 200 201 && patched && patched_before_resume && ok "leftover application's posting text cleared before the resume" || bad "leftover cleared"
 (STUB_PATCH=500 run 200 201); [ $? -ne 0 ] && ! grep -q "/resume" "$tmp/log" && ok "failed PATCH stops before the resume" || bad "failed patch"
 (STUB_MATCH=tailored run 201 201); [ $? -ne 0 ] && deleted && ok "a tailored smoke resume fails" || bad "match status"
+letter_sent() { grep -q "^LETTER .*http://x/cover-letter .*-d {\"application_id\":\"$id\"}" "$tmp/log"; }
+letter_after_resume() { [ "$(grep -n "^LETTER" "$tmp/log" | cut -d: -f1)" -gt "$(grep -n "/resume" "$tmp/log" | cut -d: -f1)" ]; }
+run 201 201 && letter_sent && letter_after_resume && ok "cover letter requested after the resume, and 422 passes" || bad "letter 422"
+(STUB_LETTER=201 run 201 201); [ $? -ne 0 ] && deleted && ok "a cover letter written without posting text fails" || bad "letter 201"
+(STUB_LETTER=500 run 201 201); [ $? -ne 0 ] && ok "a cover letter 500 fails" || bad "letter 500"
+(STUB_LETTER_FILE=1 run 201 201); [ $? -ne 0 ] && ok "a cover letter file beside the resume fails" || bad "letter file"
+run 201 404; ! grep -q "^LETTER" "$tmp/log" && ok "no cover letter request after a failed resume" || bad "letter after failure"
 env -u API_KEY PATH="$tmp:$PATH" sh "$here/smoke_test.sh" http://x >/dev/null 2>&1 && bad "nokey" || ok "nokey"
 exit $fail

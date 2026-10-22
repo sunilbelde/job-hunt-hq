@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.cover_letter import LetterResult
 from app.generation import GeneratedFile
 from app.main import create_app
 from app.settings import Settings
@@ -42,12 +43,19 @@ class FakeStorage:
     def __init__(self, fail: bool = False):
         self.fail = fail
         self.saved: list[tuple[str, int, bytes]] = []
+        self.letters: list[tuple[str, int, bytes]] = []
 
     def save_resume(self, company, application_id, content):
         if self.fail:
             raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/Acme")
         self.saved.append((company, application_id, content))
         return Path("/fake/out") / company / str(application_id) / "SUNIL BELDE.pdf"
+
+    def save_cover_letter(self, company, application_id, content):
+        if self.fail:
+            raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/Acme")
+        self.letters.append((company, application_id, content))
+        return Path("/fake/out") / company / str(application_id) / "SUNIL BELDE - Cover Letter.pdf"
 
 
 @pytest.fixture
@@ -82,3 +90,19 @@ def fake_output(content: bytes = FAKE_PDF, match: Match = Match("no_job_descript
 def fake_generate(monkeypatch):
     """Keep API tests independent of tectonic and Claude; generation and tailoring have their own tests."""
     monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output())
+
+
+FAKE_LETTER_PDF = b"%PDF-1.5 fake cover letter"
+FAKE_LETTER_TEXT = "Dear Acme Corp Hiring Team,\n\nA paragraph.\n\nSincerely,\nSunil Belde\n"
+# A posting long enough for a cover letter (50 words or more).
+LONG_POSTING = " ".join(["We build retrieval systems for enterprise customers in Python."] * 8)
+
+
+def fake_letter(text: str = FAKE_LETTER_TEXT, pdf: bytes = FAKE_LETTER_PDF, run: RunStats | None = None) -> LetterResult:
+    return LetterResult(pdf, text, run or RunStats(turns=7, cost_usd=0.41234, models=("claude-opus-5-5",)))
+
+
+@pytest.fixture(autouse=True)
+def fake_write_letter(monkeypatch):
+    """Keep API tests independent of tectonic and Claude; app/cover_letter.py has its own tests."""
+    monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: fake_letter())

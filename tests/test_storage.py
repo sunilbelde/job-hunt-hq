@@ -116,11 +116,52 @@ def test_folders_and_file_private(storage, root):
 ])
 def test_cover_letter_path_beside_resume(storage, root, company, folder):
     resume = storage.save_resume(company, A, b"x")
-    path = cover_letter_path(resume)
-    assert path == root.resolve() / folder / A / COVER_LETTER_FILE_NAME
+    path = cover_letter_path(root.resolve(), company, A)
+    assert path == root.resolve() / folder / A / COVER_LETTER_FILE_NAME == resume.parent / COVER_LETTER_FILE_NAME
     assert COVER_LETTER_FILE_NAME == "SUNIL BELDE - Cover Letter.pdf"
     assert not path.exists()
     assert [p.name for p in resume.parent.iterdir()] == [RESUME_FILE_NAME]
+
+
+def test_cover_letter_without_resume(storage, root):
+    path = storage.save_cover_letter("AT&T / Mobility: West", A, b"letter")
+    assert path == cover_letter_path(root.resolve(), "AT&T / Mobility: West", A)
+    assert path.read_bytes() == b"letter"
+    assert [p.name for p in path.parent.iterdir()] == [COVER_LETTER_FILE_NAME]
+
+
+def test_cover_letter_and_resume_leave_each_other_alone(storage):
+    resume = storage.save_resume("Acme", A, b"resume")
+    letter = storage.save_cover_letter("Acme", A, b"first")
+    assert storage.save_cover_letter("Acme", A, b"second") == letter
+    storage.save_resume("Acme", A, b"resume 2")
+    assert (resume.read_bytes(), letter.read_bytes()) == (b"resume 2", b"second")
+    assert sorted(p.name for p in resume.parent.iterdir()) == sorted([RESUME_FILE_NAME, COVER_LETTER_FILE_NAME])
+
+
+def test_cover_letter_private(storage, root):
+    path = storage.save_cover_letter("Acme", A, b"x")
+    for folder in (root, path.parent.parent, path.parent):
+        assert mode(folder) == 0o700
+    assert mode(path) == 0o600
+
+
+def test_failed_cover_letter_write_keeps_previous_and_removes_temp(storage, monkeypatch):
+    path = storage.save_cover_letter("Acme", A, b"first")
+
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr("app.storage.os.replace", boom)
+    with pytest.raises(StorageError):
+        storage.save_cover_letter("Acme", A, b"second")
+    assert path.read_bytes() == b"first"
+    assert [p.name for p in path.parent.iterdir()] == [COVER_LETTER_FILE_NAME]
+
+
+def test_traversal_company_cover_letter_stays_inside_root(storage, root, tmp_path):
+    path = storage.save_cover_letter("../../escape", A, b"x")
+    assert path.is_relative_to(root.resolve())
+    assert not (tmp_path / "escape").exists()
 
 
 def test_traversal_company_stays_inside_root(storage, root, tmp_path):
