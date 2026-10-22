@@ -23,7 +23,6 @@ def generate_output(application: StoredApplication, settings: Settings) -> Gener
     scores the base resume and, below the threshold, tailors it (app/tailoring.py). The base resume
     always comes from render_pdf. Raises RenderError or TailoringError, and then nothing may be saved.
     """
-    # TODO: also generate the cover letter; POST /resume already returns its path (storage.cover_letter_path).
     if not tailoring.posting_usable(application.full_job_description):
         return GeneratedFile(render_pdf(), "application/pdf", "pdf", match=Match("no_job_description"))
     result = tailoring.run(application, settings)

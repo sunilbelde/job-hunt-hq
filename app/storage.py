@@ -30,15 +30,19 @@ class Storage(Protocol):
         """Write the resume for an application, replacing any earlier one, and return its absolute path."""
         ...
 
+    def save_cover_letter(self, company: str, application_id: str, content: bytes) -> Path:
+        """Write the cover letter for an application, replacing any earlier one, and return its absolute path."""
+        ...
+
 
 def resume_path(root: Path, company: str, application_id: str) -> Path:
     """Where an application's resume is saved for its company as it is now."""
     return Path(root) / company_folder(company) / str(application_id) / RESUME_FILE_NAME
 
 
-def cover_letter_path(resume_path: Path) -> Path:
-    """Where the application's cover letter goes: beside its resume. Nothing writes it yet."""
-    return resume_path.parent / COVER_LETTER_FILE_NAME
+def cover_letter_path(root: Path, company: str, application_id: str) -> Path:
+    """Where an application's cover letter is saved: the folder its resume uses, whether or not that exists."""
+    return Path(root) / company_folder(company) / str(application_id) / COVER_LETTER_FILE_NAME
 
 
 def company_folder(company: str) -> str:
@@ -55,7 +59,7 @@ def company_folder(company: str) -> str:
 
 
 class LocalStorage:
-    """Saves resumes under a local directory that only the service user can read."""
+    """Saves resumes and cover letters under a local directory that only the service user can read."""
 
     def __init__(self, root: Path):
         self._root = Path(root)
@@ -68,15 +72,22 @@ class LocalStorage:
 
     def save_resume(self, company: str, application_id: str, content: bytes) -> Path:
         root = self._root.resolve()
-        path = resume_path(root, company, application_id)
+        return self._write(root, resume_path(root, company, application_id), content)
+
+    def save_cover_letter(self, company: str, application_id: str, content: bytes) -> Path:
+        root = self._root.resolve()
+        return self._write(root, cover_letter_path(root, company, application_id), content)
+
+    @staticmethod
+    def _write(root: Path, path: Path, content: bytes) -> Path:
         folder = path.parent
         if not folder.resolve().is_relative_to(root):  # company_folder already rules this out
-            raise StorageError("resume path escapes OUTPUT_DIR")
+            raise StorageError("output path escapes OUTPUT_DIR")
         tmp_name = None
         try:
             folder.parent.mkdir(mode=0o700, exist_ok=True)
             folder.mkdir(mode=0o700, exist_ok=True)
-            # mkstemp creates the file 0600; the rename replaces any earlier resume in one step.
+            # mkstemp creates the file 0600; the rename replaces any earlier file in one step.
             fd, tmp_name = tempfile.mkstemp(prefix=TMP_PREFIX, dir=folder)
             with os.fdopen(fd, "wb") as f:
                 f.write(content)

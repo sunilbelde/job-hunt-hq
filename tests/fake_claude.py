@@ -8,6 +8,7 @@ Each `-p` call plays the role of one of the service's runs:
     analysis   "/tailor-resume ." in a work folder without judge/terms.json
     judge      "/judge-resume-terms ."
     tailoring  "/tailor-resume ." once judge/terms.json is there
+    letter     "/write-cover-letter ."
 
 Scenarios:
     keep         the analysis scores the base resume 77
@@ -24,7 +25,9 @@ The failure scenarios play out in the run named by the `fail` option (default: t
 runs then behave as in `tailor`). Other options: `analysis` and `verdicts` replace what those runs write
 (`verdicts` may be a string, written as is), `cost` maps a role to its reported cost, `sleep` maps a role
 to seconds to wait first, `add_skill` names the skills item the tailoring adds (None for none), and
-`tamper_analysis` has the tailoring run rewrite out/analysis.json.
+`tamper_analysis` has the tailoring run rewrite out/analysis.json. For the letter run, `letter` and
+`letter_analysis` replace what it writes (None writes nothing), and `tamper_letter_scripts` has it rewrite
+its copy of the letter checks to pass everything.
 """
 import json
 import os
@@ -37,6 +40,8 @@ FAILURES = ("auth", "max_turns", "budget", "garbage", "hang")
 
 
 def install(folder: Path, scenario: str, **options) -> Path:
+    from tests.letter_fixtures import ANALYSIS as LETTER_ANALYSIS
+    from tests.letter_fixtures import LETTER
     from tests.tailoring_fixtures import ANALYSIS, JUDGE_VERDICTS, weak_analysis
 
     folder.mkdir(parents=True, exist_ok=True)
@@ -46,6 +51,7 @@ def install(folder: Path, scenario: str, **options) -> Path:
     script.chmod(0o755)
     config = {"scenario": scenario, "record": str(folder / "calls.jsonl"), "strong_analysis": ANALYSIS,
               "analysis": weak_analysis(), "verdicts": JUDGE_VERDICTS, "pid_file": str(folder / "child.pid"),
+              "letter": LETTER, "letter_analysis": LETTER_ANALYSIS,
               "fail": "analysis", "cost": {}, "sleep": {}, **options}
     if scenario == "keep" and "analysis" not in options:
         config["analysis"] = ANALYSIS
@@ -94,6 +100,8 @@ def _role(args: list[str]) -> str | None:
     prompt = args[args.index("-p") + 1]
     if prompt == "/judge-resume-terms .":
         return "judge"
+    if prompt == "/write-cover-letter .":
+        return "letter"
     if prompt == "/tailor-resume .":
         return "tailoring" if Path("judge", "terms.json").is_file() else "analysis"
     return "live_check"
@@ -145,6 +153,14 @@ def main() -> int:
         _write("verdicts.json", config["verdicts"])
     elif run == "tailoring":
         _tailor(config, drop_job=scenario == "broken")
+    elif run == "letter":
+        Path("out").mkdir(exist_ok=True)
+        for name, key in (("analysis.json", "letter_analysis"), ("letter.json", "letter")):
+            if config[key] is not None:
+                _write(name, config[key])
+        if config.get("tamper_letter_scripts"):
+            checks = Path(".claude", "skills", "write-cover-letter", "scripts", "letter_checks.py")
+            checks.write_text(checks.read_text() + "\ncheck_letter = lambda *args, **kwargs: ([], [])\n")
     print(_result(total_cost_usd=config["cost"].get(run, 0.12)))
     return 0
 

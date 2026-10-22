@@ -30,9 +30,7 @@ from app.settings import Settings, get_settings
 
 SKILL_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "tailor-resume"
 TOOL = SKILL_DIR / "scripts" / "resume_tool.py"
-SKILL_IN_WORK = Path(".claude") / "skills" / "tailor-resume"
 JUDGE_SKILL_DIR = SKILL_DIR.parent / "judge-resume-terms"
-JUDGE_SKILL_IN_WORK = Path(".claude") / "skills" / "judge-resume-terms"
 PROFILE = TEMPLATE_DIR / "PROFILE.md"  # the owner's profile: skills for the judge, facts for bullets; optional
 PROFILE_INVALID_EXIT = 4  # resume_tool's exit code for a profile naming an employer the resume lacks
 RUNTIME_DIR = ".claude-runtime"  # in OUTPUT_DIR; company folders never start with a dot
@@ -213,16 +211,21 @@ def _headless(settings: Settings, binary: str, prompt: str, max_turns: int, budg
     ]
 
 
-def claude_command(settings: Settings, binary: str, work: Path, budget_usd: float | None = None) -> list[str]:
-    """A tailor-resume run: the first one analyzes and scores, the second one tailors."""
-    script = work / SKILL_IN_WORK / "scripts" / "run"
-    budget = settings.tailoring_max_budget_usd if budget_usd is None else budget_usd
-    return _headless(settings, binary, "/tailor-resume .", MAX_TURNS, budget) + [
+def skill_command(settings: Settings, binary: str, work: Path, skill: str, max_turns: int, budget_usd: float) -> list[str]:
+    """A run of `skill` on the work folder, whose shell may run only that skill's `run` script."""
+    script = work / ".claude" / "skills" / skill / "scripts" / "run"
+    return _headless(settings, binary, f"/{skill} .", max_turns, budget_usd) + [
         "--tools", "Read,Write,Edit,Bash",
         "--disallowedTools", "WebFetch", "WebSearch", "Agent", "mcp__*",
         # Writes are checked against Edit rules only; a Write(...) rule would never be consulted.
         "--allowedTools", "Read(./**)", "Edit(./out/**)", f"Bash({script} *)",
     ]
+
+
+def claude_command(settings: Settings, binary: str, work: Path, budget_usd: float | None = None) -> list[str]:
+    """A tailor-resume run: the first one analyzes and scores, the second one tailors."""
+    budget = settings.tailoring_max_budget_usd if budget_usd is None else budget_usd
+    return skill_command(settings, binary, work, SKILL_DIR.name, MAX_TURNS, budget)
 
 
 def judge_command(settings: Settings, binary: str, budget_usd: float) -> list[str]:
@@ -366,10 +369,16 @@ class _Runs:
 
 # --- the work folder and the gate ---
 
+def copy_skills(work: Path, *skills: Path) -> None:
+    """Copy skill folders into the work folder's .claude/skills/, where a headless run finds them."""
+    for skill in skills:
+        shutil.copytree(skill, work / ".claude" / "skills" / skill.name, ignore=shutil.ignore_patterns("__pycache__"))
+
+
 def _prepare_work(application: StoredApplication) -> Path:
     work = Path(tempfile.mkdtemp(prefix="tailor-")).resolve()  # mode 700, system temp, so no spaces in the path
     try:
-        shutil.copytree(SKILL_DIR, work / SKILL_IN_WORK, ignore=shutil.ignore_patterns("__pycache__"))
+        copy_skills(work, SKILL_DIR)
         (work / ".tmp").mkdir()
         (work / "posting.md").write_text(posting_markdown(application), encoding="utf-8")
         # prepare copies the owner's profile too: its facts are bullet sources, beside the base bullets.
@@ -388,9 +397,10 @@ def _prepare_work(application: StoredApplication) -> Path:
     return work
 
 
-def _tool(args: list, timeout: int) -> dict | None:
-    """Run the repo's own copy of the skill script, which prints one JSON object. None when it crashed."""
-    cmd = [sys.executable, str(TOOL), *map(str, args)]
+def _tool(args: list, timeout: int, tool: Path | None = None) -> dict | None:
+    """Run the repo's own copy of a skill script (`TOOL` by default), which prints one JSON object. None when
+    it crashed."""
+    cmd = [sys.executable, str(tool or TOOL), *map(str, args)]
     env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV}
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
@@ -415,7 +425,7 @@ def _prepare_judge(gate: Path) -> Path:
     """The judge's folder: its skill, the input judge-input wrote and an empty out/. No posting."""
     judge = Path(tempfile.mkdtemp(prefix="tailor-judge-")).resolve()
     try:
-        shutil.copytree(JUDGE_SKILL_DIR, judge / JUDGE_SKILL_IN_WORK, ignore=shutil.ignore_patterns("__pycache__"))
+        copy_skills(judge, JUDGE_SKILL_DIR)
         for name in (".tmp", "out"):
             (judge / name).mkdir()
         shutil.copyfile(gate / "judge-input.md", judge / "input.md")
