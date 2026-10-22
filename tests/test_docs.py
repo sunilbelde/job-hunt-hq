@@ -21,7 +21,9 @@ VIEWER_READS = [
     ("get", "/applications"),
     ("get", "/application/{application_id}"),
     ("get", "/application/{application_id}/resume.pdf"),
+    ("get", "/application/{application_id}/cover-letter.pdf"),
     ("get", "/resume/base.pdf"),
+    ("get", "/cover-letter/base.pdf"),
 ]
 HEALTH = [("get", "/health"), ("get", "/healthz")]
 RESPONSES = {
@@ -35,9 +37,12 @@ RESPONSES = {
     ("get", "/applications"): {"200", "503"},
     ("get", "/application/{application_id}"): {"200", "404", "503"},
     ("get", "/application/{application_id}/resume.pdf"): {"200", "404", "503"},
+    ("get", "/application/{application_id}/cover-letter.pdf"): {"200", "404", "503"},
     ("get", "/resume/base.pdf"): {"200", "500"},
+    ("get", "/cover-letter/base.pdf"): {"200", "404"},
 }
-PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/resume/base.pdf")]
+PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/application/{application_id}/cover-letter.pdf"),
+                  ("get", "/resume/base.pdf"), ("get", "/cover-letter/base.pdf")]
 IMMUTABLE = {"job_link", "posting_source_type", "verification_method", "official_apply_url"}
 
 
@@ -83,8 +88,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_eleven_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 11
+def test_documents_exactly_the_thirteen_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 13
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -107,6 +112,15 @@ def test_viewer_reads_document_the_report(schema):
     listed = ops[("get", "/applications")]["responses"]["200"]["content"]["application/json"]
     assert listed["schema"]["$ref"] == "#/components/schemas/ApplicationList"
     assert "full_job_description" not in schemas["ApplicationListItem"]["properties"]
+
+
+def test_cover_letter_reads_described(schema):
+    ops = operations(schema)
+    saved = ops[("get", "/application/{application_id}/cover-letter.pdf")]
+    assert "current company" in saved["description"] and "beside the resume" in saved["description"]
+    base = ops[("get", "/cover-letter/base.pdf")]
+    assert "data/COVER_LETTER.pdf" in base["description"] and "never generates" in base["description"]
+    assert saved["tags"] == base["tags"] == ["viewer"]
 
 
 def test_every_operation_has_tag_summary_description(schema):

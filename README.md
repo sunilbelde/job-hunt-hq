@@ -13,7 +13,7 @@ Each resume is matched against the application's posting. Claude scores the base
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: public and docs listeners), `app/viewer.py` (the resume viewer page and the cached base resume), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (picks the base or tailored resume), `app/tailoring.py` (runs the tailor-resume skill and its judge headlessly, and the final gate), `.claude/skills/tailor-resume/` (the skill and its scripts), `.claude/skills/judge-resume-terms/` (the judge), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets and your profile), `deploy/` (launchd and logging templates, Tailscale docs-mapping check), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: public and docs listeners), `app/viewer.py` (the resume viewer page, the cached base resume and the base cover letter it serves), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (picks the base or tailored resume), `app/tailoring.py` (runs the tailor-resume skill and its judge headlessly, and the final gate), `.claude/skills/tailor-resume/` (the skill and its scripts), `.claude/skills/judge-resume-terms/` (the judge), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets and your profile), `deploy/` (launchd and logging templates, Tailscale docs-mapping check), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`POST /resume`)
 
@@ -154,7 +154,7 @@ Everything it writes, including the draft PDF (`out/build/tailored.pdf`), the ch
 
 The checks can't catch every overstatement ("led" where your record says "built"), so skim each letter before you send it.
 
-**The base cover letter.** A generic letter, written once with the same rules, is kept for your reference at `data/COVER_LETTER.md` (text) and `data/COVER_LETTER.pdf`. The service never reads or serves it. To draft it again:
+**The base cover letter.** A generic letter, written once with the same rules, is kept for your reference at `data/COVER_LETTER.md` (text) and `data/COVER_LETTER.pdf`. The service never generates or edits it, and tailored letters don't use it; the [resume viewer](#resume-viewer) only shows the committed PDF beside each generated letter. To draft it again:
 
 ```sh
 .claude/skills/write-cover-letter/scripts/run prepare --template data --profile data/PROFILE.md --out /tmp/letter-base
@@ -173,7 +173,7 @@ With `--posting posting.txt --company "Acme" --role "ML Engineer"` added to `pre
 Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/SUNIL BELDE.pdf`, using the application's company at the time you generate. The folder keeps the company name as written (spaces, case, accents), with `/`, `\`, `:` and control characters replaced by `-`, leading and trailing spaces and dots removed, and the name cut to 100 characters. An empty result becomes `unknown-company`, and a name starting with `applications.sqlite3` gets a leading `_` so it can't collide with the store.
 
 - Generating again for the same application replaces the file in one step; a failed render or write leaves the previous file intact.
-- Folders are readable only by your user and files are mode 600. The service serves them over HTTP only to the [resume viewer](#resume-viewer), on the tailnet-only docs listener, without the API key.
+- Folders are readable only by your user and files are mode 600. The service serves resumes and cover letters over HTTP only to the [resume viewer](#resume-viewer), on the tailnet-only docs listener, without the API key.
 - Files are kept until you delete them. Deleting an application, or renaming its company, leaves existing resume folders where they are.
 
 ### Upgrading from `POST /jobs`
@@ -262,9 +262,10 @@ The page opens straight to the list, with no API key: its read endpoints need no
 - **What was added**: the posting keywords the judge approved and the tailored resume uses, and the requirements that improved from missing or partial;
 - **Gaps still found**: the posting keywords and requirements the generated resume still doesn't cover, and the keywords the judge rejected with the reason;
 - each requirement's base and generated assessment, with the quoted evidence;
-- the base resume and the generated resume side by side, rendered by the browser's own PDF viewer (stacked, base first, on a narrow screen).
+- the base resume and the generated resume side by side, rendered by the browser's own PDF viewer (stacked, base first, on a narrow screen);
+- a **Resume / Cover letter** switch above them: **Cover letter** shows the base letter (`data/COVER_LETTER.pdf`) beside the letter `POST /cover-letter` saved for the application, the same way. The letters load only when you switch to them, and the generated pane says so when no letter was written for the application. Choosing another application goes back to the resumes.
 
-The page loads nothing from other origins and runs only its own script. Its data comes from four `GET` endpoints, documented under the `viewer` tag in `/docs`: `/applications`, `/application/{id}`, `/application/{id}/resume.pdf` and `/resume/base.pdf`. The scores come from a report `POST /resume` stores with each successful generation. Resumes generated before reports existed show "no report" next to their saved PDF; generating the resume again creates one.
+The page loads nothing from other origins and runs only its own script. Its data comes from six `GET` endpoints, documented under the `viewer` tag in `/docs`: `/applications`, `/application/{id}`, `/application/{id}/resume.pdf`, `/application/{id}/cover-letter.pdf`, `/resume/base.pdf` and `/cover-letter/base.pdf`. A saved letter is looked for under the application's current company and then beside its resume, so one written before a company rename is still found. The scores come from a report `POST /resume` stores with each successful generation. Resumes generated before reports existed show "no report" next to their saved PDF; generating the resume again creates one.
 
 Tests (no network needed):
 
@@ -276,7 +277,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` write endpoints. Generated files are served only to the resume viewer on the tailnet-only port, without a key, and the public address never serves the API docs or the viewer.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` write endpoints. Generated resumes and cover letters are served only to the resume viewer on the tailnet-only port, without a key, and the public address never serves the API docs or the viewer.
 
 ### 1. Prerequisites
 
@@ -374,7 +375,7 @@ On the Mac (the smoke test reads the saved PDF from disk, so it must run there):
 API_KEY=... scripts/smoke_test.sh http://127.0.0.1:8080
 ```
 
-First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs`, `/viewer` and a schema with the eleven operations. Then it records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
+First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs`, `/viewer` and a schema with the thirteen operations. Then it records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 

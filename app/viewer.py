@@ -1,4 +1,4 @@
-"""The resume viewer: its page and the base resume it shows beside each generated one.
+"""The resume viewer: its page and the base resume and cover letter it shows beside each generated one.
 
 The page is served only where API docs are enabled (the tailnet-only docs listener) and holds no data
 itself: on load it reads everything from the viewer's read endpoints, which need no API key.
@@ -33,6 +33,18 @@ class BaseResumeCache:
             if self._pdf is None or key != self._key:
                 self._pdf, self._key = render_pdf(template_dir=self._dir), key
             return self._pdf
+
+
+# Drafted and re-rendered only by the owner; the service serves it unchanged and never writes it.
+BASE_COVER_LETTER = TEMPLATE_DIR / "COVER_LETTER.pdf"
+
+
+def read_base_cover_letter() -> bytes | None:
+    """The committed base cover letter, read again on every call, or None when it is missing or unreadable."""
+    try:
+        return BASE_COVER_LETTER.read_bytes()
+    except OSError:
+        return None
 
 
 def content_security_policy(nonce: str) -> str:
@@ -130,6 +142,10 @@ ul.items li { margin: 3px 0; }
 .req summary { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .req .evidence { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
 .req blockquote { margin: 4px 0; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 12px; background: var(--panel); }
+.switch button { padding: 6px 14px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.switch button + button { border-left: 1px solid var(--line); }
+.switch button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
 .pane header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
@@ -175,6 +191,8 @@ ul.items li { margin: 3px 0; }
   let selected = null;
   let baseUrl = null;          // blob: URL of the base resume, fetched once per page load
   let generatedUrl = null;     // blob: URL of the selected application's resume
+  let baseLetterUrl = null;    // blob: URL of the base cover letter, fetched once per page load
+  let generatedLetterUrl = null;  // blob: URL of the selected application's cover letter
   let loadToken = 0;           // ignores responses for an application no longer selected
 
   const $ = (id) => document.getElementById(id);
@@ -446,6 +464,51 @@ ul.items li { margin: 3px 0; }
     }
   }
 
+  async function loadLetters(app, token, panes) {
+    const basePane = pane("Base");
+    const generatedPane = pane("Generated");
+    panes.append(basePane.node, generatedPane.node);
+    try {
+      if (!baseLetterUrl) baseLetterUrl = URL.createObjectURL(await api("/cover-letter/base.pdf", true));
+      if (token === loadToken) showPdf(basePane, baseLetterUrl, "Base cover letter");
+    } catch (error) {
+      if (token === loadToken) showEmpty(basePane, "Base cover letter unavailable: " + error.message);
+    }
+    try {
+      const blob = await api("/application/" + app.id + "/cover-letter.pdf", true);
+      if (token !== loadToken) return;
+      generatedLetterUrl = URL.createObjectURL(blob);
+      showPdf(generatedPane, generatedLetterUrl, "Generated cover letter");
+    } catch (error) {
+      if (token !== loadToken) return;
+      showEmpty(generatedPane, error.status === 404
+        ? "No cover letter has been generated for this application yet."
+        : "Cover letter unavailable: " + error.message);
+    }
+  }
+
+  // Resume and cover letter panes share one spot; the letters are fetched only the first time they are shown.
+  function documentSwitch(app, token, resumePanes, letterPanes) {
+    const resumeTab = el("button", { type: "button", "aria-pressed": "true", "data-doc": "resume" }, "Resume");
+    const letterTab = el("button", { type: "button", "aria-pressed": "false", "data-doc": "letter" }, "Cover letter");
+    const node = el("div", { class: "switch", role: "group", "aria-label": "Document" }, resumeTab, letterTab);
+    let lettersLoaded = false;
+    node.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-doc]");
+      if (!button) return;
+      const letter = button.getAttribute("data-doc") === "letter";
+      resumeTab.setAttribute("aria-pressed", String(!letter));
+      letterTab.setAttribute("aria-pressed", String(letter));
+      resumePanes.classList.toggle("hidden", letter);
+      letterPanes.classList.toggle("hidden", !letter);
+      if (letter && !lettersLoaded) {
+        lettersLoaded = true;
+        loadLetters(app, token, letterPanes);
+      }
+    });
+    return node;
+  }
+
   function applyMeters(root) {
     // Widths go through the CSSOM, which the style policy allows, rather than style attributes, which it blocks.
     for (const fill of root.querySelectorAll(".fill")) fill.style.width = fill.getAttribute("data-width");
@@ -455,6 +518,7 @@ ul.items li { margin: 3px 0; }
     selected = id;
     const token = ++loadToken;
     if (generatedUrl) { URL.revokeObjectURL(generatedUrl); generatedUrl = null; }
+    if (generatedLetterUrl) { URL.revokeObjectURL(generatedLetterUrl); generatedLetterUrl = null; }
     if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
     renderList();
     const detail = $("detail");
@@ -482,7 +546,9 @@ ul.items li { margin: 3px 0; }
     }
     const basePane = pane("Base");
     const generatedPane = pane("Generated", generatedNote);
-    parts.push(el("div", { class: "panes" }, basePane.node, generatedPane.node));
+    const resumePanes = el("div", { class: "panes" }, basePane.node, generatedPane.node);
+    const letterPanes = el("div", { class: "panes hidden" });
+    parts.push(documentSwitch(app, token, resumePanes, letterPanes), resumePanes, letterPanes);
     detail.replaceChildren(...parts);
     applyMeters(detail);
     detail.scrollTop = 0;
