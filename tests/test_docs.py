@@ -15,6 +15,8 @@ PROTECTED = [
     ("patch", "/application/{application_id}"),
     ("delete", "/application/{application_id}"),
     ("post", "/resume"),
+]
+VIEWER_READS = [
     ("get", "/applications"),
     ("get", "/application/{application_id}"),
     ("get", "/application/{application_id}/resume.pdf"),
@@ -28,10 +30,10 @@ RESPONSES = {
     ("patch", "/application/{application_id}"): {"200", "401", "404", "422", "503"},
     ("delete", "/application/{application_id}"): {"200", "401", "404", "503"},
     ("post", "/resume"): {"201", "401", "404", "422", "500", "502", "503"},
-    ("get", "/applications"): {"200", "401", "503"},
-    ("get", "/application/{application_id}"): {"200", "401", "404", "503"},
-    ("get", "/application/{application_id}/resume.pdf"): {"200", "401", "404", "503"},
-    ("get", "/resume/base.pdf"): {"200", "401", "500"},
+    ("get", "/applications"): {"200", "503"},
+    ("get", "/application/{application_id}"): {"200", "404", "503"},
+    ("get", "/application/{application_id}/resume.pdf"): {"200", "404", "503"},
+    ("get", "/resume/base.pdf"): {"200", "500"},
 }
 PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/resume/base.pdf")]
 IMMUTABLE = {"job_link", "posting_source_type", "verification_method", "official_apply_url"}
@@ -125,7 +127,7 @@ def test_api_key_security_scheme(schema):
     ops = operations(schema)
     for key in PROTECTED:
         assert ops[key]["security"] == [{"ApiKey": []}], key
-    for key in HEALTH:
+    for key in HEALTH + VIEWER_READS:
         assert "security" not in ops[key], key
 
 
