@@ -18,9 +18,12 @@ Do not write any of them.
 - One `opening`, two or three `body` paragraphs, one `closing`, in that order (`structure_mismatch`).
 - Between 250 and 400 words in all (`word_count`). The letter must fit on one page (`one_page`).
 - **Opening**: in tailored mode, name the role and the company exactly as `job.json` has them
-  (`missing_role`, `missing_company`), and give in one or two sentences the specific reason the owner
-  fits. At most one sentence about the company itself, drawn from the posting or the application notes.
-  In base mode, say who the owner is and what kind of work they do.
+  (`missing_role`, `missing_company`), then say why this role: the one or two things the job most needs
+  and the owner's work that answers them. A reader should learn from the opening alone why this
+  candidate fits this job. At most one sentence about the company itself, drawn from the posting or the
+  application notes. In base mode, say who the owner is and what their systems accomplish. Lead with the
+  result of the work, not a general description ("pipelines that turn mapping instructions into
+  production code", not "systems that do real work").
 - **Body**: each paragraph tells one piece of the owner's work in enough detail to be believable: what
   they built, how, and what came of it. `sources` lists every bullet and fact (`jN.bK`, `jN.fK`) it draws
   on, from any job (`missing_source`, `unknown_source`). In tailored mode `requirements` lists the
@@ -28,6 +31,9 @@ Do not write any of them.
   and together the body paragraphs must address the number of required requirements `run analyze`
   names.
 - **Closing**: two sentences at most: an invitation to talk and a thank-you. No new claims.
+- **Weight**: give most of the space to the one or two pieces of work that match the job best.
+  Compress older or less relevant jobs into one sentence, or leave them out. Aim near the low end of
+  the word range; every sentence should earn its place.
 
 ## Facts and numbers
 
@@ -38,6 +44,12 @@ Do not write any of them.
   (`unsupported_keyword`), wherever it appears.
 - Stay inside what the source says: "contributed to" stays "contributed to", "evaluated" does not become
   "led the evaluation".
+- Ownership: use "I" for what the sources say the owner did ("developed", "architected", "led"). State
+  results that a whole team or system produced as the system's ("the platform reduced effort by over
+  70%") or the team's ("we"), not as the owner's alone.
+- Tools: name only the two or three tools per paragraph that matter most to this job, preferring the
+  posting's keywords. A list of tools, products and model names competes with the work itself; describe
+  what the work did instead.
 
 ## Text
 
