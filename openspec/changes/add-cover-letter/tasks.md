@@ -18,6 +18,8 @@
 - [x] 3.5 Implement `letter_tool.py verify`, the service's gate: re-check against the given template, profile and analysis snapshot, then write `--pdf-out` and `--text-out` and print one JSON verdict. Verify with a test where the work folder's own scripts were changed to pass everything and the gate still rejects an unsupported number.
 - [x] 3.6 Implement `publish-base` (base mode only, after a passing build, writes `data/COVER_LETTER.md` and `.pdf`) and `render-base` (re-renders the PDF from an edited `.md` with escaping and the one-page check only). Verify with tests on a temporary data directory: an invented number writes neither file, and an edited paragraph shows up in the re-rendered PDF's text.
 
+- [x] 3.7 Add the soft `no_result` check: a body paragraph whose cited sources state a measured result but that gives none. Verify in `tests/test_letter_checks.py` that it warns without rejecting, ignores sources with no result, and does not count version numbers such as "Llama 3.3-70B".
+
 ## 4. The skill document
 
 - [x] 4.1 Write `.claude/skills/write-cover-letter/SKILL.md` and `reference/rules.md`: inputs, untrusted posting, both modes, sources of facts, the owner's voice (no echo, no filler such as "I am excited to apply", at most one sentence about the company), steps (analyze, write `out/letter.json`, build at most 5 times), and the reply format. It links `tailor-resume/reference/scoring.md` for the analysis format. Verify with a `tests/test_skill_doc.py`-style test that the commands it names exist in `letter_tool.py` and that it follows a fixture run through to a passing build.

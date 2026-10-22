@@ -146,6 +146,7 @@ Everything it writes, including the draft PDF (`out/build/tailored.pdf`), the ch
   - Each body paragraph cites the base bullets and profile facts it draws on (any job), and every number in it must appear in them. The opening and closing hold no numbers.
   - A posting keyword that appears in the letter must also appear in your resume or profile. There is no judge: a keyword you lack stays out.
   - The opening names the company and role exactly as recorded, and the body paragraphs must address at least two of the posting's required requirements.
+- **Need, achievement, improvement.** Each body paragraph goes from one need of the employer to your work that meets it to the measured result it made, and the first two carry your two strongest achievements. A paragraph that leaves out a result its sources state gets a `no_result` warning for Claude to fix (a warning, since not every need has a metric in your record).
 - **In your words.** A run of three or more posting words that the paragraph's sources don't share fails the letter (`echoed_phrase`). For resumes this is only a warning. The company and role are exempt. Template lines such as "I am excited to apply" are flagged.
 - **Size.** 250–400 words on one page.
 - **The final gate.** The service re-checks the letter with its own copy of the scripts, template, profile, posting and company/role, and saves only the PDF and text it rendered itself.
