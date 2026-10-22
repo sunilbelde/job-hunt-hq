@@ -15,7 +15,8 @@ from app.main import create_app
 from app.rendering import RenderError
 from app.storage import COVER_LETTER_FILE_NAME, RESUME_FILE_NAME, LocalStorage
 from app.tailoring import Match, RunStats, TailoringError
-from tests.conftest import API_KEY, FAKE_PDF, FakeStorage, fake_output
+from tests.conftest import (API_KEY, FAKE_LETTER_PDF, FAKE_LETTER_TEXT, FAKE_PDF, LONG_POSTING, FakeStorage, fake_letter,
+                            fake_output)
 
 HEADERS = {"X-API-Key": API_KEY}
 UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -514,27 +515,23 @@ def test_resume_success_saves_file(local_client, settings):
     r = post_resume(local_client, {"application_id": application_id})
     assert r.status_code == 201
     body = r.json()
-    assert set(body) == {"ok", "application_id", "saved_path", "cover_letter_path", "match"}
+    assert set(body) == {"ok", "application_id", "saved_path", "match"}
     assert body["match"] == {"status": "no_job_description", "threshold": 70, "base_score": None, "tailored_score": None,
                              "added_terms": []}
     assert body["ok"] is True and body["application_id"] == application_id
     expected = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME
     assert body["saved_path"] == str(expected)
     assert expected.is_absolute() and expected.read_bytes() == FAKE_PDF
-    assert body["cover_letter_path"] == str(expected.parent / COVER_LETTER_FILE_NAME)
 
 
-def test_resume_cover_letter_path_is_a_placeholder(local_client, settings):
+def test_resume_leaves_the_cover_letter_alone(local_client, settings):
     application_id = new_application(local_client)
     first = post_resume(local_client, {"application_id": application_id}).json()
     cover_letter = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / COVER_LETTER_FILE_NAME
-    assert first["cover_letter_path"] == str(cover_letter)
-    assert str(cover_letter.parent) == str(Path(first["saved_path"]).parent)
     assert not cover_letter.exists()
-    assert output_files(settings) == [cover_letter.parent / RESUME_FILE_NAME]
+    assert output_files(settings) == [Path(first["saved_path"])]
     cover_letter.write_bytes(b"%PDF-written-elsewhere")
-    second = post_resume(local_client, {"application_id": application_id}).json()
-    assert second["cover_letter_path"] == first["cover_letter_path"]
+    post_resume(local_client, {"application_id": application_id})
     assert cover_letter.read_bytes() == b"%PDF-written-elsewhere"
 
 
@@ -879,3 +876,205 @@ def test_startup_migrates_ids_and_resume_folders(settings):
     r = post_resume(client, {"application_id": new_id})
     assert r.status_code == 201 and r.json()["saved_path"].endswith(f"/Acme Corp/{new_id}/{RESUME_FILE_NAME}")
     assert post_application(client, VALID_APPLICATION).json()["application_id"] == new_id
+
+
+
+# --- POST /cover-letter ---
+
+def post_letter(client, body, headers=HEADERS):
+    return client.post("/cover-letter", json=body, headers=headers)
+
+
+def letter_log_lines(caplog):
+    return [json.loads(r.getMessage()) for r in caplog.records
+            if r.name == "app.requests" and '"cover_letter_request"' in r.getMessage()]
+
+
+def letter_application(client, n=1, **overrides):
+    return new_application(client, n, full_job_description=LONG_POSTING, **overrides)
+
+
+def test_letter_success_saves_file(local_client, settings):
+    application_id = letter_application(local_client)
+    r = post_letter(local_client, {"application_id": application_id, "note": "ignored"})
+    assert r.status_code == 201
+    body = r.json()
+    expected = settings.output_dir.resolve() / "Acme Corp" / application_id / COVER_LETTER_FILE_NAME
+    assert body == {"ok": True, "application_id": application_id, "saved_path": str(expected), "text": FAKE_LETTER_TEXT}
+    assert expected.read_bytes() == FAKE_LETTER_PDF
+    assert output_files(settings) == [expected]  # no resume needed, none created
+
+
+def test_letter_uses_the_stored_application(client, monkeypatch):
+    seen = []
+    monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: seen.append(application) or fake_letter())
+    application_id = letter_application(client)
+    post_letter(client, {"application_id": application_id.upper()})
+    (application,) = seen
+    assert (application.id, application.company, application.full_job_description) == (application_id, "Acme Corp",
+                                                                                       LONG_POSTING)
+
+
+def test_letter_repeated_request_replaces_file(local_client, monkeypatch):
+    application_id = letter_application(local_client)
+    first = post_letter(local_client, {"application_id": application_id}).json()["saved_path"]
+    monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: fake_letter(pdf=b"%PDF-second"))
+    second = post_letter(local_client, {"application_id": application_id}).json()["saved_path"]
+    assert first == second and Path(second).read_bytes() == b"%PDF-second"
+
+
+def test_letter_leaves_resume_report_and_application_alone(local_client, settings, monkeypatch):
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(match=TAILORED))
+    application_id = letter_application(local_client)
+    patch_application(local_client, application_id, {"status": "applied"})
+    resume = Path(post_resume(local_client, {"application_id": application_id}).json()["saved_path"])
+    row, report = stored_row(settings, application_id), reports_of(settings).get_report(application_id)
+    assert post_letter(local_client, {"application_id": application_id}).status_code == 201
+    assert resume.read_bytes() == FAKE_PDF
+    assert stored_row(settings, application_id) == row and row["status"] == "applied"
+    assert reports_of(settings).get_report(application_id) == report
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_letter_auth_rejected(client, storage, headers, monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: calls.append(1))
+    application_id = letter_application(client)
+    assert_error(post_letter(client, {"application_id": application_id}, headers), 401)
+    assert_error(post_letter(client, {"application_id": UNKNOWN}, headers), 401)  # unknown ID not leaked
+    r = client.post("/cover-letter", content=b"{not json", headers={**headers, "Content-Type": "application/json"})
+    assert_error(r, 401)
+    assert storage.letters == [] and calls == []
+
+
+@pytest.mark.parametrize("content", [b"{not json", b"[1, 2]", b"42", b"null"])
+def test_letter_bad_body_422(client, storage, content):
+    r = client.post("/cover-letter", content=content, headers={**HEADERS, "Content-Type": "application/json"})
+    assert_error(r, 422)
+    assert storage.letters == []
+
+
+@pytest.mark.parametrize("body", [{}, {"application_id": 7}, {"application_id": None}, {"application_id": ["secret-value"]}])
+def test_letter_non_string_id_422(client, storage, body):
+    r = post_letter(client, body)
+    assert "application_id" in assert_error(r, 422) and "secret-value" not in r.text
+    assert storage.letters == []
+
+
+@pytest.mark.parametrize("application_id", [UNKNOWN, "7", "not-a-uuid"])
+def test_letter_unknown_id_404(client, storage, application_id):
+    letter_application(client)
+    assert assert_error(post_letter(client, {"application_id": application_id}), 404) == "Application not found"
+    assert storage.letters == []
+
+
+@pytest.mark.parametrize("posting", [None, "Full text of the posting...", " ".join(["word"] * 49), "word " * 12_001])
+def test_letter_needs_posting_text(client, storage, monkeypatch, posting):
+    calls = []
+    monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: calls.append(1))
+    application_id = new_application(client, full_job_description=posting)
+    message = assert_error(post_letter(client, {"application_id": application_id}), 422)
+    assert "posting text" in message and "full_job_description" in message
+    assert calls == [] and storage.letters == []
+
+
+def test_letter_after_posting_added(client):
+    application_id = new_application(client)
+    assert post_letter(client, {"application_id": application_id}).status_code == 422
+    patch_application(client, application_id, {"full_job_description": LONG_POSTING})
+    assert post_letter(client, {"application_id": application_id}).status_code == 201
+
+
+def _failing_letter(application, settings):
+    raise TailoringError("verify", "check_failed", failed_checks=["unsupported_number"], run=RunStats(5, 0.2))
+
+
+def test_letter_failure_500_keeps_earlier_letter(local_client, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    application_id = letter_application(local_client)
+    saved = Path(post_letter(local_client, {"application_id": application_id}).json()["saved_path"])
+    monkeypatch.setattr("app.main.write_cover_letter", _failing_letter)
+    caplog.clear()
+    r = post_letter(local_client, {"application_id": application_id})
+    assert r.status_code == 500 and r.json() == {"ok": False, "message": "Cover letter generation failed"}
+    assert saved.read_bytes() == FAKE_LETTER_PDF
+    (error,) = [json.loads(r.getMessage()) for r in caplog.records if '"cover_letter_error"' in r.getMessage()]
+    assert error == {"event": "cover_letter_error", "application_id": application_id, "stage": "verify",
+                     "reason": "check_failed", "failed_checks": ["unsupported_number"]}
+    (line,) = letter_log_lines(caplog)
+    assert (line["status"], line["claude_turns"], line["claude_cost_usd"]) == (500, 5, 0.2)
+
+
+def test_letter_not_configured_500(client, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+
+    def not_configured(application, settings):
+        raise TailoringError("claude", "not_configured")
+    monkeypatch.setattr("app.main.write_cover_letter", not_configured)
+    r = post_letter(client, {"application_id": letter_application(client)})
+    assert r.status_code == 500 and r.json()["message"] == "Cover letter generation failed"
+    assert '"reason": "not_configured"' in caplog.text
+
+
+def test_letter_storage_failure_502(settings, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    client = TestClient(create_app(settings, FakeStorage(fail=True)))
+    application_id = letter_application(client)
+    r = post_letter(client, {"application_id": application_id})
+    assert_error(r, 502)
+    assert "/secret/out" not in r.text and "No space left" not in r.text
+    (line,) = letter_log_lines(caplog)
+    assert line["status"] == 502
+
+
+def test_letter_store_failure_503(settings, storage, monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: calls.append(1))
+    client = TestClient(create_app(settings, storage, FailingReads()))
+    r = post_letter(client, {"application_id": UNKNOWN})
+    assert_error(r, 503)
+    assert "/secret" not in r.text and calls == [] and storage.letters == []
+
+
+def test_letter_one_log_line_per_request(local_client, caplog):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    application_id = letter_application(local_client, why_it_fits="payload-value")
+    caplog.clear()
+    post_letter(local_client, {"application_id": application_id, "note": "body-value"})
+    post_letter(local_client, {"application_id": application_id}, {"X-API-Key": "wrong-key-value"})
+    post_letter(local_client, {"application_id": 7})
+    post_letter(local_client, {"application_id": UNKNOWN})
+    lines = letter_log_lines(caplog)
+    assert [l["status"] for l in lines] == [201, 401, 422, 404]
+    assert [l.get("application_id") for l in lines] == [application_id, None, None, UNKNOWN]
+    assert (lines[0]["claude_turns"], lines[0]["claude_cost_usd"]) == (7, 0.4123)
+    assert all({"event", "status", "duration_ms"} <= set(l) <=
+               {"event", "status", "duration_ms", "application_id", "claude_turns", "claude_cost_usd"} for l in lines)
+    assert '"resume_request"' not in caplog.text and '"application_request"' not in caplog.text
+    for value in ("payload-value", "body-value", "wrong-key-value", API_KEY, "Acme Corp", COVER_LETTER_FILE_NAME,
+                  "A paragraph", "retrieval systems"):
+        assert value not in caplog.text
+
+
+def test_letter_health_responds_during_generation(settings, storage, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+
+    def slow(application, settings):
+        started.set()
+        release.wait(timeout=10)
+        return fake_letter()
+
+    monkeypatch.setattr("app.main.write_cover_letter", slow)
+    client = TestClient(create_app(settings, storage))
+    application_id = letter_application(client)
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(r=post_letter(client, {"application_id": application_id})))
+    worker.start()
+    try:
+        assert started.wait(timeout=5)
+        assert client.get("/health").status_code == 200
+        assert "r" not in result
+    finally:
+        release.set()
+        worker.join(timeout=10)
+    assert result["r"].status_code == 201
