@@ -41,8 +41,8 @@
 
 ## 8. Base cover letter and integration
 
-- [ ] 8.1 Draft the base letter: in an interactive session, run `letter_tool.py prepare` without a posting, then `/write-cover-letter <folder>`, then `run publish-base`. The owner reviews and edits `data/COVER_LETTER.md`, then runs `run render-base`. Verify that `data/COVER_LETTER.md` and a one-page `data/COVER_LETTER.pdf` exist and match, and that the owner has approved the text before commit.
-- [ ] 8.2 Run one live end-to-end request against a local service with a real stored posting. Verify a 201, a one-page PDF beside the resume path, `text` equal to the PDF's text, and a `cover_letter_request` log line with turns and cost and no text. Run the full `pytest` suite and confirm it passes.
+- [x] 8.1 Draft the base letter: in an interactive session, run `letter_tool.py prepare` without a posting, then `/write-cover-letter <folder>`, then `run publish-base`. The owner reviews and edits `data/COVER_LETTER.md`, then runs `run render-base`. Verify that `data/COVER_LETTER.md` and a one-page `data/COVER_LETTER.pdf` exist and match, and that the owner has approved the text before commit.
+- [x] 8.2 Run one live end-to-end request against a local service with a real stored posting. Verify a 201, a one-page PDF beside the resume path, `text` equal to the PDF's text, and a `cover_letter_request` log line with turns and cost and no text. Run the full `pytest` suite and confirm it passes.
 
 ## Workflow follow-up
 
