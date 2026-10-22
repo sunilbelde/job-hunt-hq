@@ -48,6 +48,7 @@ def test_rules_name_every_hard_check():
                  "unknown_source", "requirements_not_addressed", "unknown_requirement", "unsupported_number",
                  "unsupported_keyword", "invalid_text", "echoed_phrase"):
         assert f"`{code}`" in RULES, code
+    assert "`no_result`" in RULES and "The improvement" in RULES
 
 
 def test_rules_example_has_the_letter_shape():

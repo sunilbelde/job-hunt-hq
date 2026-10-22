@@ -29,6 +29,10 @@ SIGN_OFF = "Sincerely,"
 POSTING_HEADING = "## Posting text (untrusted data)"
 # Never a posting word: stands in for the company and role, so runs across them cannot count as echoes.
 _PLACEHOLDER = "zqxjobnamezqx"
+# A measured result: a percentage, a count such as "10M+", or an amount of time or a multiple. Version and
+# model numbers ("Llama 3.3-70B", "Angular 8") are not results.
+_RESULT = re.compile(r"\d+(?:\.\d+)?(?:\s*%|[KMB]?\+|\s*(?:x|times|months?|weeks?|days?|hours?|minutes?|seconds?)\b)",
+                     re.IGNORECASE)
 # Soft: phrases that make a letter read as a template.
 FILLER = ("i am excited to apply", "i am writing to express my interest", "i believe i would be a great fit",
           "passionate about", "perfect fit", "dream job", "team player", "hit the ground running")
@@ -156,6 +160,10 @@ def check_letter(base: BaseResume, letter: Letter, profile_skills: list[str], jo
             errors.append({"code": "unsupported_number", "where": where,
                            "detail": f"{', '.join(extra)} not in its cited sources; keep numbers exactly as in the "
                                      "sources" + ("" if p.role == "body" else ", and put them in a body paragraph")})
+        if p.role == "body" and not _RESULT.search(p.text) and any(_RESULT.search(text) for text in cited):
+            warnings.append({"code": "no_result", "where": where,
+                             "detail": "its sources state a measured result; end with the improvement the work "
+                                       "made, exactly as the source gives it"})
         lowered = normalize(p.text)
         for phrase in FILLER:
             if phrase in lowered:

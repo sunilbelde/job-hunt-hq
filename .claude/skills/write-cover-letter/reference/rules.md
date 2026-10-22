@@ -3,7 +3,7 @@
 ```json
 {"paragraphs": [
   {"role": "opening", "text": "I am applying for the Applied AI Engineer role at Acme Corp. For the last two years at Capital One I have built agents that turn scattered enterprise knowledge into working data software."},
-  {"role": "body", "text": "At Capital One I built a human-in-the-loop mapping engine on the ReAct pattern. ... the assistant reached 75% source-field recall across domains.", "sources": ["j1.b1", "j1.b3", "j1.f1"], "requirements": ["R1"]},
+  {"role": "body", "text": "At Capital One I developed a human-in-the-loop Conversion Mapping Engine using the ReAct pattern. ... the assistant reached 75% source-field recall across domains.", "sources": ["j1.b1", "j1.b3", "j1.f1"], "requirements": ["R1"]},
   {"role": "body", "text": "I also designed a GenAI ETL platform that turns plain-language mapping instructions into PySpark code that runs as AWS Glue jobs. ...", "sources": ["j1.b4", "j1.b5"], "requirements": ["R2", "R3"]},
   {"role": "closing", "text": "I would welcome the chance to talk about how this work could help your team. Thank you for your time and consideration."}
 ]}
@@ -24,8 +24,19 @@ Do not write any of them.
   application notes. In base mode, say who the owner is and what their systems accomplish. Lead with the
   result of the work, not a general description ("pipelines that turn mapping instructions into
   production code", not "systems that do real work").
-- **Body**: each paragraph tells one piece of the owner's work in enough detail to be believable: what
-  they built, how, and what came of it. `sources` lists every bullet and fact (`jN.bK`, `jN.fK`) it draws
+- **Body**: each paragraph connects one need of the employer to one achievement of the owner, in
+  that order:
+  1. **The need**: what the job requires, said in the owner's own words (never the posting's phrasing).
+  2. **The achievement**: the work that meets it: what the owner built and how, in enough detail to be
+     believable.
+  3. **The improvement**: the measured result that work produced, exactly as a cited source states it
+     ("reduced engineering effort by over 70%", "cut delivery time from about 5 months to 4 weeks"). When
+     the cited sources state a result and the paragraph gives none, `run build` warns `no_result`. When
+     no source states a result, say plainly what the work made possible and never invent a figure.
+
+  The first two body paragraphs carry the owner's two strongest achievements: those with the best
+  measured results among the work that meets the posting's required requirements. A third body
+  paragraph, if any, is shorter. `sources` lists every bullet and fact (`jN.bK`, `jN.fK`) it draws
   on, from any job (`missing_source`, `unknown_source`). In tailored mode `requirements` lists the
   requirement IDs from `out/analysis.json` it shows (`requirements_not_addressed`, `unknown_requirement`),
   and together the body paragraphs must address the number of required requirements `run analyze`

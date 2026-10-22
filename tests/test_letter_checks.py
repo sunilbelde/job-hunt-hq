@@ -120,6 +120,39 @@ def test_filler_is_soft():
     assert errors == [] and [w["code"] for w in warnings] == ["filler_phrase"]
 
 
+# --- results ---
+
+def test_body_without_its_sources_result_warns():
+    # j1.b4 states "over 70%" and "5 months to 4 weeks"; the paragraph drops both.
+    text = ("I also designed a GenAI ETL platform that turns plain-language mapping instructions into PySpark code "
+            "that runs as AWS Glue jobs, with a deterministic Python and NetworkX orchestration layer.")
+    errors, warnings = tailored(letter(p2={"text": text, "sources": ["j1.b4"]}))
+    assert [(w["code"], w["where"]) for w in warnings] == [("no_result", "p3")]
+    assert not [e for e in errors if e["code"] != "word_count"]  # soft: the letter is only shorter
+
+
+def test_no_warning_when_the_sources_state_no_result():
+    # j1.b1 and j1.b2 state no measured result, so nothing is missing.
+    text = ("At Capital One I developed a human-in-the-loop Conversion Mapping Engine using the ReAct pattern that "
+            "proposes, critiques and refines source-to-target mappings.")
+    _, warnings = tailored(letter(p1={"text": text, "sources": ["j1.b1", "j1.b2"]}))
+    assert "no_result" not in [w["code"] for w in warnings]
+
+
+def test_model_versions_are_not_results():
+    # j1.b5 holds "Llama 3.3-70B" but no result; a paragraph citing only it is not warned.
+    text = "The platform combined Llama 3.3-70B, LangChain and retrieval with deterministic DAG orchestration."
+    _, warnings = tailored(letter(p2={"text": text, "sources": ["j1.b5"]}))
+    assert "no_result" not in [w["code"] for w in warnings]
+
+
+@pytest.mark.parametrize("text,found", [("by 60%", True), ("10M+ tweets", True), ("from 5 months to 4 weeks", True),
+                                        ("3x faster", True), ("Llama 3.3-70B", False), ("Angular 8", False),
+                                        ("GPT-OSS 120B", False)])
+def test_what_counts_as_a_result(text, found):
+    assert bool(letter_checks._RESULT.search(text)) is found
+
+
 # --- company and role ---
 
 def test_role_and_company_named():

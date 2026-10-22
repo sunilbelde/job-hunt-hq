@@ -65,9 +65,10 @@ the field are fine. Avoid template lines such as "I am excited to apply" or "pas
 
    Fix what it reports and run it again until it passes. It says how many required requirements the
    letter must address.
-3. Choose the evidence. For the posting's most important requirements (in base mode, the owner's
-   strongest work), pick the bullets and facts that show them best. Two or three strong examples beat
-   a list of everything: give the best match most of the space, and compress or drop the rest.
+3. Choose the evidence. Pick the owner's two strongest achievements: work that meets the posting's
+   required requirements (in base mode, the owner's strongest work), with the best measured results in
+   its sources. Each becomes a body paragraph that goes from the employer's need to the achievement to
+   its improvement. Two strong examples beat a list of everything: compress or drop the rest.
 4. Write `out/letter.json` by the rules in [rules.md](reference/rules.md), then run:
 
    `${CLAUDE_SKILL_DIR}/scripts/run build`

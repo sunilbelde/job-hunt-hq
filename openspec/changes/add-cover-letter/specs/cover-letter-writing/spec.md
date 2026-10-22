@@ -83,6 +83,21 @@ The tailored letter's body paragraphs SHALL each name the posting requirements t
 - **WHEN** the body paragraphs address only requirements the posting marks as preferred
 - **THEN** the check reports `requirements_not_addressed` and the letter is rejected
 
+### Requirement: Body paragraphs connect a need to an achievement and its improvement
+Each body paragraph SHALL go from one need of the employer to the owner's work that meets it to the measured improvement that work made, as a cited source states it. The first two body paragraphs SHALL carry the owner's two strongest achievements. A body paragraph whose cited sources state a measured result (a percentage, a count such as "10M+", or an amount of time or a multiple) but that gives none SHALL get a soft `no_result` finding.
+
+#### Scenario: Result left out
+- **WHEN** a body paragraph cites j1.b4, which states "over 70%" and "5 months to 4 weeks", and gives neither
+- **THEN** the build warns `no_result` for it, and the letter is not rejected for it
+
+#### Scenario: No result to give
+- **WHEN** a body paragraph cites only sources that state no measured result
+- **THEN** no `no_result` finding is reported
+
+#### Scenario: Version numbers are not results
+- **WHEN** a body paragraph cites only j1.b5, whose only numbers are in "Llama 3.3-70B"
+- **THEN** no `no_result` finding is reported
+
 ### Requirement: Letter does not echo the posting
 A tailored letter SHALL NOT contain a run of three or more consecutive posting words, at least two of them not stopwords, that its cited sources do not also contain. Runs inside the stored company name or role do not count. Unlike in resume tailoring, this SHALL be a hard check that the final gate enforces.
 
