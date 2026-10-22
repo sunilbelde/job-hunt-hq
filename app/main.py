@@ -62,7 +62,7 @@ BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest)
 
 DESCRIPTION = """Records verified job applications and generates resume PDFs for them.
 
-Every endpoint except the health checks needs the `X-API-Key` header. Every error is a JSON object
+Every endpoint except the health checks and the viewer reads needs the `X-API-Key` header. Every error is a JSON object
 `{"ok": false, "message": "..."}`; the message names fields and rules but never echoes submitted values.
 
 Requests sent from this page are real: they change the application store and write resume files."""
@@ -558,7 +558,7 @@ def create_app(
         )
 
     if docs:
-        register_viewer(app, settings, applications, api_key_valid, store_unavailable, application_id_path)
+        register_viewer(app, settings, applications, store_unavailable, application_id_path)
     else:
         # PATCH and DELETE share this path, so without a GET route it would answer 405 and reveal that the
         # viewer's read exists somewhere. Answer exactly as for an unknown path instead.
@@ -569,14 +569,15 @@ def create_app(
     return app
 
 
-def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationStore, api_key_valid,
-                    store_unavailable, application_id_path) -> None:
+def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationStore, store_unavailable,
+                    application_id_path) -> None:
     """The resume viewer's read endpoints. Only for an app with docs enabled: on the public listener none of
-    these paths exist, so saved resumes and posting text never leave the tailnet."""
+    these paths exist, so saved resumes and posting text never leave the tailnet. They take no API key, so
+    this docs-only registration is their only guard."""
     base_resume = BaseResumeCache()
     output_root = settings.output_dir.resolve()
 
-    # The page holds no data and needs no key to load: it asks for the key and reads the endpoints below.
+    # The page holds no data and needs no key: it reads the endpoints below as soon as it loads.
     @app.get("/viewer", include_in_schema=False)
     def viewer_page() -> HTMLResponse:
         nonce = secrets.token_urlsafe(18)
@@ -596,11 +597,9 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             "generated first and then most recently recorded. `report` summarises the latest generation (when, "
             "how the resume was chosen, the scores), or is null when none is stored. No posting text."
         ),
-        responses={200: {"model": ApplicationList, "description": "The applications."}, **errors(401, 503)},
+        responses={200: {"model": ApplicationList, "description": "The applications."}, **errors(503)},
     )
-    async def list_applications(x_api_key: str | None = Security(api_key_header)):
-        if not api_key_valid(x_api_key):
-            return application_error(401, "Invalid or missing API key")
+    async def list_applications():
         try:
             listed = await run_in_threadpool(applications.list_with_reports)
         except ApplicationStoreError as exc:
@@ -634,15 +633,9 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             "generated before reports were kept."
         ),
         responses={200: {"model": ApplicationDetail, "description": "The application and its report."},
-                   **errors(401, 404, 503)},
+                   **errors(404, 503)},
     )
-    async def read_application(
-        request: Request,
-        application_id: str = application_id_path,
-        x_api_key: str | None = Security(api_key_header),
-    ):
-        if not api_key_valid(x_api_key):
-            return application_error(401, "Invalid or missing API key")
+    async def read_application(request: Request, application_id: str = application_id_path):
         _, found, error = await find(request, application_id)
         if error is not None:
             return error
@@ -667,16 +660,10 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             "its report, so a company renamed since still finds it. Without a report, the resume path for the "
             "current company is used. Sent inline with `Cache-Control: no-store`."
         ),
-        responses={**pdf_ok("The saved resume."), **errors(401, "404_resume", 503)},
+        responses={**pdf_ok("The saved resume."), **errors("404_resume", 503)},
         response_class=Response,
     )
-    async def read_saved_resume(
-        request: Request,
-        application_id: str = application_id_path,
-        x_api_key: str | None = Security(api_key_header),
-    ):
-        if not api_key_valid(x_api_key):
-            return application_error(401, "Invalid or missing API key")
+    async def read_saved_resume(request: Request, application_id: str = application_id_path):
         target, found, error = await find(request, application_id)
         if error is not None:
             return error
@@ -696,12 +683,10 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             "the base resume. Rendered again whenever a template file changes. Sent inline with "
             "`Cache-Control: no-store`."
         ),
-        responses={**pdf_ok("The base resume."), **errors(401, "500_base")},
+        responses={**pdf_ok("The base resume."), **errors("500_base")},
         response_class=Response,
     )
-    async def read_base_resume(x_api_key: str | None = Security(api_key_header)):
-        if not api_key_valid(x_api_key):
-            return application_error(401, "Invalid or missing API key")
+    async def read_base_resume():
         try:
             content = await run_in_threadpool(base_resume.get)
         except RenderError as exc:

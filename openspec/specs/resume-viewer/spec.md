@@ -28,52 +28,56 @@ The viewer page SHALL load no script, stylesheet, font or image from any origin 
 - **WHEN** `/viewer` is fetched
 - **THEN** the response has a `Content-Security-Policy` header whose `script-src`, `style-src` and `frame-src` allow no other origin
 
-### Requirement: API key entered once and kept in memory
-The viewer SHALL ask for the API key before showing any data, send it only in the `X-API-Key` header of its own requests, and keep it only in the open page's memory, never in browser storage, cookies or a URL. A 401 from any request SHALL discard the key and ask for it again.
+### Requirement: Viewer opens without an API key
+The viewer SHALL load and show the application list as soon as the page opens, without asking for an API key, and SHALL send no `X-API-Key` header and no key in any URL, cookie or browser storage. Reloading the page SHALL show the data again without any prompt.
 
-#### Scenario: Reload forgets the key
-- **WHEN** the owner enters the key, views an application and reloads the page
-- **THEN** the page asks for the key again before showing any data
+#### Scenario: Opens straight to the list
+- **WHEN** the owner opens `/viewer` on a listener with API docs enabled
+- **THEN** the page lists the applications without showing a key prompt
 
-#### Scenario: Wrong key
-- **WHEN** the owner enters a wrong key
-- **THEN** the page shows that the key was rejected, shows no data and asks again
+#### Scenario: Reload
+- **WHEN** the owner views an application and reloads the page
+- **THEN** the page lists the applications again without asking for anything
 
-#### Scenario: Key never in a URL
+#### Scenario: No key sent
 - **WHEN** the page requests a list, an application or a PDF
-- **THEN** the key is carried in the `X-API-Key` header and no request URL, including the PDF frames' URLs, contains it
+- **THEN** the request carries no `X-API-Key` header and its URL contains no key
 
 ### Requirement: Application list
-`GET /applications` SHALL require the API key and return every stored application, most recently generated first and then most recently recorded, each with its ID, company, role, status, recorded time and, when it has a report, the generation time, match status, base score and generated score. It SHALL NOT include posting text.
+`GET /applications` SHALL return every stored application, most recently generated first and then most recently recorded, each with its ID, company, role, status, recorded time and, when it has a report, the generation time, match status, base score and generated score. It SHALL NOT include posting text. It SHALL NOT require the API key, and SHALL ignore an `X-API-Key` header if one is sent.
 
 #### Scenario: Listed with report summary
 - **WHEN** the store holds an application with a stored report and one without
 - **THEN** both are returned; the first carries its generation time, match status and scores, and the second carries `report` `null`
 
 #### Scenario: Missing key
-- **WHEN** `GET /applications` is sent without a valid `X-API-Key`
-- **THEN** the response is 401 `{"ok": false, "message": "Invalid or missing API key"}`
+- **WHEN** `GET /applications` is sent without `X-API-Key`, or with a wrong one
+- **THEN** the response is 200 with the applications
 
 #### Scenario: Store unavailable
 - **WHEN** the application store cannot be read
 - **THEN** the response is 503 `{"ok": false, "message": "Application store unavailable"}`
 
 ### Requirement: Application detail
-`GET /application/{application_id}` SHALL require the API key and return the stored application with all its fields, and its stored generation report or `null`. An unknown ID, or one that is not a UUID, SHALL get 404 `{"ok": false, "message": "Application not found"}`.
+`GET /application/{application_id}` SHALL return the stored application with all its fields, and its stored generation report or `null`, without requiring the API key. An unknown ID, or one that is not a UUID, SHALL get 404 `{"ok": false, "message": "Application not found"}`.
 
 #### Scenario: With report
 - **WHEN** the owner requests an application whose resume was tailored
 - **THEN** the response holds the application's fields, including the posting text, and its report
 
+#### Scenario: No key needed
+- **WHEN** `GET /application/{id}` is sent for a stored application without `X-API-Key`, or with a wrong one
+- **THEN** the response is 200 with the application
+
 #### Scenario: Unknown ID
-- **WHEN** `GET /application/not-a-uuid` is sent with a valid key
+- **WHEN** `GET /application/not-a-uuid` is sent
 - **THEN** the response is 404 `{"ok": false, "message": "Application not found"}`
 
 ### Requirement: Generated resume PDF
-`GET /application/{application_id}/resume.pdf` SHALL require the API key and return the application's saved resume as `application/pdf`, read from the path stored in its report or, without a report, from its resume path for the current company. It SHALL answer 404 `{"ok": false, "message": "Resume not found"}` when no file exists there or the path is outside `OUTPUT_DIR`.
+`GET /application/{application_id}/resume.pdf` SHALL return the application's saved resume as `application/pdf`, without requiring the API key, read from the path stored in its report or, without a report, from its resume path for the current company. It SHALL answer 404 `{"ok": false, "message": "Resume not found"}` when no file exists there or the path is outside `OUTPUT_DIR`.
 
 #### Scenario: Saved resume returned
-- **WHEN** an application has a saved resume and the owner requests its PDF with a valid key
+- **WHEN** an application has a saved resume and the owner requests its PDF without a key
 - **THEN** the response is 200 `application/pdf` with exactly the saved file's bytes
 
 #### Scenario: Company renamed after generation
@@ -89,10 +93,10 @@ The viewer SHALL ask for the API key before showing any data, send it only in th
 - **THEN** it carries `Cache-Control: no-store`
 
 ### Requirement: Base resume PDF
-`GET /resume/base.pdf` SHALL require the API key and return the base resume as rendered from the bundled template, as `application/pdf` with `Cache-Control: no-store`. A render failure SHALL get 500 `{"ok": false, "message": "Resume generation failed"}`.
+`GET /resume/base.pdf` SHALL return the base resume as rendered from the bundled template, as `application/pdf` with `Cache-Control: no-store`, without requiring the API key. A render failure SHALL get 500 `{"ok": false, "message": "Resume generation failed"}`.
 
 #### Scenario: Base returned
-- **WHEN** the owner requests `GET /resume/base.pdf` with a valid key
+- **WHEN** the owner requests `GET /resume/base.pdf` without a key
 - **THEN** the response is 200 `application/pdf` with the same PDF `POST /resume` saves when it keeps the base resume
 
 #### Scenario: Template changed

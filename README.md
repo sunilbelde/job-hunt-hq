@@ -137,7 +137,7 @@ Everything it writes, including the draft PDF (`out/build/tailored.pdf`), the ch
 Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/SUNIL BELDE.pdf`, using the application's company at the time you generate. The folder keeps the company name as written (spaces, case, accents), with `/`, `\`, `:` and control characters replaced by `-`, leading and trailing spaces and dots removed, and the name cut to 100 characters. An empty result becomes `unknown-company`, and a name starting with `applications.sqlite3` gets a leading `_` so it can't collide with the store.
 
 - Generating again for the same application replaces the file in one step; a failed render or write leaves the previous file intact.
-- Folders are readable only by your user and files are mode 600. The service serves them over HTTP only to the [resume viewer](#resume-viewer), on the tailnet-only docs listener, with the API key.
+- Folders are readable only by your user and files are mode 600. The service serves them over HTTP only to the [resume viewer](#resume-viewer), on the tailnet-only docs listener, without the API key.
 - Files are kept until you delete them. Deleting an application, or renaming its company, leaves existing resume folders where they are.
 
 ### Upgrading from `POST /jobs`
@@ -202,6 +202,8 @@ open http://localhost:8080/docs   # also /redoc and /openapi.json
 
 Click **Authorize** and enter the API key once. The page keeps it in memory only, so reloading forgets it. The page loads exact, integrity-checked versions of Swagger UI and ReDoc from the jsDelivr CDN (pinned in `app/main.py`).
 
+With docs on, the [resume viewer](#resume-viewer) and its read endpoints are served too, and they need no API key. Keep a docs-enabled dev server on loopback (uvicorn's default; don't pass `--host 0.0.0.0`).
+
 On the installed service the reference is on a separate, tailnet-only listener (see [API docs on the tailnet](#api-docs-on-the-tailnet)):
 - on the Mac mini: `http://127.0.0.1:8081/docs`
 - from your tailnet devices: `https://<machine>.<tailnet>.ts.net:8444/docs`
@@ -212,7 +214,7 @@ The public address never serves these pages. Requests sent from there change you
 
 `/viewer` is a read-only page for reviewing what the service generated for each application. It is served wherever the API reference is: on the installed service only on the tailnet-only docs listener (`http://127.0.0.1:8081/viewer` on the Mac mini, `https://<machine>.<tailnet>.ts.net:8444/viewer` from your tailnet); the public address answers 404.
 
-Enter the API key once; like `/docs`, the page keeps it in memory only, so reloading asks again. The left column lists every application, most recently generated first, with its match status and base → generated score. For the selected one it shows:
+The page opens straight to the list, with no API key: its read endpoints need none, so anyone who can reach the docs listener (your tailnet) can read every application, posting and resume. The left column lists every application, most recently generated first, with its match status and base → generated score. For the selected one it shows:
 
 - the application's details and links, with the posting text collapsed;
 - the base and generated scores against the threshold of 70, each with its keyword and requirement coverage;
@@ -233,7 +235,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` endpoints. Generated files are served only to the resume viewer on the tailnet-only port, and the public address never serves the API docs or the viewer.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` write endpoints. Generated files are served only to the resume viewer on the tailnet-only port, without a key, and the public address never serves the API docs or the viewer.
 
 ### 1. Prerequisites
 
@@ -280,7 +282,7 @@ Then open the API reference:
 
 The public address (`https://<machine>.<tailnet>.ts.net/docs`) answers 404. The app decides by the local port a connection arrived on, which no request header can change, and Funnel can only publish ports 443, 8443 and 10000, so 8444 can't be made public by mistake. The install and status scripts warn if Funnel ever publishes the docs listener.
 
-Anyone on your tailnet can open the docs. Requests from the page still need the API key, and they are real: they change your application store and write resume files. If others share your tailnet, add a rule to your tailnet policy file that allows `tcp:8444` on the Mac mini only from your own user.
+Anyone on your tailnet can open the docs and the viewer. Write requests from the docs page still need the API key, and they are real: they change your application store and write resume files. The viewer and its reads need no key. If others share your tailnet, add a rule to your tailnet policy file that allows `tcp:8444` on the Mac mini only from your own user.
 
 To install without the docs listener, run `DOCS_PORT=off scripts/install_service.sh`. Pick another port with `DOCS_PORT=<port>` and point `tailscale serve` at it.
 

@@ -1,7 +1,7 @@
 """The resume viewer: its page and the base resume it shows beside each generated one.
 
 The page is served only where API docs are enabled (the tailnet-only docs listener) and holds no data
-itself: it asks for the API key and reads everything from the viewer's read endpoints.
+itself: on load it reads everything from the viewer's read endpoints, which need no API key.
 """
 import threading
 from pathlib import Path
@@ -88,12 +88,10 @@ a { color: var(--accent); }
 .muted { color: var(--muted); }
 header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px;
   border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
-#gate { max-width: 360px; margin: 12vh auto; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-#gate label { display: block; margin-bottom: 6px; }
-#gate input { width: 100%; padding: 8px 10px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-#gate button, button.plain { margin-top: 12px; padding: 7px 14px; font: inherit; border: 1px solid var(--accent);
+#load-error { max-width: 420px; margin: 12vh auto; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+#load-error button { margin-top: 12px; padding: 7px 14px; font: inherit; border: 1px solid var(--accent);
   background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; }
-#gate .error { color: var(--bad); margin-top: 10px; }
+#load-error .error { color: var(--bad); margin: 0; }
 #app { display: grid; grid-template-columns: 300px 1fr; height: calc(100% - 45px); }
 #list { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
 #list button { display: block; width: 100%; text-align: left; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line);
@@ -154,13 +152,10 @@ ul.items li { margin: 3px 0; }
   <span id="status" class="muted"></span>
 </header>
 
-<form id="gate" autocomplete="off">
-  <label for="key">API key</label>
-  <input id="key" type="password" required autofocus>
-  <button type="submit">View resumes</button>
-  <p class="muted">The key stays in this page's memory only; reloading asks for it again.</p>
-  <p id="gate-error" class="error hidden"></p>
-</form>
+<div id="load-error" class="hidden" role="alert">
+  <p id="load-error-message" class="error"></p>
+  <button id="retry" type="button">Try again</button>
+</div>
 
 <div id="app" class="hidden">
   <nav id="list" aria-label="Applications"></nav>
@@ -176,10 +171,9 @@ ul.items li { margin: 3px 0; }
     no_job_description: "Not scored",
   };
   const RANK = { missing: 0, partial: 1, met: 2 };
-  let apiKey = null;
   let applications = [];
   let selected = null;
-  let baseUrl = null;          // blob: URL of the base resume, fetched once per key
+  let baseUrl = null;          // blob: URL of the base resume, fetched once per page load
   let generatedUrl = null;     // blob: URL of the selected application's resume
   let loadToken = 0;           // ignores responses for an application no longer selected
 
@@ -219,15 +213,8 @@ ul.items li { margin: 3px 0; }
     return Math.round((fraction || 0) * 100) + "%";
   }
 
-  class Unauthorized extends Error {}
-
   async function api(path, asBlob) {
-    if (apiKey === null) throw new Unauthorized();
-    const response = await fetch(path, { headers: { "X-API-Key": apiKey }, cache: "no-store", credentials: "omit" });
-    if (response.status === 401) {
-      lock("The API key was rejected. Enter it again.");
-      throw new Unauthorized();
-    }
+    const response = await fetch(path, { cache: "no-store", credentials: "omit" });
     if (!response.ok) {
       let message = response.status + " " + response.statusText;
       try { message = (await response.json()).message || message; } catch (_) { /* not JSON */ }
@@ -236,27 +223,6 @@ ul.items li { margin: 3px 0; }
       throw error;
     }
     return asBlob ? response.blob() : response.json();
-  }
-
-  function forgetPdfs() {
-    for (const url of [baseUrl, generatedUrl]) if (url) URL.revokeObjectURL(url);
-    baseUrl = generatedUrl = null;
-  }
-
-  function lock(message) {
-    apiKey = null;
-    applications = [];
-    selected = null;
-    forgetPdfs();
-    $("app").classList.add("hidden");
-    $("list").replaceChildren();
-    $("detail").replaceChildren(el("p", { class: "muted" }, "Select an application."));
-    $("status").textContent = "";
-    $("gate").classList.remove("hidden");
-    $("key").value = "";
-    $("gate-error").textContent = message || "";
-    $("gate-error").classList.toggle("hidden", !message);
-    $("key").focus();
   }
 
   // --- the list ---
@@ -298,7 +264,6 @@ ul.items li { margin: 3px 0; }
     $("status").textContent = "Loading…";
     const body = await api("/applications");
     applications = body.applications;
-    $("gate").classList.add("hidden");
     $("app").classList.remove("hidden");
     $("status").textContent = applications.length + (applications.length === 1 ? " application" : " applications");
     renderList();
@@ -463,7 +428,7 @@ ul.items li { margin: 3px 0; }
       if (!baseUrl) baseUrl = URL.createObjectURL(await api("/resume/base.pdf", true));
       if (token === loadToken) showPdf(basePane, baseUrl, "Base resume");
     } catch (error) {
-      if (!(error instanceof Unauthorized) && token === loadToken) showEmpty(basePane, "Base resume unavailable: " + error.message);
+      if (token === loadToken) showEmpty(basePane, "Base resume unavailable: " + error.message);
     }
     try {
       const blob = await api("/application/" + app.id + "/resume.pdf", true);
@@ -471,7 +436,7 @@ ul.items li { margin: 3px 0; }
       generatedUrl = URL.createObjectURL(blob);
       showPdf(generatedPane, generatedUrl, "Generated resume");
     } catch (error) {
-      if (error instanceof Unauthorized || token !== loadToken) return;
+      if (token !== loadToken) return;
       if (error.status === 404) {
         showEmpty(generatedPane, "No resume has been generated for this application yet.");
         if (legacyNote) legacyNote.remove();  // nothing was generated, so there is no old resume to explain
@@ -498,7 +463,7 @@ ul.items li { margin: 3px 0; }
     try {
       body = await api("/application/" + id);
     } catch (error) {
-      if (!(error instanceof Unauthorized) && token === loadToken) detail.replaceChildren(el("p", { class: "note" }, error.message));
+      if (token === loadToken) detail.replaceChildren(el("p", { class: "note" }, error.message));
       return;
     }
     if (token !== loadToken) return;
@@ -526,17 +491,18 @@ ul.items li { margin: 3px 0; }
 
   // --- wiring ---
 
-  $("gate").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    apiKey = $("key").value;
-    $("key").value = "";
-    $("gate-error").classList.add("hidden");
+  async function start() {
+    $("load-error").classList.add("hidden");
     try {
       await loadList();
     } catch (error) {
-      if (!(error instanceof Unauthorized)) lock("Could not load applications: " + error.message);
+      $("status").textContent = "";
+      $("load-error-message").textContent = "Could not load applications: " + error.message;
+      $("load-error").classList.remove("hidden");
     }
-  });
+  }
+
+  $("retry").addEventListener("click", start);
 
   $("list").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-id]");
@@ -545,8 +511,10 @@ ul.items li { margin: 3px 0; }
 
   window.addEventListener("hashchange", () => {
     const id = location.hash.slice(1);
-    if (apiKey !== null && id && id !== selected && applications.some((a) => a.id === id)) select(id);
+    if (id && id !== selected && applications.some((a) => a.id === id)) select(id);
   });
+
+  start();
 })();
 </script>
 </body>
