@@ -50,7 +50,8 @@ def decide(score: int) -> str:
     return "keep" if score >= THRESHOLD else "tailor"
 
 
-def validate_analysis(analysis) -> None:
+def validate_analysis(analysis, assessment: bool = True) -> None:
+    """`assessment=False` checks only the keywords and requirements (a cover letter's analysis has no assessment)."""
     problems = []
     if not isinstance(analysis, dict):
         raise AnalysisError(['analysis.json must be an object with "keywords", "requirements" and "assessment"'])
@@ -93,7 +94,8 @@ def validate_analysis(analysis) -> None:
             problems.append(f'requirement {req["id"]}: needs a "text"')
         if req.get("importance") not in WEIGHTS:
             problems.append(f'requirement {req["id"]}: "importance" must be "required" or "preferred"')
-    problems += _assessment_problems(analysis.get("assessment"), ids)
+    if assessment:
+        problems += _assessment_problems(analysis.get("assessment"), ids)
     if problems:
         raise AnalysisError(problems)
 

@@ -1,0 +1,58 @@
+# Writing out/letter.json
+
+```json
+{"paragraphs": [
+  {"role": "opening", "text": "I am applying for the Applied AI Engineer role at Acme Corp. For the last two years at Capital One I have built agents that turn scattered enterprise knowledge into working data software."},
+  {"role": "body", "text": "At Capital One I built a human-in-the-loop mapping engine on the ReAct pattern. ... the assistant reached 75% source-field recall across domains.", "sources": ["j1.b1", "j1.b3", "j1.f1"], "requirements": ["R1"]},
+  {"role": "body", "text": "I also designed a GenAI ETL platform that turns plain-language mapping instructions into PySpark code that runs as AWS Glue jobs. ...", "sources": ["j1.b4", "j1.b5"], "requirements": ["R2", "R3"]},
+  {"role": "closing", "text": "I would welcome the chance to talk about how this work could help your team. Thank you for your time and consideration."}
+]}
+```
+
+The scripts add everything else: the resume's name and contact header, the date, the greeting ("Dear
+Acme Corp Hiring Team," or, in base mode, "Dear Hiring Manager,") and "Sincerely," with the owner's name.
+Do not write any of them.
+
+## Structure
+
+- One `opening`, two or three `body` paragraphs, one `closing`, in that order (`structure_mismatch`).
+- Between 250 and 400 words in all (`word_count`). The letter must fit on one page (`one_page`).
+- **Opening**: in tailored mode, name the role and the company exactly as `job.json` has them
+  (`missing_role`, `missing_company`), and give in one or two sentences the specific reason the owner
+  fits. At most one sentence about the company itself, drawn from the posting or the application notes.
+  In base mode, say who the owner is and what kind of work they do.
+- **Body**: each paragraph tells one piece of the owner's work in enough detail to be believable: what
+  they built, how, and what came of it. `sources` lists every bullet and fact (`jN.bK`, `jN.fK`) it draws
+  on, from any job (`missing_source`, `unknown_source`). In tailored mode `requirements` lists the
+  requirement IDs from `out/analysis.json` it shows (`requirements_not_addressed`, `unknown_requirement`),
+  and together the body paragraphs must address the number of required requirements `run analyze`
+  names.
+- **Closing**: two sentences at most: an invitation to talk and a thank-you. No new claims.
+
+## Facts and numbers
+
+- Every number in a body paragraph must appear in a source that paragraph cites, written the same way
+  (`unsupported_number`). The opening and closing hold no numbers, except one that is part of the role
+  or company name; write "two years", not "2 years", when a source does not state it.
+- Name only tools and skills the owner's record states. A posting keyword the record lacks is rejected
+  (`unsupported_keyword`), wherever it appears.
+- Stay inside what the source says: "contributed to" stays "contributed to", "evaluated" does not become
+  "led the evaluation".
+
+## Text
+
+- Plain text: no Markdown, no backslashes, no line breaks inside a paragraph, at most 1,200 characters a
+  paragraph (`invalid_text`). `%`, `&` and `$` print as written.
+- No run of three or more posting words that the paragraph's sources do not also contain
+  (`echoed_phrase`); the role and company names are exempt.
+
+## Examples
+
+- Source `j3.f4`: "Designed an automated NER data extraction and auto-labeling pipeline with Prodigy, cutting
+  manual annotation effort by 60%."
+  - Good: "I built an auto-labeling pipeline with Prodigy that cut manual annotation effort by 60%."
+  - Rejected: "...cut annotation effort by 65%" (`unsupported_number`), or "...with Prodigy and Label Studio"
+    when Label Studio is a posting keyword the record lacks (`unsupported_keyword`).
+- Posting: "We value people who thrive in ambiguity."
+  - Rejected: "I thrive in ambiguity" (`echoed_phrase`). Show it instead with work from the sources, such
+    as the migration the mapping engine handled.

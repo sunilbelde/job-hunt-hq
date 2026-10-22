@@ -120,6 +120,14 @@ class ResumeRequest(BaseModel):
     application_id: StrictStr
 
 
+class CoverLetterRequest(BaseModel):
+    """The POST /cover-letter body: an application ID, as a JSON string. Everything else comes from the store."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [RESUME_EXAMPLE]})
+
+    application_id: StrictStr
+
+
 class StoredApplication(BaseModel):
     """An application as read back from the store. Rows were validated when recorded, so no rules here."""
 
@@ -189,11 +197,17 @@ class ResumeCreated(BaseModel):
     ok: Literal[True] = True
     application_id: str
     saved_path: str
-    cover_letter_path: str = Field(
-        description="Where the cover letter goes, beside the resume. Cover letters are not generated yet, "
-        "so no file exists at this path."
-    )
     match: ResumeMatch = Field(description="How the saved resume was chosen, with the match scores.")
+
+
+class CoverLetterCreated(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    saved_path: str = Field(description="Absolute path of the saved PDF, beside the application's resume.")
+    text: str = Field(
+        description="The letter as plain text: the greeting, the paragraphs and the sign-off, separated by blank "
+        "lines, with no markup. The same words as the PDF, for application forms that take pasted text."
+    )
 
 
 # The viewer's read endpoints. Like the models above, these only describe responses.
