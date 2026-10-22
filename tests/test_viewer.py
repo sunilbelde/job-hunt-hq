@@ -74,18 +74,21 @@ def assert_error(r, status, message):
 # --- served only where docs are ---
 
 @pytest.mark.parametrize("path", [*READ_PATHS, "/viewer"])
-def test_not_served_without_docs(settings, storage, path):
+@pytest.mark.parametrize("headers", [{}, HEADERS])
+def test_not_served_without_docs(settings, storage, path, headers):
     public = TestClient(create_app(settings, storage))
     record(public)
-    r = public.get(path, headers=HEADERS)
+    r = public.get(path, headers=headers)
     assert (r.status_code, r.json()) == (404, public.get("/no-such-path").json())  # as for any unknown path
 
 
-@pytest.mark.parametrize("path", READ_PATHS)
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
-def test_reads_need_the_key(viewer, base_pdf, path, headers):
-    assert_error(viewer.get(path, headers=headers), 401, "Invalid or missing API key")
-    assert base_pdf == []
+def test_reads_need_no_key(viewer, base_pdf, headers):
+    record(viewer)
+    assert viewer.get("/applications", headers=headers).status_code == 200
+    assert viewer.get("/resume/base.pdf", headers=headers).content == b"%PDF-base"
+    assert_error(viewer.get(f"/application/{UNKNOWN}", headers=headers), 404, "Application not found")
+    assert_error(viewer.get(f"/application/{UNKNOWN}/resume.pdf", headers=headers), 404, "Application not found")
 
 
 # --- GET /applications ---
@@ -94,7 +97,7 @@ def test_list_orders_by_generation_and_summarises_reports(viewer, settings, monk
     older, newer, never = record(viewer, 1), record(viewer, 2), record(viewer, 3, full_job_description="secret posting")
     generate(viewer, monkeypatch, newer, Match("base_meets_threshold", 76))
     generate(viewer, monkeypatch, older)
-    r = viewer.get("/applications", headers=HEADERS)
+    r = viewer.get("/applications")
     assert r.status_code == 200 and r.json()["ok"] is True
     listed = r.json()["applications"]
     assert [item["id"] for item in listed] == [older, newer, never]
@@ -113,7 +116,7 @@ def test_list_store_unavailable(settings, storage, monkeypatch):
         raise ApplicationStoreError("OperationalError: unable to open database file")
 
     monkeypatch.setattr(ApplicationStore, "list_with_reports", broken)
-    assert_error(client.get("/applications", headers=HEADERS), 503, "Application store unavailable")
+    assert_error(client.get("/applications"), 503, "Application store unavailable")
 
 
 # --- GET /application/{id} ---
@@ -121,7 +124,7 @@ def test_list_store_unavailable(settings, storage, monkeypatch):
 def test_detail_with_report(viewer, monkeypatch):
     application_id = record(viewer)
     saved = generate(viewer, monkeypatch, application_id)["saved_path"]
-    body = viewer.get(f"/application/{application_id}", headers=HEADERS).json()
+    body = viewer.get(f"/application/{application_id}").json()
     assert body["ok"] is True
     application = body["application"]
     assert application["id"] == application_id and application["created_at"]
@@ -137,14 +140,14 @@ def test_detail_with_report(viewer, monkeypatch):
 
 def test_detail_without_report(viewer):
     application_id = record(viewer)
-    assert viewer.get(f"/application/{application_id}", headers=HEADERS).json()["report"] is None
+    assert viewer.get(f"/application/{application_id}").json()["report"] is None
 
 
 @pytest.mark.parametrize("application_id", [UNKNOWN, "not-a-uuid", "7"])
 def test_detail_unknown_id(viewer, application_id):
     record(viewer)
-    assert_error(viewer.get(f"/application/{application_id}", headers=HEADERS), 404, "Application not found")
-    assert_error(viewer.get(f"/application/{application_id}/resume.pdf", headers=HEADERS), 404, "Application not found")
+    assert_error(viewer.get(f"/application/{application_id}"), 404, "Application not found")
+    assert_error(viewer.get(f"/application/{application_id}/resume.pdf"), 404, "Application not found")
 
 
 def test_detail_store_unavailable(viewer, monkeypatch):
@@ -155,7 +158,7 @@ def test_detail_store_unavailable(viewer, monkeypatch):
 
     monkeypatch.setattr(ApplicationStore, "get_report", broken)
     for path in (f"/application/{application_id}", f"/application/{application_id}/resume.pdf"):
-        assert_error(viewer.get(path, headers=HEADERS), 503, "Application store unavailable")
+        assert_error(viewer.get(path), 503, "Application store unavailable")
 
 
 # --- GET /application/{id}/resume.pdf ---
@@ -163,7 +166,7 @@ def test_detail_store_unavailable(viewer, monkeypatch):
 def test_saved_resume_returned(viewer, monkeypatch):
     application_id = record(viewer)
     generate(viewer, monkeypatch, application_id, content=b"%PDF-1.5 tailored bytes")
-    r = viewer.get(f"/application/{application_id}/resume.pdf", headers=HEADERS)
+    r = viewer.get(f"/application/{application_id}/resume.pdf")
     assert (r.status_code, r.content) == (200, b"%PDF-1.5 tailored bytes")
     assert r.headers["content-type"] == "application/pdf"
     assert r.headers["cache-control"] == "no-store" and r.headers["content-disposition"] == "inline"
@@ -173,7 +176,7 @@ def test_renamed_company_still_served_from_the_saved_path(viewer, settings, monk
     application_id = record(viewer)
     generate(viewer, monkeypatch, application_id, content=b"%PDF old company")
     viewer.patch(f"/application/{application_id}", json={"company": "Acme Inc"}, headers=HEADERS)
-    assert viewer.get(f"/application/{application_id}/resume.pdf", headers=HEADERS).content == b"%PDF old company"
+    assert viewer.get(f"/application/{application_id}/resume.pdf").content == b"%PDF old company"
 
 
 def test_legacy_resume_found_by_current_company(viewer, settings):
@@ -181,13 +184,13 @@ def test_legacy_resume_found_by_current_company(viewer, settings):
     path = settings.output_dir / "Acme Corp" / application_id / RESUME_FILE_NAME
     path.parent.mkdir(parents=True)
     path.write_bytes(b"%PDF legacy")
-    r = viewer.get(f"/application/{application_id}/resume.pdf", headers=HEADERS)
+    r = viewer.get(f"/application/{application_id}/resume.pdf")
     assert (r.status_code, r.content) == (200, b"%PDF legacy")
 
 
 def test_never_generated(viewer):
     application_id = record(viewer)
-    assert_error(viewer.get(f"/application/{application_id}/resume.pdf", headers=HEADERS), 404, "Resume not found")
+    assert_error(viewer.get(f"/application/{application_id}/resume.pdf"), 404, "Resume not found")
 
 
 @pytest.mark.parametrize("where", ["outside", "symlink_out", "folder"])
@@ -205,7 +208,7 @@ def test_saved_path_must_be_a_file_inside_output_dir(viewer, settings, tmp_path,
     else:
         saved = inside.parent
     store_of(settings).save_report(application_id, "2026-10-20T10:00:00Z", str(saved), TAILORED.report())
-    r = viewer.get(f"/application/{application_id}/resume.pdf", headers=HEADERS)
+    r = viewer.get(f"/application/{application_id}/resume.pdf")
     assert_error(r, 404, "Resume not found")
     assert b"not yours" not in r.content
 
@@ -214,7 +217,7 @@ def test_saved_path_must_be_a_file_inside_output_dir(viewer, settings, tmp_path,
 
 def test_base_resume_rendered_once(viewer, base_pdf):
     for _ in range(2):
-        r = viewer.get("/resume/base.pdf", headers=HEADERS)
+        r = viewer.get("/resume/base.pdf")
         assert (r.status_code, r.content, r.headers["content-type"]) == (200, b"%PDF-base", "application/pdf")
         assert r.headers["cache-control"] == "no-store"
     assert len(base_pdf) == 1
@@ -242,7 +245,7 @@ def test_base_render_failure(viewer, monkeypatch, caplog):
         raise RenderError("tectonic exited with 1")
 
     monkeypatch.setattr("app.viewer.render_pdf", broken)
-    assert_error(viewer.get("/resume/base.pdf", headers=HEADERS), 500, "Resume generation failed")
+    assert_error(viewer.get("/resume/base.pdf"), 500, "Resume generation failed")
 
 
 # --- reads change nothing, and are logged without content ---
@@ -261,7 +264,7 @@ def test_reads_change_nothing(viewer, settings, monkeypatch, base_pdf):
     before = snapshot(settings)
     for path in ["/applications", "/resume/base.pdf", "/viewer",
                  *(p for i in (first, second) for p in (f"/application/{i}", f"/application/{i}/resume.pdf"))]:
-        viewer.get(path, headers=HEADERS)
+        viewer.get(path)
     assert snapshot(settings) == before
 
 
@@ -282,7 +285,7 @@ def test_each_read_logged_once_without_content(viewer, monkeypatch, base_pdf, ca
                         (f"/application/{application_id}/resume.pdf", "application_request"),
                         ("/resume/base.pdf", "resume_request")]:
         caplog.clear()
-        viewer.get(path, headers=HEADERS)
+        viewer.get(path)
         (line,) = request_lines(caplog)
         expected = {"event": event, "status": 200}
         if event == "application_request":
@@ -335,7 +338,7 @@ def test_nonce_differs_per_response(viewer):
     assert first != second
 
 
-def test_page_sends_the_key_only_as_a_header(viewer):
+def test_page_asks_for_no_key_and_stores_nothing(viewer):
     html = viewer.get("/viewer").text
-    assert '"X-API-Key": apiKey' in html
-    assert "?key" not in html and "api_key=" not in html
+    for text in ("X-API-Key", 'type="password"', "?key", "api_key=", "localStorage", "sessionStorage", "document.cookie"):
+        assert text not in html, text
