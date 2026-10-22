@@ -19,4 +19,4 @@
 ## 4. Integration check
 
 - [x] 4.1 Run `.venv/bin/python -m pytest`, `sh scripts/test_smoke_test.sh` and `sh scripts/test_install_service.sh`, and verify all pass.
-- [ ] 4.2 After deploying to the Mac mini, run `scripts/smoke_test.sh` against the public URL (it checks that `/viewer` is 404 there). Then verify `curl -s -o /dev/null -w '%{http_code}' https://<machine>.<tailnet>.ts.net/applications` returns 404, and that `https://<machine>.<tailnet>.ts.net:8444/viewer` opens straight to the list on a tailnet device.
+- [x] 4.2 After deploying to the Mac mini, run `scripts/smoke_test.sh` against the public URL (it checks that `/viewer` is 404 there). Then verify `curl -s -o /dev/null -w '%{http_code}' https://<machine>.<tailnet>.ts.net/applications` returns 404, and that `https://<machine>.<tailnet>.ts.net:8444/viewer` opens straight to the list on a tailnet device.
