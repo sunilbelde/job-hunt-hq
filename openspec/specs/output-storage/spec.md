@@ -65,26 +65,19 @@ The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<a
 - **AND** the file under `<OUTPUT_DIR>/Acme/<id>/` is left unchanged
 
 ### Requirement: Cover letter file path
-The cover letter for an application SHALL be located at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE - Cover Letter.pdf`, in the same folder as that application's resume, with the company folder derived exactly as for the resume.
+The cover letter for an application SHALL be saved at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE - Cover Letter.pdf`, the folder that application's resume uses, with the company folder derived from the stored company exactly as for the resume. The path SHALL NOT depend on whether a resume exists.
 
 #### Scenario: Location next to the resume
-- **WHEN** a resume is generated for application `<id>` whose company is "Acme Corp"
-- **THEN** its cover letter path is `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf`
+- **WHEN** a cover letter is generated for application `<id>` whose company is "Acme Corp"
+- **THEN** it is saved at `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf`, beside `SUNIL BELDE.pdf` when that exists
 
 #### Scenario: Company folder naming applies
 - **WHEN** the company is "AT&T / Mobility: West"
-- **THEN** the cover letter path is inside the folder "AT&T - Mobility- West", like the resume
+- **THEN** the cover letter is saved inside the folder "AT&T - Mobility- West", like the resume
 
-### Requirement: Cover letter not yet written
-Until cover letter generation is implemented, the service SHALL NOT create, replace or delete any file at an application's cover letter path. A file placed there outside the service SHALL be left unchanged.
-
-#### Scenario: Resume generated
-- **WHEN** a resume is generated for application `<id>` and no cover letter exists
-- **THEN** afterwards no file exists at its cover letter path, and the resume is the only file in `<OUTPUT_DIR>/<company folder>/<id>/`
-
-#### Scenario: File already present
-- **WHEN** a file exists at the cover letter path and a resume is generated again
-- **THEN** that file is unchanged
+#### Scenario: No resume yet
+- **WHEN** a cover letter is generated for an application that has no resume
+- **THEN** the application's folder is created and holds only the cover letter
 
 ### Requirement: Company folder naming
 The company folder SHALL be the stored `company` with each `/`, `\`, `:` and control character replaced by `-`, leading and trailing spaces and dots removed, and the result cut to 100 characters. It SHALL be `unknown-company` if nothing remains, and SHALL get a leading `_` if it starts with `applications.sqlite3` in any case.
@@ -110,11 +103,15 @@ The company folder SHALL be the stored `company` with each `/`, `\`, `:` and con
 - **THEN** the folder name is its first 100 characters, trimmed as above
 
 ### Requirement: Overwrite on regeneration
-Generating a resume for an application whose resume file already exists at the computed path SHALL replace that file with the new render.
+Generating a resume for an application whose resume file already exists at the computed path SHALL replace that file with the new render. Generating a cover letter SHALL likewise replace an existing cover letter at its path. Neither SHALL touch the other's file.
 
 #### Scenario: Regenerate
 - **WHEN** a resume is generated twice for application `<id>`
-- **THEN** exactly one file exists in `<OUTPUT_DIR>/<company folder>/<id>/`, holding the second render
+- **THEN** exactly one resume file exists in `<OUTPUT_DIR>/<company folder>/<id>/`, holding the second render
+
+#### Scenario: Regenerate the cover letter
+- **WHEN** a cover letter is generated twice for application `<id>`
+- **THEN** exactly one cover letter file exists in that folder, holding the second letter, and the resume there is unchanged
 
 ### Requirement: Resume files are kept
 The service SHALL NOT delete saved resume files or their folders on its own. They SHALL remain until removed outside the service, including after the application is deleted or the service restarts.
@@ -149,3 +146,37 @@ At startup, every application folder directly inside a company folder whose name
 #### Scenario: Target already exists
 - **WHEN** both `Acme Corp/1/` and `Acme Corp/<id>/` exist
 - **THEN** neither is changed and the conflict is logged
+
+### Requirement: Cover letter written only on request
+Only `POST /cover-letter` SHALL create or replace an application's cover letter file. Resume generation SHALL NOT create, replace or delete it, and a file placed there outside the service SHALL stay unchanged until a cover letter is requested.
+
+#### Scenario: Resume generated
+- **WHEN** a resume is generated for application `<id>` and no cover letter exists
+- **THEN** afterwards no cover letter file exists in its folder
+
+#### Scenario: File already present
+- **WHEN** a cover letter file exists and a resume is generated again
+- **THEN** that file is unchanged
+
+### Requirement: Cover letter files are private, complete and kept
+Cover letter files SHALL be written like resume files: atomically, so the path holds either the previous complete letter or the new one; readable and writable only by the service's user account, inside folders only that account can access; and never deleted by the service, including after the application is deleted. Over HTTP they SHALL be readable only through the viewer's `GET /application/{application_id}/cover-letter.pdf`, which exists only where API docs are enabled, and never by a path naming the file.
+
+#### Scenario: Failed write
+- **WHEN** writing a replacement cover letter fails partway
+- **THEN** the previous cover letter is unchanged and no temporary file is left behind
+
+#### Scenario: File permissions
+- **WHEN** the service writes a cover letter
+- **THEN** its mode grants no access to group or other users
+
+#### Scenario: No HTTP access
+- **WHEN** any client requests a path naming a saved cover letter
+- **THEN** the system responds 404 and returns no file content
+
+#### Scenario: Viewer read only where docs are enabled
+- **WHEN** a client on a listener with API docs disabled requests `GET /application/{id}/cover-letter.pdf`
+- **THEN** the system responds 404 and returns no file content
+
+#### Scenario: Application deleted
+- **WHEN** application `<id>` is deleted
+- **THEN** its cover letter file is still on disk
