@@ -36,9 +36,17 @@ from app.models import (
 )
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
-from app.storage import LocalStorage, Storage, StorageError, rename_legacy_folders, resume_path
+from app.storage import (
+    COVER_LETTER_FILE_NAME,
+    LocalStorage,
+    Storage,
+    StorageError,
+    cover_letter_path,
+    rename_legacy_folders,
+    resume_path,
+)
 from app.tailoring import TailoringError
-from app.viewer import BaseResumeCache, content_security_policy, page
+from app.viewer import BaseResumeCache, content_security_policy, page, read_base_cover_letter
 
 logger = logging.getLogger("app.requests")
 logger.setLevel(logging.INFO)
@@ -77,14 +85,17 @@ TAGS = [
     {"name": "resumes", "description": "Generate a resume PDF for a recorded application."},
     {"name": "cover letters", "description": "Write a cover letter for a recorded application, only when it asks "
                                              "for one."},
-    {"name": "viewer", "description": "Read applications, their generation reports and resume PDFs, for the resume "
-                                      "viewer at `/viewer`. Served only where these docs are."},
+    {"name": "viewer", "description": "Read applications, their generation reports, resume and cover letter PDFs, "
+                                      "for the resume viewer at `/viewer`. Served only where these docs are."},
 ]
 
 ERROR_DESCRIPTIONS = {
     401: "Missing or wrong `X-API-Key`. Checked before the body or ID is looked at.",
     404: "No application has this ID. An ID that is not a UUID gets this too.",
     "404_resume": "No application has this ID (`Application not found`), or it has no saved resume (`Resume not found`).",
+    "404_letter": "No application has this ID (`Application not found`), or it has no saved cover letter "
+                  "(`Cover letter not found`).",
+    "404_base_letter": "`data/COVER_LETTER.pdf` is missing or unreadable (`Base cover letter not found`).",
     "500_base": "The base resume could not be rendered.",
     422: "The body is not JSON, not a JSON object, or fails validation. `message` names the fields and rules.",
     "422_letter": "The body is not JSON, not a JSON object, or fails validation, or the application has no usable "
@@ -180,7 +191,7 @@ def note_generation(request: Request, match=None, run=None) -> None:
 def request_event(path: str) -> str | None:
     if path in ("/resume", "/resume/base.pdf"):
         return "resume_request"
-    if path == "/cover-letter":
+    if path in ("/cover-letter", "/cover-letter/base.pdf"):
         return "cover_letter_request"
     if path in ("/application", "/applications") or path.startswith("/application/"):
         return "application_request"
@@ -709,8 +720,8 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             return error
         return {"ok": True, **found}
 
-    def read_resume(path: pathlib.Path) -> bytes | None:
-        """The saved resume's bytes, or None when there is no regular file there inside OUTPUT_DIR."""
+    def read_output(path: pathlib.Path) -> bytes | None:
+        """The saved file's bytes, or None when there is no regular file there inside OUTPUT_DIR."""
         try:
             resolved = path.resolve()
             if not resolved.is_relative_to(output_root) or not resolved.is_file():
@@ -737,9 +748,43 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             return error
         report = found["report"]
         path = pathlib.Path(report["saved_path"]) if report else resume_path(output_root, found["application"]["company"], target)
-        content = await run_in_threadpool(read_resume, path)
+        content = await run_in_threadpool(read_output, path)
         if content is None:
             return application_error(404, "Resume not found")
+        return pdf_response(content)
+
+    def read_cover_letter(application: dict, application_id: str, report: dict | None) -> bytes | None:
+        """The saved cover letter: first where POST /cover-letter would save it now, then beside the resume the
+        report points to, which finds a letter written before the company was renamed."""
+        candidates = [cover_letter_path(output_root, application["company"], application_id)]
+        if report:
+            candidates.append(pathlib.Path(report["saved_path"]).parent / COVER_LETTER_FILE_NAME)
+        for path in candidates:
+            content = read_output(path)
+            if content is not None:
+                return content
+        return None
+
+    @app.get(
+        "/application/{application_id}/cover-letter.pdf",
+        tags=["viewer"],
+        summary="Read an application's saved cover letter",
+        description=(
+            "The cover letter PDF saved for the application by `POST /cover-letter`. Looked for in the "
+            "application's folder for its current company, then beside the resume its report points to, so a "
+            "letter written before the company was renamed is still found. Sent inline with "
+            "`Cache-Control: no-store`."
+        ),
+        responses={**pdf_ok("The saved cover letter."), **errors("404_letter", 503)},
+        response_class=Response,
+    )
+    async def read_saved_cover_letter(request: Request, application_id: str = application_id_path):
+        target, found, error = await find(request, application_id)
+        if error is not None:
+            return error
+        content = await run_in_threadpool(read_cover_letter, found["application"], target, found["report"])
+        if content is None:
+            return application_error(404, "Cover letter not found")
         return pdf_response(content)
 
     @app.get(
@@ -760,4 +805,22 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         except RenderError as exc:
             logger.error(json.dumps({"event": "render_error", "error": str(exc)}))
             return application_error(500, "Resume generation failed")
+        return pdf_response(content)
+
+    @app.get(
+        "/cover-letter/base.pdf",
+        tags=["viewer"],
+        summary="Read the base cover letter",
+        description=(
+            "The generic base cover letter committed as `data/COVER_LETTER.pdf`, served unchanged and read again "
+            "on every request, so a letter the owner re-renders shows straight away. The service never generates "
+            "or edits it, and tailored letters do not use it. Sent inline with `Cache-Control: no-store`."
+        ),
+        responses={**pdf_ok("The base cover letter."), **errors("404_base_letter")},
+        response_class=Response,
+    )
+    async def read_base_letter():
+        content = await run_in_threadpool(read_base_cover_letter)
+        if content is None:
+            return application_error(404, "Base cover letter not found")
         return pdf_response(content)
