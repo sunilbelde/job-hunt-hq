@@ -103,7 +103,7 @@ The installed service's public listener, the one published through Funnel, SHALL
 - **THEN** it receives 404, with no endpoint list or schema
 
 #### Scenario: Internet client probes the viewer
-- **WHEN** a client outside the tailnet sends a valid `X-API-Key` to `https://<mac-tailscale-name>/applications`, `/application/<id>`, `/application/<id>/resume.pdf` or `/resume/base.pdf`
+- **WHEN** a client outside the tailnet requests `https://<mac-tailscale-name>/applications`, `/application/<id>`, `/application/<id>/resume.pdf` or `/resume/base.pdf`, with or without a valid `X-API-Key`
 - **THEN** it receives 404, with no application, report or file content
 
 #### Scenario: Forged headers do not reach the docs
@@ -126,8 +126,8 @@ The installed service SHALL serve the API reference pages, the OpenAPI document,
 - **THEN** the interactive API reference loads
 
 #### Scenario: Viewer from a tailnet device
-- **WHEN** a device signed into the owner's tailnet opens `https://<mac-tailscale-name>:<docs https port>/viewer` and enters the API key
-- **THEN** the resume viewer lists the applications
+- **WHEN** a device signed into the owner's tailnet opens `https://<mac-tailscale-name>:<docs https port>/viewer`
+- **THEN** the resume viewer lists the applications without asking for the API key
 
 #### Scenario: Docs port not public
 - **WHEN** a client outside the tailnet connects to `https://<mac-tailscale-name>:<docs https port>/`
