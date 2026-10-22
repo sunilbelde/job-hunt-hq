@@ -47,7 +47,9 @@ for it.
 ## Say it in the owner's words
 
 Write the way a capable engineer writes to another: plain, specific, first person, no padding. Show the
-work and its results rather than adjectives about the owner. Do not copy the posting's phrasing ("thrive
+work and its results rather than adjectives about the owner. In tailored mode the letter must answer
+why this role: connect what the job most needs to the owner's matching work, starting in the opening.
+Keep tool names to the few that matter for the job, and keep "I" for the owner's own contributions. Do not copy the posting's phrasing ("thrive
 in ambiguity", "own outcomes end to end"): `run build` rejects it as `echoed_phrase`. Standard terms of
 the field are fine. Avoid template lines such as "I am excited to apply" or "passionate about"
 (`filler_phrase`).
@@ -65,7 +67,7 @@ the field are fine. Avoid template lines such as "I am excited to apply" or "pas
    letter must address.
 3. Choose the evidence. For the posting's most important requirements (in base mode, the owner's
    strongest work), pick the bullets and facts that show them best. Two or three strong examples beat
-   a list of everything.
+   a list of everything: give the best match most of the space, and compress or drop the rest.
 4. Write `out/letter.json` by the rules in [rules.md](reference/rules.md), then run:
 
    `${CLAUDE_SKILL_DIR}/scripts/run build`
