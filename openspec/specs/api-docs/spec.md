@@ -37,11 +37,11 @@ When API docs are disabled, which is the default, the system SHALL NOT serve `/d
 - **THEN** `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume` and `POST /cover-letter` behave exactly as they do with docs enabled
 
 ### Requirement: Documented endpoint coverage
-The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `POST /cover-letter`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf` and `GET /cover-letter/base.pdf`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
+The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf` and `GET /cover-letter/base.pdf`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
 
 #### Scenario: All endpoints listed
 - **WHEN** the OpenAPI document is fetched
-- **THEN** it contains exactly those thirteen operations, each with a non-empty summary, description and tag
+- **THEN** it contains exactly those fifteen operations, each with a non-empty summary, description and tag
 
 #### Scenario: Health alias
 - **WHEN** the OpenAPI document is fetched
@@ -53,7 +53,15 @@ The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /applic
 
 #### Scenario: Cover letter description
 - **WHEN** the OpenAPI document is fetched
-- **THEN** the `POST /cover-letter` description says it always tailors to the posting, needs posting text, saves the PDF beside the resume, returns the letter's text, and needs a client timeout of at least 10 minutes
+- **THEN** the `POST /cover-letter` description says it always tailors to the posting, needs posting text, saves the PDF beside the resume, runs in the background and returns 202, and that the letter's path and text come from `GET /cover-letter/{application_id}/status`
+
+#### Scenario: Background generation described
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the `POST /resume` and `POST /cover-letter` descriptions say the run continues after the response, that a request while a run is in progress starts no second run, and that the client polls the matching status endpoint, and neither tells the client to use a 10-minute timeout
+
+#### Scenario: Status endpoints described
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the two status endpoints are tagged with their POST endpoint (`resumes` and `cover letters`), require the API key, and their descriptions list the job states, say a restart marks a running job `failed`, and say they return no posting text
 
 #### Scenario: Cover letter reads described
 - **WHEN** the OpenAPI document is fetched
@@ -83,11 +91,15 @@ The OpenAPI document SHALL list, for each operation, its success status and resp
 
 #### Scenario: Error statuses listed
 - **WHEN** the OpenAPI document is fetched
-- **THEN** `POST /application` lists 200, 201, 401, 422 and 503; `PATCH /application/{application_id}` lists 200, 401, 404, 422 and 503; `DELETE /application/{application_id}` lists 200, 401, 404 and 503; `POST /resume` lists 201, 401, 404, 422, 500, 502 and 503; `POST /cover-letter` lists 201, 401, 404, 422, 500, 502 and 503; `GET /applications` lists 200 and 503; `GET /application/{application_id}` lists 200, 404 and 503; `GET /application/{application_id}/resume.pdf` lists 200, 404 and 503; `GET /application/{application_id}/cover-letter.pdf` lists 200, 404 and 503; `GET /resume/base.pdf` lists 200 and 500; and `GET /cover-letter/base.pdf` lists 200 and 404
+- **THEN** `POST /application` lists 200, 201, 401, 422 and 503; `PATCH /application/{application_id}` lists 200, 401, 404, 422 and 503; `DELETE /application/{application_id}` lists 200, 401, 404 and 503; `POST /resume` lists 202, 401, 404, 422 and 503; `GET /resume/{application_id}/status` lists 200, 401, 404 and 503; `POST /cover-letter` lists 202, 401, 404, 422 and 503; `GET /cover-letter/{application_id}/status` lists 200, 401, 404 and 503; `GET /applications` lists 200 and 503; `GET /application/{application_id}` lists 200, 404 and 503; `GET /application/{application_id}/resume.pdf` lists 200, 404 and 503; `GET /application/{application_id}/cover-letter.pdf` lists 200, 404 and 503; `GET /resume/base.pdf` lists 200 and 500; and `GET /cover-letter/base.pdf` lists 200 and 404
 
 #### Scenario: Response shapes
 - **WHEN** the OpenAPI document is fetched
-- **THEN** the `POST /resume` 201 response lists exactly `ok`, `application_id`, `saved_path` and `match`, and the `POST /cover-letter` 201 response lists exactly `ok`, `application_id`, `saved_path` and `text`
+- **THEN** the 202 responses of `POST /resume` and `POST /cover-letter` list exactly `ok`, `application_id`, `status` and `started_at`; the `GET /resume/{application_id}/status` 200 response lists exactly `ok`, `application_id`, `status`, `started_at`, `finished_at`, `saved_path`, `match` and `error`; and the `GET /cover-letter/{application_id}/status` 200 response lists the same with `text` in place of `match`
+
+#### Scenario: Job status values
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the status responses' `status` field lists exactly `running`, `done` and `failed`
 
 #### Scenario: PDF responses
 - **WHEN** the OpenAPI document is fetched
