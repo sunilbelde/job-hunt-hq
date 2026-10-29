@@ -7,8 +7,10 @@ Each resume is matched against the application's posting. Claude scores the base
 | Endpoint | Auth | Description |
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
-| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Scores the base resume against the stored posting, tailors it below 70, and saves it. Takes about 1–5 minutes when it runs Claude, so use a client timeout of at least 10 minutes. `201 {"ok": true, "application_id", "saved_path", "match"}`, where `saved_path` is the resume's absolute path and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`. It never writes a cover letter (see `POST /cover-letter`), and no longer returns `cover_letter_path`: clients that read it, such as Muse, must drop it. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 500 render or tailoring failure, 502 file write failure, 503 store failure |
-| `POST /cover-letter` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Writes a cover letter tailored to the stored posting and saves it beside the resume as `SUNIL BELDE - Cover Letter.pdf`, replacing any earlier one. Call it only for applications that ask for a letter; it needs no resume. Takes about 1–3 minutes, so use a client timeout of at least 10 minutes. `201 {"ok": true, "application_id", "saved_path", "text"}`, where `text` is the same letter as plain text, for forms that take pasted text. Always tailored: an application without usable posting text (missing, under 50 words or over 60,000 characters) gets a 422 and no Claude run. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body or no posting text, 500 `Cover letter generation failed`, 502 file write failure, 503 store failure |
+| `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that scores the base resume against the stored posting, tailors it below 70, and saves it, and returns at once with `202 {"ok": true, "application_id", "status": "running", "started_at"}`. Poll `GET /resume/{application_id}/status` for the result. The job takes about 1–5 minutes when it runs Claude (capped at about 10) and keeps running if the client disconnects. Sending it again while the job runs starts no second run and returns the same 202, so a retry is safe. It never writes a cover letter (see `POST /cover-letter`). Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 503 store failure |
+| `GET /resume/{application_id}/status` | `X-API-Key` | The application's latest resume job: `200 {"ok": true, "application_id", "status", "started_at", "finished_at", "saved_path", "match", "error"}`. `status` is `running`, `done` (`saved_path` is the resume's absolute path and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`) or `failed` (`error` is `Resume generation failed`, `Storage service unavailable` or `Interrupted by a service restart`, and any earlier resume is kept). Poll every 10–15 seconds and give up after about 12 minutes. Served on the public address too, and returns no posting text. 401 bad key, 404 unknown application or `No job for this application`, 503 store failure |
+| `POST /cover-letter` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that writes a cover letter tailored to the stored posting and saves it beside the resume as `SUNIL BELDE - Cover Letter.pdf`, replacing any earlier one, and returns `202` like `POST /resume`. Poll `GET /cover-letter/{application_id}/status`. Call it only for applications that ask for a letter; it needs no resume. The job takes about 1–3 minutes. Always tailored: an application without usable posting text (missing, under 50 words or over 60,000 characters) gets a 422 and no job. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body or no posting text, 503 store failure |
+| `GET /cover-letter/{application_id}/status` | `X-API-Key` | The application's latest cover letter job, as for the resume, with `text` (the same letter as plain text, for forms that take pasted text) in place of `match`. A failed job's `error` is `Cover letter generation failed`, `Storage service unavailable` or `Interrupted by a service restart` |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
@@ -122,7 +124,7 @@ How it decides:
 - **The final gate.** Before saving, the service re-checks the output with its own untouched copy of the scripts and template, and saves only the PDF it rendered itself. It scores against the analysis as it stood when the judge ruled, and allows only the keywords of its own copy of the ruling and the facts of its own copy of your profile, so the tailoring run can't change any of them.
 - **Failures.** If Claude isn't configured or available, a run hits the time or spend limit, the judge's output is unusable, or the content fails a check, the request fails with 500 `Resume generation failed`. Nothing is saved, any earlier resume is kept, and the log line `tailoring_error` gives the stage (`analysis`, `judge`, `tailoring` or `verify`) and reason codes.
 - **Isolation.** Posting text is treated as untrusted data. Each Claude run works in a temporary folder with an empty `HOME` and its own config folder (`OUTPUT_DIR/.claude-runtime/`). It has no web or MCP tools, can only run the skill's script and read-only commands inside that folder (the judge runs no commands at all), and its commands never see the credential. Your own Claude Code settings, hooks and shell profile are never loaded.
-- **Cost and limits.** With `CLAUDE_CODE_OAUTH_TOKEN`, runs use your Claude plan. On Pro that plan's limits are shared with your own Claude Code use, and a run that hits them fails. With `ANTHROPIC_API_KEY`, runs are billed per use: roughly 1–2 USD per tailored resume, less when the base resume already matches. `TAILORING_TIMEOUT_SECONDS` and `TAILORING_MAX_BUDGET_USD` cover all the runs for one resume together. Each `resume_request` log line records the runs' turns and estimated cost, and how many keywords the judge approved and rejected (counts only, never the keywords).
+- **Cost and limits.** With `CLAUDE_CODE_OAUTH_TOKEN`, runs use your Claude plan. On Pro that plan's limits are shared with your own Claude Code use, and a run that hits them fails. With `ANTHROPIC_API_KEY`, runs are billed per use: roughly 1–2 USD per tailored resume, less when the base resume already matches. `TAILORING_TIMEOUT_SECONDS` and `TAILORING_MAX_BUDGET_USD` cover all the runs for one resume together. Each `resume_job` log line records the runs' turns and estimated cost, and how many keywords the judge approved and rejected (counts only, never the keywords).
 
 To run the skill by hand on a posting saved to a file, from the repository root:
 
@@ -150,7 +152,7 @@ Everything it writes, including the draft PDF (`out/build/tailored.pdf`), the ch
 - **In your words.** A run of three or more posting words that the paragraph's sources don't share fails the letter (`echoed_phrase`). For resumes this is only a warning. The company and role are exempt. Template lines such as "I am excited to apply" are flagged.
 - **Size.** 250–400 words on one page.
 - **The final gate.** The service re-checks the letter with its own copy of the scripts, template, profile, posting and company/role, and saves only the PDF and text it rendered itself.
-- **Failures.** If any check fails, or Claude isn't configured or available, or the run hits a limit, the request fails with 500 `Cover letter generation failed`. Nothing is saved and any earlier letter is kept. The log line `cover_letter_error` gives the stage (`prepare`, `letter` or `verify`) and the reason codes. Each `cover_letter_request` line records the run's turns and estimated cost, never the letter.
+- **Failures.** If any check fails, or Claude isn't configured or available, or the run hits a limit, the job fails with `Cover letter generation failed`. Nothing is saved and any earlier letter is kept. The log line `cover_letter_error` gives the stage (`prepare`, `letter` or `verify`) and the reason codes. Each `cover_letter_job` line records the run's turns and estimated cost, never the letter.
 
 The checks can't catch every overstatement ("led" where your record says "built"), so skim each letter before you send it.
 
@@ -214,15 +216,19 @@ echo "$ID"
 
 curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
-# {"ok":true,"application_id":"3f2b…","saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf",
-#  "match":{"status":"no_job_description","threshold":70,"base_score":null,"tailored_score":null,"added_terms":[]}}
-# (this posting has no text, so nothing was scored)
+# {"ok":true,"application_id":"3f2b…","status":"running","started_at":"2026-10-28T17:02:11.204518Z"}   (202)
+
+curl "localhost:8080/resume/$ID/status" -H "X-API-Key: $API_KEY"
+# {"ok":true,"application_id":"3f2b…","status":"done","started_at":"…","finished_at":"…",
+#  "saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf",
+#  "match":{"status":"no_job_description","threshold":70,"base_score":null,"tailored_score":null,"added_terms":[]},"error":null}
+# (this posting has no text, so nothing was scored and the job finished in seconds; with posting text, poll until done)
 
 curl -X POST localhost:8080/cover-letter -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
 # {"ok":false,"message":"Application has no usable posting text: add full_job_description (at least 50 words) with PATCH /application/{application_id} first"}
-# (422: this posting has no text. With one, it returns 201:
-#  {"ok":true,"application_id":"3f2b…","saved_path":"…/Acme/3f2b…/SUNIL BELDE - Cover Letter.pdf","text":"Dear Acme Hiring Team,\n\n…"})
+# (422: this posting has no text. With one, it returns 202, and once done
+#  GET /cover-letter/$ID/status has "saved_path":"…/Acme/3f2b…/SUNIL BELDE - Cover Letter.pdf" and "text":"Dear Acme Hiring Team,\n\n…")
 
 curl -X PATCH "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
@@ -277,7 +283,7 @@ sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed 
 
 ## Running on the Mac mini
 
-The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume` and the `/application` write endpoints. Generated resumes and cover letters are served only to the resume viewer on the tailnet-only port, without a key, and the public address never serves the API docs or the viewer.
+The service runs as a launchd daemon. It starts at boot without anyone logging in, restarts within about 10 seconds if it crashes, runs as your user (not root), and listens only on loopback: the API on `127.0.0.1:8080`, and the same API plus its reference pages on `127.0.0.1:8081`. Tailscale Funnel publishes port 8080 over HTTPS at your machine's `ts.net` hostname, reachable from the internet as well as your tailnet. Port 8081 is published to your tailnet only. Neither is reachable directly on your LAN. Access control is the API key on `POST /resume`, `POST /cover-letter`, their status endpoints and the `/application` write endpoints. The status endpoints return only job state, the saved path and the match or letter text, never posting text. Generated resumes and cover letters are served only to the resume viewer on the tailnet-only port, without a key, and the public address never serves the API docs or the viewer.
 
 ### 1. Prerequisites
 
@@ -364,7 +370,7 @@ The daemon runs straight from this checkout. **After `git pull`, run `scripts/in
 The status script's `tailoring:` line reads, for example, `ready (subscription token, claude-opus-5-5, Claude Code 2.1.303)`, `not configured` or `FAILING (…)`. It checks the CLI and the credential kind without any model call. To confirm the credential itself works, run `.venv/bin/python -m app.tailoring --check --live` from the repository, which sends one minimal prompt.
 
 Logs are in `~/Library/Logs/job-hunt-hq/`:
-- `service.log`: requests (one JSON line per `POST /resume` or `/application` request, the latter with its `method`) and the access log without query strings. Rotated at 10 MB, 5 kept.
+- `service.log`: requests (one JSON line per `/resume`, `/cover-letter` or `/application` request, with its `method`), one `resume_job` or `cover_letter_job` line per finished background job (its `outcome`, duration and match and Claude-run counts), and the access log without query strings. Rotated at 10 MB, 5 kept.
 - `launchd.log`: anything printed before logging starts, such as import errors and crash tracebacks.
 
 ### 5. Verify
@@ -375,7 +381,7 @@ On the Mac (the smoke test reads the saved PDF from disk, so it must run there):
 API_KEY=... scripts/smoke_test.sh http://127.0.0.1:8080
 ```
 
-First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs`, `/viewer` and a schema with the thirteen operations. Then it records a synthetic application, generates its resume, checks the file is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
+First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs`, `/viewer` and a schema with the fifteen operations. Then it records a synthetic application, starts its resume, polls `GET /resume/{id}/status` on the given address until the job is done (failing if it fails or takes over a minute), checks the file is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 
