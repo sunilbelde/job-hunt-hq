@@ -11,6 +11,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app import serve
+from app.applications import ApplicationStore
 from app.main import create_app
 from app.serve import by_local_port, parse_args
 from tests.conftest import API_KEY, VALID_APPLICATION
@@ -87,6 +89,43 @@ def test_api_same_on_both_ports(apps):
     again = public.post("/application", json=VALID_APPLICATION, headers=HEADERS)
     assert first.status_code == 201 and again.status_code == 200
     assert first.json()["application_id"] == again.json()["application_id"]
+
+
+def test_one_resume_run_across_both_ports(settings, storage):
+    pending = []
+    store = ApplicationStore(settings.output_dir / "applications.sqlite3")
+    public = create_app(settings.model_copy(update={"api_docs_enabled": False}), storage, store, pending.append)
+    docs = create_app(settings.model_copy(update={"api_docs_enabled": True}), storage, store, pending.append)
+    app = by_local_port(public, {DOCS: docs})
+    application_id = client_on(app, PUBLIC).post("/application", json=VALID_APPLICATION, headers=HEADERS).json()["application_id"]
+    first = client_on(app, PUBLIC).post("/resume", json={"application_id": application_id}, headers=HEADERS)
+    second = client_on(app, DOCS).post("/resume", json={"application_id": application_id}, headers=HEADERS)
+    assert (first.status_code, second.status_code) == (202, 202) and first.json() == second.json()
+    assert len(pending) == 1
+    pending[0]()
+    for port in (PUBLIC, DOCS):
+        job = client_on(app, port).get(f"/resume/{application_id}/status", headers=HEADERS).json()
+        assert job["status"] == "done"
+
+
+def test_launcher_fails_interrupted_jobs_before_serving(settings, monkeypatch):
+    store = ApplicationStore(settings.output_dir / "applications.sqlite3")
+    application_id, _ = store.record({**VALID_APPLICATION})
+    store.start_job(application_id, "resume", "2026-10-28T10:00:00Z")
+    seen = {}
+
+    class Server:
+        def __init__(self, config):
+            pass
+
+        def run(self, sockets):
+            seen["job"] = store.get_job(application_id, "resume")
+
+    monkeypatch.setattr("app.serve.get_settings", lambda: settings)
+    monkeypatch.setattr("app.serve.bind", lambda host, port: None)
+    monkeypatch.setattr("app.serve.uvicorn.Server", Server)
+    serve.main(["--port", str(PUBLIC), "--docs-port", str(DOCS)])
+    assert (seen["job"]["status"], seen["job"]["error"]) == ("failed", "Interrupted by a service restart")
 
 
 # --- arguments ---

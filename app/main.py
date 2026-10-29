@@ -4,8 +4,9 @@ import pathlib
 import re
 import secrets
 import sys
+import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Path, Request, Security
 from fastapi.concurrency import run_in_threadpool
@@ -15,7 +16,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ValidationError
 from pydantic.json_schema import models_json_schema
 
-from app.applications import ApplicationStore, ApplicationStoreError, utc_now
+from app.applications import NO_JOB, ApplicationStore, ApplicationStoreError, utc_now
 from app.cover_letter import posting_usable as letter_posting_usable
 from app.cover_letter import run as write_cover_letter
 from app.generation import generate_output
@@ -26,11 +27,12 @@ from app.models import (
     ApplicationRow,
     ApplicationUpdate,
     ApplicationUpdated,
-    CoverLetterCreated,
+    CoverLetterJobStatus,
     CoverLetterRequest,
     ErrorResponse,
+    GenerationAccepted,
     HealthStatus,
-    ResumeCreated,
+    ResumeJobStatus,
     ResumeRequest,
     StoredApplication,
 )
@@ -82,9 +84,10 @@ Requests sent from this page are real: they change the application store and wri
 TAGS = [
     {"name": "health", "description": "Liveness checks. No API key needed."},
     {"name": "applications", "description": "Record, update and delete verified job applications."},
-    {"name": "resumes", "description": "Generate a resume PDF for a recorded application."},
+    {"name": "resumes", "description": "Generate a resume PDF for a recorded application in the background, and "
+                                       "poll the job's status."},
     {"name": "cover letters", "description": "Write a cover letter for a recorded application, only when it asks "
-                                             "for one."},
+                                             "for one, in the background, and poll the job's status."},
     {"name": "viewer", "description": "Read applications, their generation reports, resume and cover letter PDFs, "
                                       "for the resume viewer at `/viewer`. Served only where these docs are."},
 ]
@@ -98,15 +101,10 @@ ERROR_DESCRIPTIONS = {
     "404_base_letter": "`data/COVER_LETTER.pdf` is missing or unreadable (`Base cover letter not found`).",
     "500_base": "The base resume could not be rendered.",
     422: "The body is not JSON, not a JSON object, or fails validation. `message` names the fields and rules.",
+    "404_job": "No application has this ID (`Application not found`), or it never had a job of this kind "
+               "(`No job for this application`).",
     "422_letter": "The body is not JSON, not a JSON object, or fails validation, or the application has no usable "
                   "posting text (missing, under 50 words, or over 60,000 characters). `message` says which.",
-    500: "Resume generation failed: rendering, or tailoring (Claude not configured, unavailable or over its time or "
-         "spend limit, the judge's output unusable, or the tailored resume failed a check). Nothing was saved, and an "
-         "earlier resume for the application is unchanged.",
-    "500_letter": "Cover letter generation failed: Claude not configured, unavailable or over its time or spend "
-                  "limit, or the letter failed a check. Nothing was saved, and an earlier letter for the application "
-                  "is unchanged.",
-    502: "Storage service unavailable.",
     503: "Application store unavailable.",
 }
 
@@ -169,29 +167,67 @@ def json_body(model: type[BaseModel], description: str) -> dict[str, Any]:
     }
 
 
-# Request-state values copied into the request's log line when set: IDs, the match result, the Claude
-# runs' size and estimated cost, and how many keywords the judge approved and rejected. Never text from
-# the posting or the resume, keywords included.
-LOGGED_STATE = ("application_id", "duplicate", "match_status", "base_score", "tailored_score",
-                "claude_turns", "claude_cost_usd", "terms_approved", "terms_rejected")
+# Request-state values copied into the request's log line when set: the ID, and whether a POST found a
+# record or a job that already existed. Generation details go on the job's own line (run_job).
+LOGGED_STATE = ("application_id", "duplicate")
+
+JOB_EVENTS = {"resume": "resume_job", "cover_letter": "cover_letter_job"}
+# The generic errors a failed job records. Details are logged, never stored: the status endpoints are public.
+JOB_ERRORS = {"resume": "Resume generation failed", "cover_letter": "Cover letter generation failed"}
+STORAGE_UNAVAILABLE = "Storage service unavailable"
 
 
-def note_generation(request: Request, match=None, run=None) -> None:
+def generation_fields(match=None, run=None) -> dict[str, Any]:
+    """A job line's generation details: the match result, the Claude runs' size and estimated cost, and how many
+    keywords the judge approved and rejected. Never text from the posting or the resume, keywords included."""
+    fields = {}
     if match is not None:
-        request.state.match_status = match.status
-        request.state.base_score = match.base_score
-        request.state.tailored_score = match.tailored_score
+        fields.update(match_status=match.status, base_score=match.base_score, tailored_score=match.tailored_score)
     if run is not None:
-        request.state.claude_turns = run.turns
-        request.state.claude_cost_usd = round(run.cost_usd, 4) if run.cost_usd is not None else None
-        request.state.terms_approved = run.terms_approved
-        request.state.terms_rejected = run.terms_rejected
+        fields.update(claude_turns=run.turns,
+                      claude_cost_usd=round(run.cost_usd, 4) if run.cost_usd is not None else None,
+                      terms_approved=run.terms_approved, terms_rejected=run.terms_rejected)
+    return {name: value for name, value in fields.items() if value is not None}
+
+
+class JobFailed(Exception):
+    """A run's failure, already logged in detail. Its message is the generic error the job records."""
+
+
+def start_thread(job: Callable[[], None]) -> None:
+    """Run a generation job on its own daemon thread. It is not tied to the request, so a client that disconnects
+    cannot cancel it; a job a restart cuts short is failed when the store next opens."""
+    threading.Thread(target=job, daemon=True).start()
+
+
+def run_job(applications: ApplicationStore, kind: str, application_id: str, started_at: str,
+            work: Callable[[dict], tuple[pathlib.Path, dict]]) -> None:
+    """Run work, record how it ended on the job, and log one job line. work fills in the line's generation
+    details and returns the saved path and the result, or raises JobFailed. Nothing escapes: a thread that died
+    silently would leave its job running until the next restart."""
+    started = time.perf_counter()
+    fields: dict[str, Any] = {}
+    try:
+        saved_path, result = work(fields)
+        outcome = {"status": "done", "saved_path": str(saved_path), "result": result}
+    except JobFailed as exc:
+        outcome = {"status": "failed", "error": str(exc)}
+    except Exception as exc:
+        logger.error(json.dumps({"event": f"{kind}_job_error", "application_id": application_id,
+                                 "error": type(exc).__name__}))
+        outcome = {"status": "failed", "error": JOB_ERRORS[kind]}
+    try:
+        applications.finish_job(application_id, kind, started_at, **outcome)
+    except ApplicationStoreError as exc:
+        logger.error(json.dumps({"event": "job_store_error", "application_id": application_id, "error": str(exc)}))
+    logger.info(json.dumps({"event": JOB_EVENTS[kind], "application_id": application_id, "outcome": outcome["status"],
+                            "duration_ms": round((time.perf_counter() - started) * 1000, 1), **fields}))
 
 
 def request_event(path: str) -> str | None:
-    if path in ("/resume", "/resume/base.pdf"):
+    if path == "/resume" or path.startswith("/resume/"):
         return "resume_request"
-    if path in ("/cover-letter", "/cover-letter/base.pdf"):
+    if path == "/cover-letter" or path.startswith("/cover-letter/"):
         return "cover_letter_request"
     if path in ("/application", "/applications") or path.startswith("/application/"):
         return "application_request"
@@ -225,9 +261,12 @@ def create_app(
     settings: Settings | None = None,
     storage: Storage | None = None,
     applications: ApplicationStore | None = None,
+    start_job: Callable[[Callable[[], None]], None] | None = None,
 ) -> FastAPI:
-    """Build the app. Settings are validated here, so bad config fails at startup."""
+    """Build the app. Settings are validated here, so bad config fails at startup. start_job runs a generation
+    job in the background, on its own thread unless given."""
     settings = settings or get_settings()
+    start_job = start_job or start_thread
     storage = storage or LocalStorage(settings.output_dir)
     applications = applications or ApplicationStore(settings.output_dir / "applications.sqlite3")
     try:
@@ -308,10 +347,7 @@ def create_app(
             status = response.status_code
             return response
         finally:
-            fields: dict[str, Any] = {"event": event}
-            if event == "application_request":
-                fields["method"] = request.method
-            fields["status"] = status
+            fields: dict[str, Any] = {"event": event, "method": request.method, "status": status}
             fields["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
             for name in LOGGED_STATE:
                 value = getattr(request.state, name, None)
@@ -510,26 +546,91 @@ def create_app(
             return None, application_not_found()
         return StoredApplication.model_validate(row), None
 
-    async def save_report(application_id: str, path, match) -> None:
+    def save_report(application_id: str, path, match) -> None:
         """Store the generation report for the viewer. The resume is already saved, so a failure only logs:
         the old report is removed if possible, so the viewer never shows scores for a different PDF."""
         try:
-            await run_in_threadpool(applications.save_report, application_id, utc_now(), str(path), match.report())
+            applications.save_report(application_id, utc_now(), str(path), match.report())
         except ApplicationStoreError as exc:
             logger.error(json.dumps({"event": "report_store_error", "application_id": application_id, "error": str(exc)}))
             try:
-                await run_in_threadpool(applications.delete_report, application_id)
+                applications.delete_report(application_id)
             except ApplicationStoreError:
                 pass
+
+    def save_file(save, application: StoredApplication, content: bytes) -> pathlib.Path:
+        try:
+            return save(application.company, application.id, content)
+        except StorageError as exc:
+            logger.error(json.dumps({"event": "storage_error", "application_id": application.id, "error": str(exc)}))
+            raise JobFailed(STORAGE_UNAVAILABLE) from exc
+
+    def resume_work(application: StoredApplication):
+        def work(fields: dict) -> tuple[pathlib.Path, dict]:
+            target = application.id
+            try:
+                generated = generate_output(application, settings)
+            except RenderError as exc:
+                logger.error(json.dumps({"event": "render_error", "application_id": target, "error": str(exc)}))
+                raise JobFailed(JOB_ERRORS["resume"]) from exc
+            except TailoringError as exc:
+                fields.update(generation_fields(run=exc.run))
+                logger.error(json.dumps({"event": "tailoring_error", "application_id": target, **exc.log_fields()}))
+                raise JobFailed(JOB_ERRORS["resume"]) from exc
+            fields.update(generation_fields(generated.match, generated.run))
+            path = save_file(storage.save_resume, application, generated.content)
+            save_report(target, path, generated.match)
+            return path, {"match": generated.match.to_dict()}
+        return work
+
+    def cover_letter_work(application: StoredApplication):
+        def work(fields: dict) -> tuple[pathlib.Path, dict]:
+            try:
+                written = write_cover_letter(application, settings)
+            except TailoringError as exc:
+                fields.update(generation_fields(run=exc.run))
+                logger.error(json.dumps({"event": "cover_letter_error", "application_id": application.id,
+                                         **exc.log_fields()}))
+                raise JobFailed(JOB_ERRORS["cover_letter"]) from exc
+            fields.update(generation_fields(run=written.run))
+            path = save_file(storage.save_cover_letter, application, written.pdf)
+            return path, {"text": written.text}
+        return work
+
+    async def start_generation(request: Request, kind: str, application: StoredApplication, work) -> JSONResponse:
+        """Claim the application's job of this kind and start work in the background, or report the job already
+        running. Either way the client gets 202 and polls the status endpoint."""
+        started_at = utc_now()
+        try:
+            claimed, running_since = await run_in_threadpool(applications.start_job, application.id, kind, started_at)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if running_since is None:  # deleted since it was read
+            return application_not_found()
+        if claimed:
+            start_job(lambda: run_job(applications, kind, application.id, started_at, work))
+        else:
+            request.state.duplicate = True
+        return JSONResponse(
+            status_code=202,
+            content={"ok": True, "application_id": application.id, "status": "running", "started_at": running_since},
+        )
+
+    accepted = {"model": GenerationAccepted, "description": "Started, or already running; poll the status endpoint."}
 
     @app.post(
         "/resume",
         tags=["resumes"],
         summary="Generate a resume PDF",
         description=(
-            "Generates the resume for a recorded application and saves it on the service host at `saved_path`, "
-            "replacing any earlier one. The application itself is not changed.\n\n"
-            "How the resume is chosen, reported in `match.status`:\n"
+            "Starts generating the resume for a recorded application and returns 202 at once. The run continues "
+            "in the background, whether or not the client stays connected: poll "
+            "`GET /resume/{application_id}/status` until `status` is `done` or `failed`. When done, the resume is "
+            "saved on the service host at the job's `saved_path`, replacing any earlier one. The application "
+            "itself is not changed.\n\n"
+            "A request while a resume job for the application is still running starts no second run: it returns "
+            "202 with that job's `started_at`, so retrying after a dropped connection is safe.\n\n"
+            "How the resume is chosen, reported in the job's `match.status`:\n"
             "- `no_job_description`: the application has no posting text, or under 50 words of it, so the base "
             "resume is saved unscored.\n"
             "- `base_meets_threshold`: Claude scores the base resume against the posting at 70 or more, so the "
@@ -538,14 +639,11 @@ def create_app(
             "one-page template, reworded and reordered from the base resume's own facts and checked by script. "
             "It may also use posting keywords the base resume lacks, when a separate Claude judge that never sees "
             "the posting finds them in the resume or the owner's profile list; `match.added_terms` lists them.\n\n"
-            "Scoring and tailoring take about 1 to 5 minutes and are capped at about 10, so give the request a "
-            "client timeout of at least 10 minutes. Without usable posting text it returns in seconds."
+            "Scoring and tailoring take about 1 to 5 minutes and are capped at about 10. Without usable posting "
+            "text the job finishes in seconds."
         ),
-        status_code=201,
-        responses={
-            201: {"model": ResumeCreated, "description": "Generated and saved."},
-            **errors(401, 404, 422, 500, 502, 503),
-        },
+        status_code=202,
+        responses={202: accepted, **errors(401, 404, 422, 503)},
         openapi_extra=json_body(ResumeRequest, "The application to generate a resume for."),
     )
     async def create_resume(request: Request, x_api_key: str | None = Security(api_key_header)):
@@ -554,58 +652,76 @@ def create_app(
         application, error = await requested_application(request, ResumeRequest)
         if error is not None:
             return error
-        target = application.id
-        try:
-            # Scoring and tailoring take minutes; keep them off the event loop so /health stays responsive.
-            generated = await run_in_threadpool(generate_output, application, settings)
-        except RenderError as exc:
-            logger.error(json.dumps({"event": "render_error", "application_id": target, "error": str(exc)}))
-            return application_error(500, "Resume generation failed")
-        except TailoringError as exc:
-            note_generation(request, run=exc.run)
-            logger.error(json.dumps({"event": "tailoring_error", "application_id": target, **exc.log_fields()}))
-            return application_error(500, "Resume generation failed")
-        note_generation(request, generated.match, generated.run)
-        try:
-            path = await run_in_threadpool(storage.save_resume, application.company, target, generated.content)
-        except StorageError as exc:
-            logger.error(json.dumps({"event": "storage_error", "application_id": target, "error": str(exc)}))
-            return application_error(502, "Storage service unavailable")
-        await save_report(target, path, generated.match)
-        return JSONResponse(
-            status_code=201,
-            content={
-                "ok": True,
-                "application_id": target,
-                "saved_path": str(path),
-                "match": generated.match.to_dict(),
-            },
-        )
+        return await start_generation(request, "resume", application, resume_work(application))
+
+    def job_status(kind: str, result: str):
+        """The handler for a status endpoint: the job's state and result, nothing from the posting."""
+        async def read_status(
+            request: Request,
+            application_id: str = application_id_path,
+            x_api_key: str | None = Security(api_key_header),
+        ):
+            if not api_key_valid(x_api_key):
+                return application_error(401, "Invalid or missing API key")
+            target = parse_application_id(application_id)
+            if target is None:
+                return application_not_found()
+            request.state.application_id = target
+            try:
+                job = await run_in_threadpool(applications.get_job, target, kind)
+            except ApplicationStoreError as exc:
+                return store_unavailable(exc)
+            if job is None:
+                return application_not_found()
+            if job == NO_JOB:
+                return application_error(404, "No job for this application")
+            return {"ok": True, "application_id": target, "status": job["status"], "started_at": job["started_at"],
+                    "finished_at": job["finished_at"], "saved_path": job["saved_path"], result: job.get(result),
+                    "error": job["error"]}
+        return read_status
+
+    status_description = (
+        "The state of the application's latest {kind} job, started by `POST {post}`: `running`, `done` or `failed`. "
+        "When `done`, `saved_path` and `{result}` are set; when `failed`, `error` says why in a fixed message, and an "
+        "earlier {kind} for the application is unchanged. A job that was running when the service restarted is "
+        "`failed` with `Interrupted by a service restart`; request it again.\n\n"
+        "Returns only the job's state and result: no posting text and no generation report. Reading it never "
+        "starts or changes a job."
+    )
+
+    app.get(
+        "/resume/{application_id}/status",
+        tags=["resumes"],
+        summary="Resume job status",
+        description=status_description.format(kind="resume", post="/resume", result="match"),
+        responses={200: {"model": ResumeJobStatus, "description": "The resume job."}, **errors(401, "404_job", 503)},
+    )(job_status("resume", "match"))
 
     @app.post(
         "/cover-letter",
         tags=["cover letters"],
         summary="Write a cover letter PDF",
         description=(
-            "Writes a one-page cover letter for a recorded application, tailored to its stored posting, and saves "
-            "it on the service host at `saved_path`, beside the application's resume (`SUNIL BELDE - Cover "
-            "Letter.pdf`), replacing any earlier one. Call it only for applications that ask for a cover letter: "
-            "`POST /resume` never writes one. The application itself is not changed, and no resume is needed.\n\n"
+            "Starts writing a one-page cover letter for a recorded application, tailored to its stored posting, and "
+            "returns 202 at once. The run continues in the background, whether or not the client stays connected: "
+            "poll `GET /cover-letter/{application_id}/status` until `status` is `done` or `failed`. When done, the "
+            "letter is saved on the service host at the job's `saved_path`, beside the application's resume "
+            "(`SUNIL BELDE - Cover Letter.pdf`), replacing any earlier one, and the job's `text` is the same letter "
+            "as plain text, for application forms that take pasted text. Call it only for applications that ask for "
+            "a cover letter: `POST /resume` never writes one. The application itself is not changed, and no resume "
+            "is needed.\n\n"
+            "A request while a cover letter job for the application is still running starts no second run: it "
+            "returns 202 with that job's `started_at`, so retrying after a dropped connection is safe.\n\n"
             "The letter is always tailored, never generic: an application without usable posting text "
-            "(`full_job_description` missing, under 50 words or over 60,000 characters) gets a 422, so add the "
-            "posting with `PATCH /application/{application_id}` first. Claude writes the paragraphs from the "
+            "(`full_job_description` missing, under 50 words or over 60,000 characters) gets a 422 and no job, so "
+            "add the posting with `PATCH /application/{application_id}` first. Claude writes the paragraphs from the "
             "owner's base resume and profile only, and scripts check them: every number comes from a cited "
             "source, no posting keyword the owner lacks, no phrasing copied from the posting, the company and "
             "role named, 250 to 400 words on one page.\n\n"
-            "`text` is the same letter as plain text, for application forms that take pasted text. Writing takes "
-            "about 1 to 3 minutes and is capped at about 10, so give the request a client timeout of at least "
-            "10 minutes."
+            "Writing takes about 1 to 3 minutes and is capped at about 10."
         ),
-        status_code=201,
-        responses={
-            201: {"model": CoverLetterCreated, "description": "Written and saved."},
-            **errors(401, 404, "422_letter", "500_letter", 502, 503),
-        },
+        status_code=202,
+        responses={202: accepted, **errors(401, 404, "422_letter", 503)},
         openapi_extra=json_body(CoverLetterRequest, "The application to write a cover letter for."),
     )
     async def create_cover_letter(request: Request, x_api_key: str | None = Security(api_key_header)):
@@ -614,27 +730,19 @@ def create_app(
         application, error = await requested_application(request, CoverLetterRequest)
         if error is not None:
             return error
-        target = application.id
         if not letter_posting_usable(application.full_job_description):
             return application_error(422, "Application has no usable posting text: add full_job_description "
                                           "(at least 50 words) with PATCH /application/{application_id} first")
-        try:
-            # One Claude run of a few minutes; keep it off the event loop so /health stays responsive.
-            written = await run_in_threadpool(write_cover_letter, application, settings)
-        except TailoringError as exc:
-            note_generation(request, run=exc.run)
-            logger.error(json.dumps({"event": "cover_letter_error", "application_id": target, **exc.log_fields()}))
-            return application_error(500, "Cover letter generation failed")
-        note_generation(request, run=written.run)
-        try:
-            path = await run_in_threadpool(storage.save_cover_letter, application.company, target, written.pdf)
-        except StorageError as exc:
-            logger.error(json.dumps({"event": "storage_error", "application_id": target, "error": str(exc)}))
-            return application_error(502, "Storage service unavailable")
-        return JSONResponse(
-            status_code=201,
-            content={"ok": True, "application_id": target, "saved_path": str(path), "text": written.text},
-        )
+        return await start_generation(request, "cover_letter", application, cover_letter_work(application))
+
+    app.get(
+        "/cover-letter/{application_id}/status",
+        tags=["cover letters"],
+        summary="Cover letter job status",
+        description=status_description.format(kind="cover letter", post="/cover-letter", result="text"),
+        responses={200: {"model": CoverLetterJobStatus, "description": "The cover letter job."},
+                   **errors(401, "404_job", 503)},
+    )(job_status("cover_letter", "text"))
 
     if docs:
         register_viewer(app, settings, applications, store_unavailable, application_id_path)

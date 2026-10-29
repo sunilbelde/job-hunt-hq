@@ -70,8 +70,10 @@ def record(client, n=1, **overrides) -> str:
 def generate(client, monkeypatch, application_id, match=TAILORED, content=FAKE_PDF) -> dict:
     monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(content, match))
     r = client.post("/resume", json={"application_id": application_id}, headers=HEADERS)
-    assert r.status_code == 201, r.text
-    return r.json()
+    assert r.status_code == 202, r.text
+    job = client.get(f"/resume/{application_id}/status", headers=HEADERS).json()
+    assert job["status"] == "done", job
+    return job
 
 
 def save_letter(settings, application_id, content=b"%PDF letter", company="Acme Corp") -> Path:
@@ -390,9 +392,7 @@ def test_each_read_logged_once_without_content(viewer, settings, monkeypatch, ba
         caplog.clear()
         viewer.get(path)
         (line,) = request_lines(caplog)
-        expected = {"event": event, "status": 200}
-        if event == "application_request":
-            expected["method"] = "GET"
+        expected = {"event": event, "method": "GET", "status": 200}
         if path.startswith("/application/"):
             expected["application_id"] = application_id
         assert {k: v for k, v in line.items() if k != "duration_ms"} == expected

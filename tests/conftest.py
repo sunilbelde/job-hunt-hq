@@ -106,3 +106,10 @@ def fake_letter(text: str = FAKE_LETTER_TEXT, pdf: bytes = FAKE_LETTER_PDF, run:
 def fake_write_letter(monkeypatch):
     """Keep API tests independent of tectonic and Claude; app/cover_letter.py has its own tests."""
     monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: fake_letter())
+
+
+@pytest.fixture(autouse=True)
+def jobs_run_at_once(monkeypatch):
+    """Run each generation job before the POST returns, so tests read its outcome right away. Tests of the
+    background run itself pass their own start_job to create_app."""
+    monkeypatch.setattr("app.main.start_thread", lambda job: job())

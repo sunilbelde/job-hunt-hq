@@ -193,20 +193,46 @@ class ResumeMatch(BaseModel):
     )
 
 
-class ResumeCreated(BaseModel):
-    ok: Literal[True] = True
-    application_id: str
-    saved_path: str
-    match: ResumeMatch = Field(description="How the saved resume was chosen, with the match scores.")
+JobStatus = Literal["running", "done", "failed"]
 
 
-class CoverLetterCreated(BaseModel):
+class GenerationAccepted(BaseModel):
     ok: Literal[True] = True
     application_id: str
-    saved_path: str = Field(description="Absolute path of the saved PDF, beside the application's resume.")
-    text: str = Field(
+    status: Literal["running"] = Field(description="Always `running`: the run continues after this response.")
+    started_at: str = Field(
+        description="When the running job started, as an ISO 8601 UTC timestamp. A request made while a job of the "
+        "same kind is already running for the application returns that job's `started_at` and starts no second run."
+    )
+
+
+class JobState(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    status: JobStatus = Field(
+        description="`running`: still generating. `done`: saved; `saved_path` and the result are set. `failed`: "
+        "nothing new was saved; `error` says why. A job running when the service restarts becomes `failed` with "
+        "`error` `Interrupted by a service restart`."
+    )
+    started_at: str = Field(description="When the job started, as an ISO 8601 UTC timestamp.")
+    finished_at: str | None = Field(description="When the job finished, or null while it runs.")
+    saved_path: str | None = Field(description="Absolute path of the saved PDF on the service host, or null unless `done`.")
+    error: str | None = Field(
+        description="Why the job failed, or null unless `failed`: `Resume generation failed`, `Cover letter "
+        "generation failed`, `Storage service unavailable` or `Interrupted by a service restart`. Never holds "
+        "exception text, paths or posting text."
+    )
+
+
+class ResumeJobStatus(JobState):
+    match: ResumeMatch | None = Field(description="How the saved resume was chosen, with the match scores; null unless `done`.")
+
+
+class CoverLetterJobStatus(JobState):
+    text: str | None = Field(
         description="The letter as plain text: the greeting, the paragraphs and the sign-off, separated by blank "
-        "lines, with no markup. The same words as the PDF, for application forms that take pasted text."
+        "lines, with no markup. The same words as the PDF, for application forms that take pasted text. Null unless "
+        "`done`."
     )
 
 

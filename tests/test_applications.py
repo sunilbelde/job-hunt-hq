@@ -8,7 +8,7 @@ from contextlib import closing
 
 import pytest
 
-from app.applications import FIELDS, ApplicationStore, ApplicationStoreError, dedupe_key
+from app.applications import FIELDS, INTERRUPTED, NO_JOB, ApplicationStore, ApplicationStoreError, dedupe_key
 from app.storage import StorageError
 
 GH = "https://job-boards.greenhouse.io/acme/jobs/123"
@@ -606,5 +606,153 @@ def test_report_read_failure_raises_store_error(store, db_path):
     db_path.mkdir()
     for call in (lambda: store.get_report(str(uuid.uuid4())), store.list_with_reports,
                  lambda: store.save_report(str(uuid.uuid4()), "t", "/a.pdf", REPORT)):
+        with pytest.raises(ApplicationStoreError):
+            call()
+
+
+# --- generation jobs ---
+
+MATCH = {"status": "no_job_description", "threshold": 70, "base_score": None, "tailored_score": None, "added_terms": []}
+
+
+def jobs(db_path):
+    with closing(sqlite3.connect(db_path)) as conn:
+        return conn.execute("SELECT application_id, kind, status FROM generation_jobs ORDER BY kind").fetchall()
+
+
+def test_old_store_gets_the_jobs_table_with_rows_unchanged(old_store_path):
+    store = ApplicationStore(old_store_path)
+    rows = store.list_with_reports()
+    assert len(rows) == 2 and all(item["report"] is None for item in rows)
+    assert jobs(old_store_path) == []
+    assert all(store.get_job(item["id"], "resume") == NO_JOB for item in rows)
+
+
+def test_new_job_claimed(store):
+    application_id, _ = store.record(row())
+    assert store.start_job(application_id, "resume", "2026-10-28T10:00:00.000001Z") == (True, "2026-10-28T10:00:00.000001Z")
+    assert store.get_job(application_id, "resume") == {
+        "status": "running", "started_at": "2026-10-28T10:00:00.000001Z", "finished_at": None,
+        "saved_path": None, "error": None}
+
+
+def test_claim_while_running_changes_nothing(store):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "resume", "t1")
+    assert store.start_job(application_id, "resume", "t2") == (False, "t1")
+    assert store.get_job(application_id, "resume")["started_at"] == "t1"
+
+
+@pytest.mark.parametrize("outcome", ["done", "failed"])
+def test_reclaim_after_finishing_clears_the_result(store, outcome):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "resume", "t1")
+    store.finish_job(application_id, "resume", "t1", outcome, saved_path="/a.pdf", error="x", result={"match": MATCH})
+    assert store.start_job(application_id, "resume", "t2") == (True, "t2")
+    assert store.get_job(application_id, "resume") == {
+        "status": "running", "started_at": "t2", "finished_at": None, "saved_path": None, "error": None}
+
+
+def test_claim_for_unknown_application_stores_nothing(store, db_path):
+    assert store.start_job(str(uuid.uuid4()), "resume", "t1") == (False, None)
+    assert jobs(db_path) == []
+
+
+def test_kinds_are_claimed_independently(store, db_path):
+    application_id, _ = store.record(row())
+    assert store.start_job(application_id, "resume", "t1")[0]
+    assert store.start_job(application_id, "cover_letter", "t2")[0]
+    assert jobs(db_path) == [(application_id, "cover_letter", "running"), (application_id, "resume", "running")]
+
+
+def test_concurrent_claims_start_one_run(store):
+    application_id, _ = store.record(row())
+    barrier = threading.Barrier(8)
+    claimed = []
+
+    def claim(n):
+        barrier.wait()
+        claimed.append(store.start_job(application_id, "resume", f"t{n}")[0])
+
+    threads = [threading.Thread(target=claim, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert claimed.count(True) == 1
+
+
+def test_finish_records_done_with_result(store):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "resume", "t1")
+    assert store.finish_job(application_id, "resume", "t1", "done", saved_path="/a.pdf", result={"match": MATCH})
+    job = store.get_job(application_id, "resume")
+    assert job["finished_at"] and job["error"] is None
+    assert {k: job[k] for k in ("status", "saved_path", "match")} == {"status": "done", "saved_path": "/a.pdf", "match": MATCH}
+
+
+def test_finish_records_failed_with_error(store):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "cover_letter", "t1")
+    assert store.finish_job(application_id, "cover_letter", "t1", "failed", error="Cover letter generation failed")
+    job = store.get_job(application_id, "cover_letter")
+    assert (job["status"], job["error"], job["saved_path"]) == ("failed", "Cover letter generation failed", None)
+    assert "text" not in job
+
+
+def test_finish_with_text(store):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "cover_letter", "t1")
+    store.finish_job(application_id, "cover_letter", "t1", "done", saved_path="/l.pdf", result={"text": "Dear"})
+    assert store.get_job(application_id, "cover_letter")["text"] == "Dear"
+
+
+def test_finish_for_another_run_changes_nothing(store):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "resume", "t1")
+    assert not store.finish_job(application_id, "resume", "t0", "done", saved_path="/a.pdf")
+    assert store.get_job(application_id, "resume")["status"] == "running"
+
+
+def test_get_job_unknown_application_or_no_job(store):
+    assert store.get_job(str(uuid.uuid4()), "resume") is None
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "resume", "t1")
+    assert store.get_job(application_id, "cover_letter") == NO_JOB
+
+
+def test_delete_removes_jobs_and_a_late_finish_recreates_nothing(store, db_path):
+    application_id, _ = store.record(row())
+    store.start_job(application_id, "resume", "t1")
+    store.start_job(application_id, "cover_letter", "t2")
+    store.finish_job(application_id, "cover_letter", "t2", "done", saved_path="/l.pdf", result={"text": "x"})
+    assert store.delete(application_id)
+    assert jobs(db_path) == []
+    assert not store.finish_job(application_id, "resume", "t1", "done", saved_path="/a.pdf")
+    assert jobs(db_path) == [] and store.get_job(application_id, "resume") is None
+
+
+def test_reopening_fails_only_running_jobs(store, db_path):
+    ids = [store.record(row(f"https://example.com/{n}"))[0] for n in range(3)]
+    for application_id in ids:
+        store.start_job(application_id, "resume", "t1")
+    store.finish_job(ids[1], "resume", "t1", "done", saved_path="/a.pdf", result={"match": MATCH})
+    store.finish_job(ids[2], "resume", "t1", "failed", error="Resume generation failed")
+    before = [store.get_job(application_id, "resume") for application_id in ids[1:]]
+
+    reopened = ApplicationStore(db_path)
+    interrupted = reopened.get_job(ids[0], "resume")
+    assert (interrupted["status"], interrupted["error"]) == ("failed", INTERRUPTED) and interrupted["finished_at"]
+    assert [reopened.get_job(application_id, "resume") for application_id in ids[1:]] == before
+    assert reopened.start_job(ids[0], "resume", "t2") == (True, "t2")
+
+
+def test_job_failures_raise_store_error(store, db_path):
+    db_path.unlink()
+    db_path.mkdir()
+    application_id = str(uuid.uuid4())
+    for call in (lambda: store.start_job(application_id, "resume", "t"),
+                 lambda: store.finish_job(application_id, "resume", "t", "done"),
+                 lambda: store.get_job(application_id, "resume")):
         with pytest.raises(ApplicationStoreError):
             call()
