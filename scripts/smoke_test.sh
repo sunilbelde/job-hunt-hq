@@ -1,17 +1,17 @@
 #!/bin/sh
 # Smoke test: check that the public address serves no API docs or resume viewer and that the docs
 # listener serves both,
-# then record a synthetic application on a running service, generate its resume, and check that
-# the file at the returned saved_path is a PDF. The application has no posting text, so the
+# then record a synthetic application on a running service, start its resume, poll the resume job's
+# status until it is done, and check that the file at the job's saved_path is a PDF. The application has no posting text, so the
 # service saves the base resume without starting a Claude run, and refuses a cover letter (422)
 # without starting one either. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
-# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] scripts/smoke_test.sh <base_url>
+# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] [JOB_TIMEOUT=60] scripts/smoke_test.sh <base_url>
 set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] $0 <base_url>   (run on the Mac hosting the service)"
+  echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] [JOB_TIMEOUT=<seconds, default 60>] $0 <base_url>   (run on the Mac hosting the service)"
   echo "The synthetic application has no posting text, so the check never starts a Claude run, for the resume or the cover letter."
   exit 0
 fi
@@ -24,6 +24,9 @@ base=${1%/}
 docs=${DOCS_URL:-http://127.0.0.1:8081}
 docs=${docs%/}
 link=https://example.com/job-hunt-hq-smoke-test
+# How long to wait for the resume job. Without posting text it takes about a second.
+job_timeout=${JOB_TIMEOUT:-60}
+poll_seconds=${POLL_SECONDS:-1}  # tests set 0; each poll counts as one second of JOB_TIMEOUT
 
 json_field() {
   python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
@@ -53,7 +56,7 @@ for path in /docs /openapi.json /viewer; do
   fi
 done
 
-# The docs listener (tailnet only) serves the reference, the viewer and a schema with the thirteen operations.
+# The docs listener (tailnet only) serves the reference, the viewer and a schema with the fifteen operations.
 if [ "$docs" != off ]; then
   for path in /docs /viewer; do
     status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
@@ -67,8 +70,8 @@ if [ "$docs" != off ]; then
   count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
 methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
 print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
-  if [ "$status" != "200" ] || [ "$count" != "13" ]; then
-    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 13" >&2
+  if [ "$status" != "200" ] || [ "$count" != "15" ]; then
+    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 15" >&2
     exit 1
   fi
 fi
@@ -100,15 +103,38 @@ resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/resume" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
   -d "{\"application_id\":\"$application_id\"}")
 status=$(printf '%s\n' "$resp" | tail -n 1)
-body=$(printf '%s\n' "$resp" | sed '$d')
-if [ "$status" != "201" ]; then
-  echo "FAIL: POST /resume returned $status" >&2
+if [ "$status" != "202" ]; then
+  echo "FAIL: POST /resume returned $status, want 202" >&2
   exit 1
 fi
 
-match=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("match", {}).get("status"))')
+# The resume is generated in the background: poll its job on the public address until it finishes.
+waited=0
+while :; do
+  resp=$(curl -sS -w '\n%{http_code}' "$base/resume/$application_id/status" -H "X-API-Key: $API_KEY")
+  status=$(printf '%s\n' "$resp" | tail -n 1)
+  body=$(printf '%s\n' "$resp" | sed '$d')
+  if [ "$status" != "200" ]; then
+    echo "FAIL: GET /resume/{id}/status returned $status, want 200" >&2
+    exit 1
+  fi
+  job=$(printf '%s' "$body" | json_field status)
+  case "$job" in
+    done) break ;;
+    running) ;;
+    *) echo "FAIL: resume job is $job: $(printf '%s' "$body" | json_field error)" >&2; exit 1 ;;
+  esac
+  if [ "$waited" -ge "$job_timeout" ]; then
+    echo "FAIL: resume job still running after ${job_timeout}s" >&2
+    exit 1
+  fi
+  sleep "$poll_seconds"
+  waited=$((waited + 1))
+done
+
+match=$(printf '%s' "$body" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("match") or {}).get("status"))')
 if [ "$match" != "no_job_description" ]; then
-  echo "FAIL: POST /resume reported match.status $match, want no_job_description (no Claude run)" >&2
+  echo "FAIL: the resume job reported match.status $match, want no_job_description (no Claude run)" >&2
   exit 1
 fi
 

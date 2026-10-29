@@ -15,7 +15,9 @@ PROTECTED = [
     ("patch", "/application/{application_id}"),
     ("delete", "/application/{application_id}"),
     ("post", "/resume"),
+    ("get", "/resume/{application_id}/status"),
     ("post", "/cover-letter"),
+    ("get", "/cover-letter/{application_id}/status"),
 ]
 VIEWER_READS = [
     ("get", "/applications"),
@@ -32,8 +34,10 @@ RESPONSES = {
     ("post", "/application"): {"200", "201", "401", "422", "503"},
     ("patch", "/application/{application_id}"): {"200", "401", "404", "422", "503"},
     ("delete", "/application/{application_id}"): {"200", "401", "404", "503"},
-    ("post", "/resume"): {"201", "401", "404", "422", "500", "502", "503"},
-    ("post", "/cover-letter"): {"201", "401", "404", "422", "500", "502", "503"},
+    ("post", "/resume"): {"202", "401", "404", "422", "503"},
+    ("get", "/resume/{application_id}/status"): {"200", "401", "404", "503"},
+    ("post", "/cover-letter"): {"202", "401", "404", "422", "503"},
+    ("get", "/cover-letter/{application_id}/status"): {"200", "401", "404", "503"},
     ("get", "/applications"): {"200", "503"},
     ("get", "/application/{application_id}"): {"200", "404", "503"},
     ("get", "/application/{application_id}/resume.pdf"): {"200", "404", "503"},
@@ -88,8 +92,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_thirteen_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 13
+def test_documents_exactly_the_fifteen_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 15
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -182,33 +186,65 @@ def test_cover_letter_body_schema(schema):
     assert body["required"] == ["application_id"] and body["properties"]["application_id"]["type"] == "string"
 
 
-def test_cover_letter_response_and_description(schema):
+def response_schema(schema, op, status):
+    ref = op["responses"][status]["content"]["application/json"]["schema"]["$ref"]
+    return schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
+
+
+STATUS_FIELDS = {"ok", "application_id", "status", "started_at", "finished_at", "saved_path", "error"}
+
+
+@pytest.mark.parametrize("path", ["/resume", "/cover-letter"])
+def test_generation_accepted_response(schema, path):
+    op = operations(schema)[("post", path)]
+    accepted = response_schema(schema, op, "202")
+    assert set(accepted["properties"]) == {"ok", "application_id", "status", "started_at"}
+    assert accepted["properties"]["status"]["const"] == "running"
+    assert "201" not in op["responses"] and "500" not in op["responses"] and "502" not in op["responses"]
+
+
+@pytest.mark.parametrize("path, status_path", [("/resume", "/resume/{application_id}/status"),
+                                               ("/cover-letter", "/cover-letter/{application_id}/status")])
+def test_background_generation_described(schema, path, status_path):
+    description = " ".join(operations(schema)[("post", path)]["description"].split())
+    for phrase in ("returns 202", "in the background", "whether or not the client stays connected",
+                   f"`GET {status_path}`", "starts no second run", "`started_at`"):
+        assert phrase in description, phrase
+    assert "timeout" not in description
+
+
+@pytest.mark.parametrize("path, result, tag", [("/resume/{application_id}/status", "match", "resumes"),
+                                               ("/cover-letter/{application_id}/status", "text", "cover letters")])
+def test_status_endpoints_described(schema, path, result, tag):
+    op = operations(schema)[("get", path)]
+    job = response_schema(schema, op, "200")
+    assert set(job["properties"]) == STATUS_FIELDS | {result}
+    assert job["properties"]["status"]["enum"] == ["running", "done", "failed"]
+    for name in ("finished_at", "saved_path", "error", result):
+        assert {t.get("type") for t in job["properties"][name]["anyOf"]} >= {"null"}, name
+    description = " ".join(op["description"].split())
+    for phrase in ("`running`, `done` or `failed`", "Interrupted by a service restart", "no posting text"):
+        assert phrase in description, phrase
+    assert op["tags"] == [tag] and op["security"] == [{"ApiKey": []}]
+    assert "No job for this application" in op["responses"]["404"]["description"]
+
+
+def test_cover_letter_description(schema):
     op = operations(schema)[("post", "/cover-letter")]
-    ref = op["responses"]["201"]["content"]["application/json"]["schema"]["$ref"]
-    created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
-    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "text"}
-    assert created["properties"]["text"]["description"] and created["properties"]["saved_path"]["description"]
+    text = response_schema(schema, operations(schema)[("get", "/cover-letter/{application_id}/status")], "200")
+    assert text["properties"]["text"]["description"] and text["properties"]["saved_path"]["description"]
     description = " ".join(op["description"].split())
     for phrase in ("always tailored", "posting text", "beside the application's resume", "`text`",
-                   "at least 10 minutes", "`POST /resume` never writes one"):
+                   "`POST /resume` never writes one"):
         assert phrase in description, phrase
     assert "posting text" in op["responses"]["422"]["description"]
-    assert "Cover letter generation failed" in op["responses"]["500"]["description"]
     assert op["tags"] == ["cover letters"]
 
 
-def test_resume_response_has_no_cover_letter_path(schema):
-    response = operations(schema)[("post", "/resume")]["responses"]["201"]
-    ref = response["content"]["application/json"]["schema"]["$ref"]
-    created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
-    assert set(created["properties"]) == {"ok", "application_id", "saved_path", "match"}
-
-
-def test_resume_response_documents_match(schema):
-    response = operations(schema)[("post", "/resume")]["responses"]["201"]
-    ref = response["content"]["application/json"]["schema"]["$ref"]
-    created = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
-    match = schema["components"]["schemas"][created["properties"]["match"]["$ref"].rsplit("/", 1)[1]]
+def test_resume_status_documents_match(schema):
+    job = response_schema(schema, operations(schema)[("get", "/resume/{application_id}/status")], "200")
+    ref = next(t["$ref"] for t in job["properties"]["match"]["anyOf"] if "$ref" in t)
+    match = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
     assert set(match["properties"]) == set(match["required"]) == {"status", "threshold", "base_score", "tailored_score",
                                                                   "added_terms"}
     assert match["properties"]["added_terms"]["type"] == "array"
@@ -217,13 +253,13 @@ def test_resume_response_documents_match(schema):
     for score in ("base_score", "tailored_score"):
         assert {t["type"] for t in match["properties"][score]["anyOf"]} == {"integer", "null"}
     assert all(match["properties"][name].get("description") for name in match["properties"])
+    assert "cover_letter_path" not in job["properties"]
 
 
-def test_resume_description_states_duration_and_failures(schema):
+def test_resume_description_states_duration_and_choices(schema):
     op = operations(schema)[("post", "/resume")]
-    assert "at least 10 minutes" in op["description"]
+    assert "capped at about 10" in op["description"]
     assert all(status in op["description"] for status in ("no_job_description", "base_meets_threshold", "tailored"))
-    assert "tailoring" in op["responses"]["500"]["description"]
 
 
 def test_path_ids_stay_plain_strings(schema):
@@ -250,12 +286,12 @@ def test_documented_examples_are_accepted(schema, docs_client):
     resume = {**example(("post", "/resume")), "application_id": application_id}
     assert set(resume) == set(example(("post", "/resume")))
     r = docs_client.post("/resume", json=resume, headers=HEADERS)
-    assert r.status_code == 201, r.json()
+    assert r.status_code == 202, r.json()
     # The example application's posting is too short for a letter, so a 422 is fine, but only for that reason.
     letter = {**example(("post", "/cover-letter")), "application_id": application_id}
     assert set(letter) == set(example(("post", "/cover-letter")))
     r = docs_client.post("/cover-letter", json=letter, headers=HEADERS)
-    assert r.status_code == 201 or "posting text" in r.json()["message"], r.json()
+    assert r.status_code == 202 or "posting text" in r.json()["message"], r.json()
 
 
 # --- responses ---

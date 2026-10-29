@@ -67,6 +67,26 @@ CREATE TABLE IF NOT EXISTS resume_reports (
     report TEXT NOT NULL
 )
 """
+# The latest background run per application and kind, for the status endpoints. `result` is a JSON
+# document: {"match": ...} for a resume, {"text": ...} for a cover letter. Removed by delete().
+JOBS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS generation_jobs (
+    application_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('resume', 'cover_letter')),
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    saved_path TEXT,
+    error TEXT,
+    result TEXT,
+    PRIMARY KEY (application_id, kind)
+)
+"""
+JOB_KINDS = ("resume", "cover_letter")
+INTERRUPTED = "Interrupted by a service restart"
+# get_job's answer for an application that exists but has never had a job of that kind.
+NO_JOB = "no_job"
+
 # What the application list carries from each report: scores and status, never posting text.
 REPORT_SUMMARY = ("status", "threshold", "base_score", "tailored_score")
 LIST_COLUMNS = ("id", "company", "role", "status", "created_at", "updated_at")
@@ -140,8 +160,14 @@ class ApplicationStore:
                 self._migrate(conn)
                 self._migrate_ids(conn)
                 conn.execute(REPORTS_SCHEMA)
+                conn.execute(JOBS_SCHEMA)
                 conn.execute("BEGIN IMMEDIATE")  # write probe: fails on a read-only store
-                conn.rollback()
+                # A job still running belongs to a process that is gone: its thread did not survive.
+                conn.execute(
+                    "UPDATE generation_jobs SET status = 'failed', finished_at = ?, error = ? WHERE status = 'running'",
+                    (utc_now(), INTERRUPTED),
+                )
+                conn.commit()
         except (sqlite3.Error, OSError) as exc:
             raise StorageError(
                 f"OUTPUT_DIR {self._path.parent}: application store is not writable: {exc}"
@@ -263,6 +289,7 @@ class ApplicationStore:
         try:
             with closing(self._connect()) as conn, conn:
                 conn.execute("DELETE FROM resume_reports WHERE application_id = ?", (application_id,))
+                conn.execute("DELETE FROM generation_jobs WHERE application_id = ?", (application_id,))
                 cursor = conn.execute("DELETE FROM applications WHERE id = ?", (application_id,))
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
@@ -351,3 +378,68 @@ class ApplicationStore:
                 item["report"] = {"generated_at": generated_at, **{name: data.get(name) for name in REPORT_SUMMARY}}
             listed.append(item)
         return listed
+
+    def start_job(self, application_id: str, kind: str, started_at: str) -> tuple[bool, str | None]:
+        """Claim the application's job of this kind for a new run, unless one is already running.
+
+        Returns (True, started_at) when claimed, (False, the running job's started_at) when a run is already
+        in progress, and (False, None) when the application does not exist. One statement, so two requests,
+        even on different listeners, can never both claim.
+        """
+        try:
+            with closing(self._connect()) as conn, conn:
+                cursor = conn.execute(
+                    "INSERT INTO generation_jobs (application_id, kind, status, started_at) "
+                    "SELECT ?, ?, 'running', ? FROM applications WHERE id = ? "
+                    "ON CONFLICT(application_id, kind) DO UPDATE SET status = 'running', "
+                    "started_at = excluded.started_at, finished_at = NULL, saved_path = NULL, error = NULL, "
+                    "result = NULL WHERE generation_jobs.status != 'running'",
+                    (application_id, kind, started_at, application_id),
+                )
+                if cursor.rowcount == 1:
+                    return True, started_at
+                row = conn.execute(
+                    "SELECT j.started_at FROM applications a JOIN generation_jobs j "
+                    "ON j.application_id = a.id AND j.kind = ? WHERE a.id = ? AND j.status = 'running'",
+                    (kind, application_id),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return False, row[0] if row else None
+
+    def finish_job(self, application_id: str, kind: str, started_at: str, status: str,
+                   saved_path: str | None = None, error: str | None = None, result: dict | None = None) -> bool:
+        """Record how the run that started at started_at ended. Returns False, changing nothing, when that run
+        no longer owns the row: the application was deleted, or a restart already failed the job."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                cursor = conn.execute(
+                    "UPDATE generation_jobs SET status = ?, finished_at = ?, saved_path = ?, error = ?, result = ? "
+                    "WHERE application_id = ? AND kind = ? AND status = 'running' AND started_at = ?",
+                    (status, utc_now(), saved_path, error, json.dumps(result) if result is not None else None,
+                     application_id, kind, started_at),
+                )
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return cursor.rowcount == 1
+
+    def get_job(self, application_id: str, kind: str) -> dict | str | None:
+        """The job record with its result fields decoded, NO_JOB when the application exists but has no job
+        of this kind, or None when there is no such application."""
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute(
+                    "SELECT j.status, j.started_at, j.finished_at, j.saved_path, j.error, j.result "
+                    "FROM applications a LEFT JOIN generation_jobs j ON j.application_id = a.id AND j.kind = ? "
+                    "WHERE a.id = ?",
+                    (kind, application_id),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        if row is None:
+            return None
+        status, started_at, finished_at, saved_path, error, result = row
+        if status is None:
+            return NO_JOB
+        return {"status": status, "started_at": started_at, "finished_at": finished_at, "saved_path": saved_path,
+                "error": error, **(json.loads(result) if result else {})}
