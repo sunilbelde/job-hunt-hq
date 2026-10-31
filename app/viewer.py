@@ -151,6 +151,16 @@ ul.items li { margin: 3px 0; }
 .pane header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .pane iframe { width: 100%; height: 1100px; border: 0; background: #fff; }
 .pane .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
+.title-row .delete-control { margin-left: auto; }
+.status-control, .delete-control { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.status-control select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--text); }
+button.danger { padding: 4px 12px; font: inherit; border: 1px solid var(--bad); background: var(--bad-soft);
+  color: var(--bad); border-radius: 6px; cursor: pointer; }
+button.danger:hover { background: var(--bad); color: var(--panel); }
+button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: default; }
+.inline-note { font-size: 12px; color: var(--good); }
+.inline-note.error { color: var(--bad); }
 .note { padding: 8px 12px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); margin-bottom: 12px; }
 @media (max-width: 1100px) {
   .panes, .columns, .req .evidence { grid-template-columns: 1fr; }
@@ -187,6 +197,7 @@ ul.items li { margin: 3px 0; }
     no_job_description: "Not scored",
   };
   const RANK = { missing: 0, partial: 1, met: 2 };
+  const APPLICATION_STATUSES = ["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"];
   let applications = [];
   let selected = null;
   let baseUrl = null;          // blob: URL of the base resume, fetched once per page load
@@ -231,8 +242,14 @@ ul.items li { margin: 3px 0; }
     return Math.round((fraction || 0) * 100) + "%";
   }
 
-  async function api(path, asBlob) {
-    const response = await fetch(path, { cache: "no-store", credentials: "omit" });
+  // Writes send their body as JSON; the server refuses any other content type.
+  async function api(path, asBlob, { method = "GET", body } = {}) {
+    const init = { method, cache: "no-store", credentials: "omit" };
+    if (body !== undefined) {
+      init.headers = { "Content-Type": "application/json" };
+      init.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, init);
     if (!response.ok) {
       let message = response.status + " " + response.statusText;
       try { message = (await response.json()).message || message; } catch (_) { /* not JSON */ }
@@ -291,9 +308,71 @@ ul.items li { margin: 3px 0; }
 
   // --- the detail ---
 
+  // --- status and delete ---
+
+  function statusControl(app) {
+    const select = el("select", { "aria-label": "Status" },
+      APPLICATION_STATUSES.map((value) => el("option", { value, selected: value === app.status }, value)));
+    const message = el("span", { class: "inline-note", role: "status" });
+    select.addEventListener("change", async () => {
+      const wanted = select.value;
+      select.disabled = true;
+      message.className = "inline-note";
+      message.textContent = "Saving…";
+      try {
+        const body = await api("/viewer/application/" + app.id, false, { method: "PATCH", body: { status: wanted } });
+        app.status = body.status;
+        const listed = applications.find((a) => a.id === app.id);
+        if (listed) listed.status = body.status;
+        renderList();
+        message.textContent = "Saved";
+      } catch (error) {
+        select.value = app.status;
+        message.className = "inline-note error";
+        message.textContent = "Not saved: " + error.message;
+      } finally {
+        select.disabled = false;
+      }
+    });
+    return el("span", { class: "status-control" }, select, message);
+  }
+
+  function deleteButton(app) {
+    const button = el("button", { type: "button", class: "danger" }, "Delete");
+    const message = el("span", { class: "inline-note error", role: "alert" });
+    button.addEventListener("click", async () => {
+      if (!confirm("Delete " + app.company + " – " + app.role + "? This cannot be undone.")) return;
+      button.disabled = true;
+      message.textContent = "";
+      try {
+        await api("/viewer/application/" + app.id, false, { method: "DELETE" });
+      } catch (error) {
+        button.disabled = false;
+        message.textContent = "Not deleted: " + error.message;
+        return;
+      }
+      removed(app.id);
+    });
+    return el("span", { class: "delete-control" }, button, message);
+  }
+
+  function removed(id) {
+    applications = applications.filter((a) => a.id !== id);
+    if (selected === id) {
+      selected = null;
+      loadToken++;  // drop any PDF still loading for it
+      for (const url of [generatedUrl, generatedLetterUrl]) if (url) URL.revokeObjectURL(url);
+      generatedUrl = generatedLetterUrl = null;
+      history.replaceState(null, "", location.pathname + location.search);
+      $("detail").replaceChildren(el("p", { class: "muted" }, "Select an application."));
+    }
+    $("status").textContent = applications.length + (applications.length === 1 ? " application" : " applications");
+    renderList();
+  }
+
   function detailsCard(app) {
     const fields = [
-      ["Status", app.status], ["Location", app.location], ["Work type", app.work_type], ["Salary", app.salary],
+      ["Status", statusControl(app)], ["Location", app.location], ["Work type", app.work_type], ["Salary", app.salary],
       ["Posted", app.date_posted], ["Sponsorship", app.sponsorship], ["Why it fits", app.why_it_fits],
       ["Job link", app.job_link && safeLink(app.job_link)],
       ["Careers page", app.company_careers_url && safeLink(app.company_careers_url)],
@@ -301,7 +380,8 @@ ul.items li { margin: 3px 0; }
       ["Recorded", when(app.created_at)], ["Updated", when(app.updated_at)],
     ].filter(([, value]) => value);
     return el("section", { class: "card" },
-      el("div", { class: "title-row" }, el("span", { class: "role" }, app.role), el("span", {}, app.company)),
+      el("div", { class: "title-row" }, el("span", { class: "role" }, app.role), el("span", {}, app.company),
+        deleteButton(app)),
       el("dl", { class: "fields" }, fields.map(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
       app.full_job_description
         ? el("details", { class: "posting-wrap" }, el("summary", {}, "Posting text"), el("pre", { class: "posting" }, app.full_job_description))

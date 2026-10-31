@@ -112,6 +112,14 @@ class ApplicationUpdate(BaseModel):
         return self
 
 
+class ViewerStatusUpdate(BaseModel):
+    """The viewer's status write: only `status` is read, so nothing else can reach the store from it."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [UPDATE_EXAMPLE]})
+
+    status: ApplicationStatus
+
+
 class ResumeRequest(BaseModel):
     """The POST /resume body: an application ID, as a JSON string. Everything else comes from the store."""
 

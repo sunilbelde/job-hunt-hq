@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Path, Request, Security
 from fastapi.concurrency import run_in_threadpool
@@ -35,6 +36,7 @@ from app.models import (
     ResumeJobStatus,
     ResumeRequest,
     StoredApplication,
+    ViewerStatusUpdate,
 )
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
@@ -72,11 +74,11 @@ api_key_header = APIKeyHeader(
 )
 
 # Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
-BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequest)
+BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate)
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
-Every endpoint except the health checks and the viewer reads needs the `X-API-Key` header. Every error is a JSON object
+Every endpoint except the health checks and the viewer's endpoints needs the `X-API-Key` header. Every error is a JSON object
 `{"ok": false, "message": "..."}`; the message names fields and rules but never echoes submitted values.
 
 Requests sent from this page are real: they change the application store and write resume and cover letter files."""
@@ -89,11 +91,14 @@ TAGS = [
     {"name": "cover letters", "description": "Write a cover letter for a recorded application, only when it asks "
                                              "for one, in the background, and poll the job's status."},
     {"name": "viewer", "description": "Read applications, their generation reports, resume and cover letter PDFs, "
-                                      "for the resume viewer at `/viewer`. Served only where these docs are."},
+                                      "and change an application's status or delete it, for the resume viewer at "
+                                      "`/viewer`. No API key; served only where these docs are."},
 ]
 
 ERROR_DESCRIPTIONS = {
     401: "Missing or wrong `X-API-Key`. Checked before the body or ID is looked at.",
+    403: "The browser marked the request as coming from another site (`Cross-site request refused`). Checked "
+         "before the body or ID is looked at.",
     404: "No application has this ID. An ID that is not a UUID gets this too.",
     "404_resume": "No application has this ID (`Application not found`), or it has no saved resume (`Resume not found`).",
     "404_letter": "No application has this ID (`Application not found`), or it has no saved cover letter "
@@ -229,9 +234,23 @@ def request_event(path: str) -> str | None:
         return "resume_request"
     if path == "/cover-letter" or path.startswith("/cover-letter/"):
         return "cover_letter_request"
-    if path in ("/application", "/applications") or path.startswith("/application/"):
+    # The viewer's writes log like the keyed ones; the /viewer page itself logs nothing.
+    if path in ("/application", "/applications") or path.startswith(("/application/", "/viewer/application/")):
         return "application_request"
     return None
+
+
+def same_origin(request: Request) -> bool:
+    """Whether a browser could have sent this from the viewer page itself. Sec-Fetch-Site, sent by every current
+    browser, decides; Origin is the fallback for older ones. Clients that send neither (curl) are let through:
+    the guard is against other websites, not against callers on the tailnet."""
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site == "same-origin"
+    origin = request.headers.get("origin")
+    if origin is None:
+        return True
+    return urlsplit(origin).netloc.lower() == request.headers.get("host", "").lower()
 
 
 def application_error(status: int, message: str) -> JSONResponse:
@@ -837,6 +856,87 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             # The stored path finds the PDFs after a company rename; the response names only the file.
             report = {**report, "saved_path": file_name(report["saved_path"])}
         return {"ok": True, "application": found["application"], "report": report}
+
+    # The viewer's two writes. Like the reads they take no key, so they exist only here; they are kept to a status
+    # and a delete so the docs flag never becomes a key bypass for the full PATCH /application body.
+    viewer_writes = (
+        "Takes no API key, so it is served only where the viewer is: on the installed service, only the "
+        "tailnet docs listener. A request a browser marks as coming from another site gets 403."
+    )
+
+    async def read_status(request: Request) -> tuple[str | None, str | None]:
+        """The status to write, or a 422 message naming what is wrong with the body."""
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            return None, "Request body must be sent as application/json"
+        try:
+            payload = await request.json()
+        except ValueError:
+            return None, "Request body must be valid JSON"
+        if not isinstance(payload, dict):
+            return None, "Request body must be a JSON object"
+        try:
+            return ViewerStatusUpdate.model_validate(payload).status, None
+        except ValidationError as exc:
+            return None, validation_message(exc)
+
+    @app.patch(
+        "/viewer/application/{application_id}",
+        tags=["viewer"],
+        summary="Change an application's status from the viewer",
+        description=(
+            "Sets `status` and nothing else; other body fields are ignored. " + viewer_writes + "\n\n"
+            "An unknown ID gets 404 even when the body is also invalid."
+        ),
+        responses={
+            200: {"model": ApplicationUpdated, "description": "Updated; returns the application's new status."},
+            **errors(403, 404, 422, 503),
+        },
+        openapi_extra=json_body(ViewerStatusUpdate, "The new status."),
+    )
+    async def viewer_update_status(request: Request, application_id: str = application_id_path):
+        if not same_origin(request):
+            return application_error(403, "Cross-site request refused")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+        status, message = await read_status(request)
+        try:
+            if message is not None:
+                if not await run_in_threadpool(applications.exists, target):
+                    return application_not_found()
+                return application_error(422, message)
+            status = await run_in_threadpool(applications.update, target, {"status": status})
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if status is None:
+            return application_not_found()
+        return {"ok": True, "application_id": target, "status": status}
+
+    @app.delete(
+        "/viewer/application/{application_id}",
+        tags=["viewer"],
+        summary="Delete an application from the viewer",
+        description=(
+            "Permanently removes the application and its report; this cannot be undone. Generated resume and "
+            "cover letter files are kept. " + viewer_writes
+        ),
+        responses={200: {"model": ApplicationRecorded, "description": "Deleted."}, **errors(403, 404, 503)},
+    )
+    async def viewer_delete(request: Request, application_id: str = application_id_path):
+        if not same_origin(request):
+            return application_error(403, "Cross-site request refused")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+        try:
+            deleted = await run_in_threadpool(applications.delete, target)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if not deleted:
+            return application_not_found()
+        return {"ok": True, "application_id": target}
 
     def read_output(path: pathlib.Path) -> bytes | None:
         """The saved file's bytes, or None when there is no regular file there inside OUTPUT_DIR."""

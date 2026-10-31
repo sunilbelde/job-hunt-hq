@@ -27,6 +27,10 @@ VIEWER_READS = [
     ("get", "/resume/base.pdf"),
     ("get", "/cover-letter/base.pdf"),
 ]
+VIEWER_WRITES = [
+    ("patch", "/viewer/application/{application_id}"),
+    ("delete", "/viewer/application/{application_id}"),
+]
 HEALTH = [("get", "/health"), ("get", "/healthz")]
 RESPONSES = {
     ("get", "/health"): {"200"},
@@ -44,6 +48,8 @@ RESPONSES = {
     ("get", "/application/{application_id}/cover-letter.pdf"): {"200", "404", "503"},
     ("get", "/resume/base.pdf"): {"200", "500"},
     ("get", "/cover-letter/base.pdf"): {"200", "404"},
+    ("patch", "/viewer/application/{application_id}"): {"200", "403", "404", "422", "503"},
+    ("delete", "/viewer/application/{application_id}"): {"200", "403", "404", "503"},
 }
 PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/application/{application_id}/cover-letter.pdf"),
                   ("get", "/resume/base.pdf"), ("get", "/cover-letter/base.pdf")]
@@ -92,8 +98,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_fifteen_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 15
+def test_documents_exactly_the_seventeen_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 17
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -147,7 +153,7 @@ def test_api_key_security_scheme(schema):
     ops = operations(schema)
     for key in PROTECTED:
         assert ops[key]["security"] == [{"ApiKey": []}], key
-    for key in HEALTH + VIEWER_READS:
+    for key in HEALTH + VIEWER_READS + VIEWER_WRITES:
         assert "security" not in ops[key], key
 
 
@@ -174,6 +180,26 @@ def test_update_body_schema(schema):
         "verified", "applied", "interviewing", "offer", "rejected", "withdrawn",
     ]
     assert "required" not in body
+
+
+def test_viewer_status_body_schema(schema):
+    body = component(schema, operations(schema)[("patch", "/viewer/application/{application_id}")])
+    assert body["required"] == ["status"] and set(body["properties"]) == {"status"}
+    assert body["properties"]["status"]["enum"] == [
+        "verified", "applied", "interviewing", "offer", "rejected", "withdrawn",
+    ]
+
+
+@pytest.mark.parametrize("key", VIEWER_WRITES)
+def test_viewer_writes_described(schema, key):
+    op = operations(schema)[key]
+    assert op["tags"] == ["viewer"]
+    assert "only where the viewer is" in op["description"] and "another site" in op["description"]
+    assert "no API key" in op["description"]
+
+
+def test_viewer_delete_says_files_are_kept(schema):
+    assert "files are kept" in operations(schema)[("delete", "/viewer/application/{application_id}")]["description"]
 
 
 def test_resume_body_schema(schema):
@@ -277,7 +303,8 @@ def test_resume_description_states_duration_and_choices(schema):
 
 def test_path_ids_stay_plain_strings(schema):
     # A typed UUID would let FastAPI answer a malformed ID with its own 422 instead of 404.
-    for key in [("patch", "/application/{application_id}"), ("delete", "/application/{application_id}")]:
+    for key in [("patch", "/application/{application_id}"), ("delete", "/application/{application_id}"),
+                *VIEWER_WRITES]:
         (param,) = operations(schema)[key]["parameters"]
         assert param["schema"]["type"] == "string" and "format" not in param["schema"]
 
@@ -305,6 +332,9 @@ def test_documented_examples_are_accepted(schema, docs_client):
     assert set(letter) == set(example(("post", "/cover-letter")))
     r = docs_client.post("/cover-letter", json=letter, headers=HEADERS)
     assert r.status_code == 202 or "posting text" in r.json()["message"], r.json()
+    r = docs_client.patch(f"/viewer/application/{application_id}",
+                          json=example(("patch", "/viewer/application/{application_id}")))
+    assert r.status_code == 200, r.json()
 
 
 # --- responses ---
