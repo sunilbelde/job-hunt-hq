@@ -413,6 +413,257 @@ def test_each_read_logged_once_without_content(viewer, settings, monkeypatch, ba
         assert text not in caplog.text
 
 
+# --- the viewer's writes ---
+
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
+
+
+def set_status(client, application_id, body, headers=SAME_ORIGIN):
+    return client.patch(f"/viewer/application/{application_id}", json=body, headers=headers)
+
+
+def delete(client, application_id, headers=SAME_ORIGIN):
+    return client.delete(f"/viewer/application/{application_id}", headers=headers)
+
+
+@pytest.mark.parametrize("path, expected", [
+    ("/viewer/application/abc", "application_request"), ("/viewer", None), ("/viewer/", None),
+    ("/application/abc", "application_request"),
+])
+def test_viewer_writes_logged_as_application_requests(path, expected):
+    from app.main import request_event
+    assert request_event(path) == expected
+
+
+@pytest.mark.parametrize("headers, allowed", [
+    ({}, True),
+    ({"Sec-Fetch-Site": "same-origin"}, True),
+    ({"Sec-Fetch-Site": "same-site"}, False),
+    ({"Sec-Fetch-Site": "cross-site"}, False),
+    ({"Sec-Fetch-Site": "none"}, False),
+    ({"Origin": "http://testserver"}, True),
+    ({"Origin": "http://TestServer"}, True),
+    ({"Origin": "https://evil.example"}, False),
+    ({"Origin": "null"}, False),
+    ({"Sec-Fetch-Site": "same-origin", "Origin": "https://evil.example"}, True),  # Sec-Fetch-Site decides
+    ({"Sec-Fetch-Site": "cross-site", "Origin": "http://testserver"}, False),
+])
+def test_same_origin(headers, allowed):
+    from starlette.requests import Request
+    scope = {"type": "http", "headers": [(b"host", b"testserver"),
+                                         *((k.lower().encode(), v.encode()) for k, v in headers.items())]}
+    from app.main import same_origin
+    assert same_origin(Request(scope)) is allowed
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}, SAME_ORIGIN])
+def test_status_changed_without_a_key(viewer, headers):
+    application_id = record(viewer)
+    before = viewer.get(f"/application/{application_id}").json()
+    r = set_status(viewer, application_id, {"status": "applied"}, headers)
+    assert (r.status_code, r.json()) == (200, {"ok": True, "application_id": application_id, "status": "applied"})
+    after = viewer.get(f"/application/{application_id}").json()
+    assert after["application"].pop("status") == "applied"
+    for body in (before, after):
+        body["application"].pop("status", None)
+        body["application"].pop("updated_at")
+    assert after == before
+    assert next(a for a in viewer.get("/applications").json()["applications"]
+                if a["id"] == application_id)["status"] == "applied"
+
+
+def test_status_write_ignores_other_fields(viewer):
+    application_id = record(viewer)
+    assert set_status(viewer, application_id, {"status": "offer", "company": "Other"}).json()["status"] == "offer"
+    assert viewer.get(f"/application/{application_id}").json()["application"]["company"] == "Acme Corp"
+
+
+def test_same_status_again(viewer):
+    application_id = record(viewer)
+    assert set_status(viewer, application_id, {"status": "verified"}).status_code == 200
+
+
+def test_status_write_keeps_the_report(viewer, monkeypatch):
+    application_id = record(viewer)
+    generate(viewer, monkeypatch, application_id)
+    report = viewer.get(f"/application/{application_id}").json()["report"]
+    set_status(viewer, application_id, {"status": "interviewing"})
+    assert viewer.get(f"/application/{application_id}").json()["report"] == report
+
+
+@pytest.mark.parametrize("body", [{"status": "ghosted"}, {"status": "Applied"}, {"status": None}, {},
+                                  {"company": "Acme"}])
+def test_bad_status_rejected(viewer, body):
+    application_id = record(viewer)
+    r = set_status(viewer, application_id, body)
+    assert r.status_code == 422 and r.json()["ok"] is False
+    assert "status" in r.json()["message"] and "ghosted" not in r.text
+    assert viewer.get(f"/application/{application_id}").json()["application"]["status"] == "verified"
+
+
+@pytest.mark.parametrize("content, content_type", [
+    (b"not json", "application/json"), (b"[]", "application/json"), (b'"applied"', "application/json"),
+    (b"1", "application/json"), (b"null", "application/json"),
+    (b'{"status": "applied"}', "text/plain"), (b'{"status": "applied"}', None),
+])
+def test_malformed_status_body(viewer, content, content_type):
+    application_id = record(viewer)
+    headers = {**SAME_ORIGIN, **({"Content-Type": content_type} if content_type else {})}
+    r = viewer.patch(f"/viewer/application/{application_id}", content=content, headers=headers)
+    assert r.status_code == 422 and r.json()["ok"] is False
+    assert viewer.get(f"/application/{application_id}").json()["application"]["status"] == "verified"
+
+
+def test_status_upper_case_id(viewer):
+    application_id = record(viewer)
+    r = set_status(viewer, application_id.upper(), {"status": "applied"})
+    assert r.json()["application_id"] == application_id
+
+
+@pytest.mark.parametrize("path_id", ["abc", "1", "0", "-1", UNKNOWN])
+@pytest.mark.parametrize("body", [{"status": "applied"}, {"status": "ghosted"}])
+def test_status_write_unknown_id(viewer, path_id, body):
+    assert_error(set_status(viewer, path_id, body), 404, "Application not found")
+
+
+def test_unknown_id_with_non_json_body(viewer):
+    r = viewer.patch(f"/viewer/application/{UNKNOWN}", content=b"nope", headers=SAME_ORIGIN)
+    assert_error(r, 404, "Application not found")
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_deleted_without_a_key(viewer, settings, monkeypatch, headers):
+    application_id = record(viewer)
+    generate(viewer, monkeypatch, application_id)
+    letter = save_letter(settings, application_id)
+    files = sorted(settings.output_dir.rglob("*.pdf"))
+    r = delete(viewer, application_id, headers)
+    assert (r.status_code, r.json()) == (200, {"ok": True, "application_id": application_id})
+    assert_error(viewer.get(f"/application/{application_id}"), 404, "Application not found")
+    assert application_id not in [a["id"] for a in viewer.get("/applications").json()["applications"]]
+    assert sorted(settings.output_dir.rglob("*.pdf")) == files and letter.exists()  # files kept
+
+
+def test_delete_twice(viewer):
+    application_id = record(viewer)
+    assert delete(viewer, application_id).status_code == 200
+    assert_error(delete(viewer, application_id), 404, "Application not found")
+
+
+def test_delete_ignores_a_body(viewer):
+    application_id = record(viewer)
+    r = viewer.request("DELETE", f"/viewer/application/{application_id.upper()}", content=b"junk",
+                       headers=SAME_ORIGIN)
+    assert r.json() == {"ok": True, "application_id": application_id}
+
+
+@pytest.mark.parametrize("path_id", ["abc", "1", UNKNOWN])
+def test_delete_unknown_id(viewer, path_id):
+    assert_error(delete(viewer, path_id), 404, "Application not found")
+
+
+def test_re_record_after_viewer_delete(viewer):
+    application_id = record(viewer)
+    delete(viewer, application_id)
+    link = f"{GH_LINK}1"
+    r = viewer.post("/application", json={**VALID_APPLICATION, "job_link": link, "official_apply_url": link},
+                    headers=HEADERS)
+    assert r.status_code == 201 and r.json()["application_id"] != application_id
+
+
+@pytest.mark.parametrize("method", ["update", "delete", "exists"])
+def test_writes_store_unavailable(viewer, monkeypatch, method):
+    application_id = record(viewer)
+
+    def broken(self, *args):
+        raise ApplicationStoreError("OperationalError: unable to open database file")
+
+    monkeypatch.setattr(ApplicationStore, method, broken)
+    if method == "delete":
+        r = delete(viewer, application_id)
+    else:  # exists is only consulted for a bad body
+        r = set_status(viewer, application_id, {"status": "ghosted" if method == "exists" else "applied"})
+    assert_error(r, 503, "Application store unavailable")
+
+
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},
+                                     {"Origin": "https://evil.example"}])
+def test_cross_site_writes_refused(viewer, headers):
+    application_id = record(viewer)
+    assert_error(set_status(viewer, application_id, {"status": "applied"}, headers), 403, "Cross-site request refused")
+    assert_error(delete(viewer, application_id, headers), 403, "Cross-site request refused")
+    # Refused before the ID or body is looked at.
+    assert_error(set_status(viewer, "abc", {"status": "ghosted"}, headers), 403, "Cross-site request refused")
+    assert viewer.get(f"/application/{application_id}").json()["application"]["status"] == "verified"
+
+
+def test_preflight_not_granted(viewer):
+    r = viewer.options(f"/viewer/application/{UNKNOWN}", headers={
+        "Origin": "https://evil.example", "Access-Control-Request-Method": "DELETE"})
+    assert "access-control-allow-origin" not in r.headers
+
+
+@pytest.mark.parametrize("headers", [{}, HEADERS])
+def test_writes_not_served_without_docs(settings, storage, headers):
+    public = TestClient(create_app(settings, storage))
+    application_id = record(public)
+    unknown = public.get("/no-such-path").json()
+    r = public.patch(f"/viewer/application/{application_id}", json={"status": "applied"},
+                     headers={**headers, **SAME_ORIGIN})
+    assert (r.status_code, r.json()) == (404, unknown)
+    r = public.delete(f"/viewer/application/{application_id}", headers={**headers, **SAME_ORIGIN})
+    assert (r.status_code, r.json()) == (404, unknown)
+    assert public.patch(f"/application/{application_id}", json={"status": "offer"}, headers=HEADERS).json()["status"] == "offer"
+
+
+def test_keyed_endpoints_still_need_the_key(viewer):
+    application_id = record(viewer)
+    assert viewer.delete(f"/application/{application_id}", headers=SAME_ORIGIN).status_code == 401
+    assert viewer.patch(f"/application/{application_id}", json={"status": "applied"}).status_code == 401
+    assert viewer.get(f"/application/{application_id}").json()["application"]["status"] == "verified"
+
+
+def test_writes_touch_only_the_store(viewer, settings, monkeypatch, base_pdf, base_letter):
+    first, second = record(viewer, 1), record(viewer, 2)
+    generate(viewer, monkeypatch, first)
+    save_letter(settings, first)
+    files = snapshot(settings)[2]
+    monkeypatch.setattr("app.main.generate_output", lambda *a: pytest.fail("generation started"))
+    set_status(viewer, first, {"status": "applied"})
+    delete(viewer, second)
+    delete(viewer, first)
+    assert snapshot(settings)[2] == files and base_letter.read_bytes() == b"%PDF-base-letter"
+
+
+def test_each_write_logged_once_without_content(viewer, caplog):
+    application_id = record(viewer)
+    caplog.set_level(logging.INFO, logger="app.requests")
+    for send, method, status in [
+        (lambda: set_status(viewer, application_id, {"status": "applied"}), "PATCH", 200),
+        (lambda: set_status(viewer, application_id, {"status": "secret-ish-value"}), "PATCH", 422),
+        (lambda: delete(viewer, application_id), "DELETE", 200),
+    ]:
+        caplog.clear()
+        send()
+        (line,) = request_lines(caplog)
+        assert {k: v for k, v in line.items() if k != "duration_ms"} == {
+            "event": "application_request", "method": method, "status": status, "application_id": application_id}
+        assert "applied" not in caplog.text and "secret-ish-value" not in caplog.text
+
+
+@pytest.mark.parametrize("send", [
+    lambda c: set_status(c, "not-a-uuid", {"status": "applied"}),
+    lambda c: delete(c, "not-a-uuid"),
+    lambda c: delete(c, UNKNOWN, {"Sec-Fetch-Site": "cross-site"}),
+])
+def test_refused_writes_logged_without_the_path_id(viewer, caplog, send):
+    caplog.set_level(logging.INFO, logger="app.requests")
+    send(viewer)
+    (line,) = request_lines(caplog)
+    assert "application_id" not in line and line["status"] in (403, 404)
+    assert "not-a-uuid" not in caplog.text and UNKNOWN not in caplog.text
+
+
 # --- the page ---
 
 def test_page_served_without_a_key_and_without_data(viewer, monkeypatch):
@@ -465,3 +716,18 @@ def test_page_switches_between_resume_and_cover_letter(viewer):
     assert '"Resume"' in html and '"Cover letter"' in html and '"aria-pressed": "true"' in html
     assert "/cover-letter/base.pdf" in html and '/cover-letter.pdf"' in html
     assert "No cover letter has been generated for this application yet." in html
+
+
+def test_page_changes_status_and_deletes(viewer):
+    html = viewer.get("/viewer").text
+    assert '["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]' in html
+    assert '"/viewer/application/" + app.id, false, { method: "PATCH"' in html
+    assert '"/viewer/application/" + app.id, false, { method: "DELETE" }' in html
+    assert 'if (!confirm("Delete " + app.company + " – " + app.role + "? This cannot be undone.")) return;' in html
+    assert '"Content-Type": "application/json"' in html and 'credentials: "omit"' in html
+
+
+def test_page_has_no_inline_styles_or_handlers(viewer):
+    html = viewer.get("/viewer").text
+    assert re.search(r"<[^>]+\sstyle=", html) is None
+    assert re.search(r"<[^>]+\son[a-z]+=", html) is None

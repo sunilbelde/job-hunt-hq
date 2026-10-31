@@ -39,6 +39,7 @@ id=3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13
 saved="$tmp/out/Smoke Test Co/$id/SUNIL BELDE.pdf"
 thirteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/cover-letter":{"post":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/application/{application_id}/cover-letter.pdf":{"get":{}},"/resume/base.pdf":{"get":{}},"/cover-letter/base.pdf":{"get":{}}}}'
 fifteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/resume/{application_id}/status":{"get":{}},"/cover-letter":{"post":{}},"/cover-letter/{application_id}/status":{"get":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/application/{application_id}/cover-letter.pdf":{"get":{}},"/resume/base.pdf":{"get":{}},"/cover-letter/base.pdf":{"get":{}}}}'
+seventeen="$(printf '%s' "$fifteen" | sed 's/}}$/,"\/viewer\/application\/{application_id}":{"patch":{},"delete":{}}}}/')"
 
 # run <app status> <resume status> [file content | "none"]
 # Call with prefixed variables inside ( ): sh keeps VAR=x assignments made before a function call.
@@ -48,7 +49,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$fifteen} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$seventeen} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     POLL_SECONDS=0 JOB_TIMEOUT=${JOB_TIMEOUT:-3} sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -77,6 +78,7 @@ run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_VIEWER_LISTENER=404 run 201 202); [ $? -ne 0 ] && ! created_any && ok "viewer missing on the docs listener fails" || bad "viewer missing"
 (STUB_SCHEMA="$(printf '%s' "$fifteen" | sed 's/,"\/cover-letter\/{application_id}\/status":{"get":{}}//')" run 201 202); [ $? -ne 0 ] && ! created_any && ok "fourteen operations (no cover letter status) fail" || bad "fourteen operations"
 (STUB_SCHEMA="$thirteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "thirteen operations (before the status endpoints) fail" || bad "thirteen operations"
+(STUB_SCHEMA="$fifteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "fifteen operations (before the viewer writes) fail" || bad "fifteen operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 202); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 202); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off STUB_DOCS_LISTENER=404 run 201 202) && ok "DOCS_URL=off skips the docs listener" || bad "docs off"
