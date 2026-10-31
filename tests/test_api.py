@@ -464,6 +464,11 @@ def output_files(settings):
     return sorted(p for p in settings.output_dir.rglob("*") if p.is_file() and p.suffix == ".pdf")
 
 
+def saved_file(settings, application_id, name=RESUME_FILE_NAME, company="Acme Corp"):
+    """Where a job's file is on disk: responses give only its name."""
+    return settings.output_dir.resolve() / company / str(application_id) / name
+
+
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
 def test_resume_auth_rejected(client, storage, headers):
     application_id = new_application(client)
@@ -547,9 +552,8 @@ def test_resume_success_saves_file(local_client, settings):
                             "added_terms": []}
     assert (job["ok"], job["application_id"], job["status"], job["error"]) == (True, application_id, "done", None)
     assert job["finished_at"] >= job["started_at"]
-    expected = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME
-    assert job["saved_path"] == str(expected)
-    assert expected.is_absolute() and expected.read_bytes() == FAKE_PDF
+    assert job["saved_path"] == RESUME_FILE_NAME
+    assert saved_file(settings, application_id).read_bytes() == FAKE_PDF
 
 
 def test_resume_leaves_the_cover_letter_alone(local_client, settings):
@@ -557,7 +561,7 @@ def test_resume_leaves_the_cover_letter_alone(local_client, settings):
     first = generate_resume(local_client, application_id)
     cover_letter = settings.output_dir.resolve() / "Acme Corp" / str(application_id) / COVER_LETTER_FILE_NAME
     assert not cover_letter.exists() and "text" not in first
-    assert output_files(settings) == [Path(first["saved_path"])]
+    assert output_files(settings) == [saved_file(settings, application_id)]
     cover_letter.write_bytes(b"%PDF-written-elsewhere")
     generate_resume(local_client, application_id)
     assert cover_letter.read_bytes() == b"%PDF-written-elsewhere"
@@ -607,10 +611,9 @@ def test_resume_company_rename_leaves_old_folder(local_client, settings):
     old = generate_resume(local_client, application_id)["saved_path"]
     patch_application(local_client, application_id, {"company": "Acme Inc"})
     new = generate_resume(local_client, application_id)["saved_path"]
-    assert old != new
-    assert old.endswith(f"/Acme/{application_id}/{RESUME_FILE_NAME}")
-    assert new.endswith(f"/Acme Inc/{application_id}/{RESUME_FILE_NAME}")
-    assert len(output_files(settings)) == 2
+    assert old == new == RESUME_FILE_NAME
+    assert output_files(settings) == [saved_file(settings, application_id, company="Acme"),
+                                      saved_file(settings, application_id, company="Acme Inc")]
 
 
 def test_resume_without_job_description(client):
@@ -675,7 +678,8 @@ def _failing_render(application, settings):
 def test_resume_render_failure_keeps_earlier_resume(local_client, settings, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="app.requests")
     application_id = new_application(local_client)
-    saved = generate_resume(local_client, application_id)["saved_path"]
+    saved = saved_file(settings, application_id)
+    assert generate_resume(local_client, application_id)["saved_path"] == RESUME_FILE_NAME
     monkeypatch.setattr("app.main.generate_output", _failing_render)
     job = generate_resume(local_client, application_id)
     assert (job["status"], job["error"], job["saved_path"], job["match"]) == ("failed", "Resume generation failed", None, None)
@@ -683,7 +687,7 @@ def test_resume_render_failure_keeps_earlier_resume(local_client, settings, monk
     text = json.dumps(job)
     assert "LaTeX" not in text and "/srv" not in text and "tectonic" not in text
     assert output_files(settings) == [settings.output_dir.resolve() / "Acme Corp" / str(application_id) / RESUME_FILE_NAME]
-    assert open(saved, "rb").read() == FAKE_PDF
+    assert saved.read_bytes() == FAKE_PDF
     errors = [json.loads(r.getMessage()) for r in caplog.records if '"render_error"' in r.getMessage()]
     assert errors[0]["application_id"] == application_id and "LaTeX Error" in errors[0]["error"]
 
@@ -781,7 +785,7 @@ def test_resume_runs_in_the_background(settings, storage, monkeypatch):
     finally:
         release.set()
     done = wait_for(lambda: resume_status(client, application_id).json(), "done")
-    assert done["saved_path"] and calls == [application_id]
+    assert done["saved_path"] == RESUME_FILE_NAME and calls == [application_id]
     assert storage.saved == [("Acme Corp", application_id, b"%PDF-slow")]
 
 
@@ -859,7 +863,7 @@ def test_resume_status_has_no_posting_text(client, monkeypatch):
     job = generate_resume(client, application_id)
     text = json.dumps(job)
     for value in ("Kafka", "Acme Corp", "Runs Kafka streaming", "rejected by the judge", "Engineer"):
-        assert value not in text.replace(job["saved_path"], "")
+        assert value not in text
 
 
 def test_resume_status_on_the_public_listener(settings, storage):
@@ -927,7 +931,9 @@ def test_resume_stores_its_report(client, settings, monkeypatch, match):
     job = generate_resume(client, application_id)
     report = reports_of(settings).get_report(application_id)
     assert report.pop("generated_at")
-    assert report == {"version": 1, **job["match"], "saved_path": job["saved_path"], "base": match.base_breakdown,
+    assert job["saved_path"] == RESUME_FILE_NAME  # the store keeps the full path; the response only its name
+    assert Path(report.pop("saved_path")).parts[-3:] == ("Acme Corp", application_id, RESUME_FILE_NAME)
+    assert report == {"version": 1, **job["match"], "base": match.base_breakdown,
                       "tailored": match.tailored_breakdown, "rejected_terms": [dict(t) for t in match.rejected_terms]}
     assert set(job["match"]) == {"status", "threshold", "base_score", "tailored_score", "added_terms"}
 
@@ -979,12 +985,13 @@ def _failing_tailoring(application, settings):
 def test_resume_tailoring_failure_keeps_earlier_resume(local_client, settings, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="app.requests")
     application_id = new_application(local_client)
-    saved = generate_resume(local_client, application_id)["saved_path"]
+    saved = saved_file(settings, application_id)
+    assert generate_resume(local_client, application_id)["saved_path"] == RESUME_FILE_NAME
     monkeypatch.setattr("app.main.generate_output", _failing_tailoring)
     job = generate_resume(local_client, application_id)
     assert (job["status"], job["error"]) == ("failed", "Resume generation failed")
-    assert open(saved, "rb").read() == FAKE_PDF
-    assert output_files(settings) == [Path(saved)]
+    assert saved.read_bytes() == FAKE_PDF
+    assert output_files(settings) == [saved]
     (error,) = [json.loads(rec.getMessage()) for rec in caplog.records if '"tailoring_error"' in rec.getMessage()]
     assert error == {"event": "tailoring_error", "application_id": application_id, "stage": "verify",
                      "reason": "check_failed", "failed_checks": ["unknown_skill", "one_page"]}
@@ -1070,7 +1077,7 @@ def test_startup_migrates_ids_and_resume_folders(settings):
     assert_error(patch_application(client, "1", {"status": "offer"}), 404)
     assert_error(post_resume(client, {"application_id": 1}), 422)
     job = generate_resume(client, new_id)
-    assert job["saved_path"].endswith(f"/Acme Corp/{new_id}/{RESUME_FILE_NAME}")
+    assert job["saved_path"] == RESUME_FILE_NAME and saved_file(settings, new_id).read_bytes() == FAKE_PDF
     assert post_application(client, VALID_APPLICATION).json()["application_id"] == new_id
 
 
@@ -1114,12 +1121,29 @@ def test_letter_success_saves_file(local_client, settings):
     assert r.status_code == 202
     assert set(r.json()) == {"ok", "application_id", "status", "started_at"} and r.json()["status"] == "running"
     job = letter_status(local_client, application_id).json()
-    expected = settings.output_dir.resolve() / "Acme Corp" / application_id / COVER_LETTER_FILE_NAME
+    expected = saved_file(settings, application_id, COVER_LETTER_FILE_NAME)
     assert job.pop("finished_at") and job.pop("started_at") == r.json()["started_at"]
-    assert job == {"ok": True, "application_id": application_id, "status": "done", "saved_path": str(expected),
+    assert job == {"ok": True, "application_id": application_id, "status": "done", "saved_path": COVER_LETTER_FILE_NAME,
                    "text": FAKE_LETTER_TEXT, "error": None}
     assert expected.read_bytes() == FAKE_LETTER_PDF
     assert output_files(settings) == [expected]  # no resume needed, none created
+
+
+def test_letter_status_while_running(settings, storage):
+    client = TestClient(create_app(settings, storage, start_job=lambda job: None))  # the job never runs
+    application_id = letter_application(client)
+    assert post_letter(client, {"application_id": application_id}).status_code == 202
+    job = letter_status(client, application_id).json()
+    assert (job["status"], job["finished_at"], job["saved_path"], job["text"], job["error"]) == (
+        "running", None, None, None, None)
+
+
+@pytest.mark.parametrize("kind, name", [("resume", RESUME_FILE_NAME), ("cover_letter", COVER_LETTER_FILE_NAME)])
+def test_status_read_leaves_the_stored_path_whole(local_client, settings, kind, name):
+    application_id = letter_application(local_client)
+    job = generate_resume(local_client, application_id) if kind == "resume" else write_letter(local_client, application_id)
+    assert job["saved_path"] == name
+    assert reports_of(settings).get_job(application_id, kind)["saved_path"] == str(saved_file(settings, application_id, name))
 
 
 def test_letter_uses_the_stored_application(client, monkeypatch):
@@ -1132,12 +1156,13 @@ def test_letter_uses_the_stored_application(client, monkeypatch):
                                                                                        LONG_POSTING)
 
 
-def test_letter_repeated_request_replaces_file(local_client, monkeypatch):
+def test_letter_repeated_request_replaces_file(local_client, settings, monkeypatch):
     application_id = letter_application(local_client)
     first = write_letter(local_client, application_id)["saved_path"]
     monkeypatch.setattr("app.main.write_cover_letter", lambda application, settings: fake_letter(pdf=b"%PDF-second"))
     second = write_letter(local_client, application_id)["saved_path"]
-    assert first == second and Path(second).read_bytes() == b"%PDF-second"
+    assert first == second == COVER_LETTER_FILE_NAME
+    assert saved_file(settings, application_id, COVER_LETTER_FILE_NAME).read_bytes() == b"%PDF-second"
 
 
 def test_letter_leaves_resume_report_and_application_alone(local_client, settings, monkeypatch):
@@ -1145,7 +1170,7 @@ def test_letter_leaves_resume_report_and_application_alone(local_client, setting
     application_id = letter_application(local_client)
     patch_application(local_client, application_id, {"status": "applied"})
     resume_job = generate_resume(local_client, application_id)
-    resume = Path(resume_job["saved_path"])
+    resume = saved_file(settings, application_id, resume_job["saved_path"])
     row, report = stored_row(settings, application_id), reports_of(settings).get_report(application_id)
     assert write_letter(local_client, application_id)["status"] == "done"
     assert resume.read_bytes() == FAKE_PDF
@@ -1219,10 +1244,10 @@ def _failing_letter(application, settings):
     raise TailoringError("verify", "check_failed", failed_checks=["unsupported_number"], run=RunStats(5, 0.2))
 
 
-def test_letter_failure_keeps_earlier_letter(local_client, monkeypatch, caplog):
+def test_letter_failure_keeps_earlier_letter(local_client, settings, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="app.requests")
     application_id = letter_application(local_client)
-    saved = Path(write_letter(local_client, application_id)["saved_path"])
+    saved = saved_file(settings, application_id, write_letter(local_client, application_id)["saved_path"])
     monkeypatch.setattr("app.main.write_cover_letter", _failing_letter)
     caplog.clear()
     job = write_letter(local_client, application_id)
@@ -1341,3 +1366,40 @@ def test_letter_status_has_no_posting_text(client):
     job = write_letter(client, application_id)
     assert set(job) == {"ok", "application_id", "status", "started_at", "finished_at", "saved_path", "text", "error"}
     assert "retrieval systems" not in json.dumps(job)
+
+
+# --- No host paths in responses ---
+
+def test_no_response_contains_a_host_path(settings, tmp_path, monkeypatch):
+    """Every JSON and HTML response, errors included, names saved files only by their file name."""
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(match=TAILORED))
+    client = TestClient(create_app(settings.model_copy(update={"api_docs_enabled": True}), LocalStorage(settings.output_dir)))
+    application_id = letter_application(client)
+    assert generate_resume(client, application_id)["status"] == "done"
+    assert write_letter(client, application_id)["status"] == "done"
+    no_job = new_application(client, 2)
+    responses = [
+        client.get("/health"), client.get("/healthz"), client.get("/docs"), client.get("/redoc"),
+        client.get("/openapi.json"), client.get("/viewer"), client.get("/applications"),
+        client.get(f"/application/{application_id}"), client.get(f"/application/{UNKNOWN}"),
+        client.get("/application/not-a-uuid"), client.get("/no-such-path"),
+        post_application(client, {**VALID_APPLICATION, "company": ""}),
+        post_application(client, VALID_APPLICATION, headers={"X-API-Key": "wrong"}),
+        patch_application(client, application_id, {"status": "applied"}),
+        patch_application(client, UNKNOWN, {"status": "applied"}),
+        post_resume(client, {"application_id": UNKNOWN}), post_letter(client, {"application_id": no_job}),
+        client.get(f"/application/{no_job}/resume.pdf"), client.get(f"/application/{no_job}/cover-letter.pdf"),
+    ]
+    for status_path in ("resume", "cover-letter"):
+        responses += [client.get(f"/{status_path}/{application_id}/status", headers=HEADERS),
+                      client.get(f"/{status_path}/{no_job}/status", headers=HEADERS),
+                      client.get(f"/{status_path}/{UNKNOWN}/status", headers=HEADERS),
+                      client.get(f"/{status_path}/{application_id}/status")]
+    responses += [delete_application(client, no_job), delete_application(client, no_job)]
+    host_paths = {str(settings.output_dir), str(settings.output_dir.resolve()), str(tmp_path), str(tmp_path.resolve()),
+                  str(Path.home())}
+    for r in responses:
+        assert not r.headers.get("content-type", "").startswith("application/pdf"), r.url
+        for path in host_paths:
+            assert path not in r.text, (r.request.method, r.url, r.status_code)
+    assert {r.status_code for r in responses} >= {200, 401, 404, 422}
