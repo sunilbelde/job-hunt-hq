@@ -2,16 +2,17 @@
 # Smoke test: check that the public address serves no API docs or resume viewer and that the docs
 # listener serves both,
 # then record a synthetic application on a running service, start its resume, poll the resume job's
-# status until it is done, and check that the file at the job's saved_path is a PDF. The application has no posting text, so the
+# status until it is done, and check that the file it names (a bare file name, never a host path) is a PDF in the
+# application's folder under OUTPUT_DIR. The application has no posting text, so the
 # service saves the base resume without starting a Claude run, and refuses a cover letter (422)
 # without starting one either. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
-# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] [JOB_TIMEOUT=60] scripts/smoke_test.sh <base_url>
+# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] [JOB_TIMEOUT=60] [OUTPUT_DIR=<the service's>] scripts/smoke_test.sh <base_url>
 set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] [JOB_TIMEOUT=<seconds, default 60>] $0 <base_url>   (run on the Mac hosting the service)"
+  echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] [JOB_TIMEOUT=<seconds, default 60>] [OUTPUT_DIR=<the service's, default ~/Library/Application Support/job-hunt-hq>] $0 <base_url>   (run on the Mac hosting the service)"
   echo "The synthetic application has no posting text, so the check never starts a Claude run, for the resume or the cover letter."
   exit 0
 fi
@@ -27,6 +28,8 @@ link=https://example.com/job-hunt-hq-smoke-test
 # How long to wait for the resume job. Without posting text it takes about a second.
 job_timeout=${JOB_TIMEOUT:-60}
 poll_seconds=${POLL_SECONDS:-1}  # tests set 0; each poll counts as one second of JOB_TIMEOUT
+# The service returns only the file name, so the folder is found from OUTPUT_DIR (same default as the service).
+output_dir=${OUTPUT_DIR:-$HOME/Library/Application Support/job-hunt-hq}
 
 json_field() {
   python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
@@ -138,10 +141,16 @@ if [ "$match" != "no_job_description" ]; then
   exit 1
 fi
 
-saved=$(printf '%s' "$body" | json_field saved_path)
+name=$(printf '%s' "$body" | json_field saved_path)
+case "$name" in
+  */*) echo "FAIL: saved_path is a path ($name), want only the file name" >&2; exit 1 ;;
+  "SUNIL BELDE.pdf") ;;
+  *) echo "FAIL: saved_path is $name, want SUNIL BELDE.pdf" >&2; exit 1 ;;
+esac
+saved="$output_dir/Smoke Test Co/$application_id/$name"
 echo "Saved: $saved"
 if [ ! -f "$saved" ]; then
-  echo "FAIL: no file at saved_path (is this running on the service's Mac?)" >&2
+  echo "FAIL: no file at $saved (run this on the service's Mac, with OUTPUT_DIR set to the service's)" >&2
   exit 1
 fi
 if [ "$(head -c 4 "$saved")" != "%PDF" ]; then

@@ -242,6 +242,11 @@ def application_not_found() -> JSONResponse:
     return application_error(404, "Application not found")
 
 
+def file_name(path: str | None) -> str | None:
+    """The saved file's name without its folders: responses never show where on the host it was saved."""
+    return None if path is None else pathlib.PurePath(path).name
+
+
 def parse_application_id(raw: str) -> str | None:
     """A stored ID is a UUID, kept in lower case; anything else cannot name a row."""
     return raw.lower() if APPLICATION_ID.fullmatch(raw) else None
@@ -626,8 +631,8 @@ def create_app(
             "Starts generating the resume for a recorded application and returns 202 at once. The run continues "
             "in the background, whether or not the client stays connected: poll "
             "`GET /resume/{application_id}/status` until `status` is `done` or `failed`. When done, the resume is "
-            "saved on the service host at the job's `saved_path`, replacing any earlier one. The application "
-            "itself is not changed.\n\n"
+            "saved on the service host, replacing any earlier one, and the job's `saved_path` is its file name. "
+            "The application itself is not changed.\n\n"
             "A request while a resume job for the application is still running starts no second run: it returns "
             "202 with that job's `started_at`, so retrying after a dropped connection is safe.\n\n"
             "How the resume is chosen, reported in the job's `match.status`:\n"
@@ -676,15 +681,16 @@ def create_app(
             if job == NO_JOB:
                 return application_error(404, "No job for this application")
             return {"ok": True, "application_id": target, "status": job["status"], "started_at": job["started_at"],
-                    "finished_at": job["finished_at"], "saved_path": job["saved_path"], result: job.get(result),
-                    "error": job["error"]}
+                    "finished_at": job["finished_at"], "saved_path": file_name(job["saved_path"]),
+                    result: job.get(result), "error": job["error"]}
         return read_status
 
     status_description = (
         "The state of the application's latest {kind} job, started by `POST {post}`: `running`, `done` or `failed`. "
-        "When `done`, `saved_path` and `{result}` are set; when `failed`, `error` says why in a fixed message, and an "
-        "earlier {kind} for the application is unchanged. A job that was running when the service restarted is "
-        "`failed` with `Interrupted by a service restart`; request it again.\n\n"
+        "When `done`, `saved_path` (the file name only, never a path on the host) and `{result}` are set; when "
+        "`failed`, `error` says why in a fixed message, and an earlier {kind} for the application is unchanged. "
+        "A job that was running when the service restarted is `failed` with `Interrupted by a service restart`; "
+        "request it again.\n\n"
         "Returns only the job's state and result: no posting text and no generation report. Reading it never "
         "starts or changes a job."
     )
@@ -705,11 +711,11 @@ def create_app(
             "Starts writing a one-page cover letter for a recorded application, tailored to its stored posting, and "
             "returns 202 at once. The run continues in the background, whether or not the client stays connected: "
             "poll `GET /cover-letter/{application_id}/status` until `status` is `done` or `failed`. When done, the "
-            "letter is saved on the service host at the job's `saved_path`, beside the application's resume "
-            "(`SUNIL BELDE - Cover Letter.pdf`), replacing any earlier one, and the job's `text` is the same letter "
-            "as plain text, for application forms that take pasted text. Call it only for applications that ask for "
-            "a cover letter: `POST /resume` never writes one. The application itself is not changed, and no resume "
-            "is needed.\n\n"
+            "letter is saved on the service host beside the application's resume, replacing any earlier one, the "
+            "job's `saved_path` is its file name (`SUNIL BELDE - Cover Letter.pdf`), and the job's `text` is the same "
+            "letter as plain text, for application forms that take pasted text. Call it only for applications that "
+            "ask for a cover letter: `POST /resume` never writes one. The application itself is not changed, and no "
+            "resume is needed.\n\n"
             "A request while a cover letter job for the application is still running starts no second run: it "
             "returns 202 with that job's `started_at`, so retrying after a dropped connection is safe.\n\n"
             "The letter is always tailored, never generic: an application without usable posting text "
@@ -826,7 +832,11 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         _, found, error = await find(request, application_id)
         if error is not None:
             return error
-        return {"ok": True, **found}
+        report = found["report"]
+        if report is not None:
+            # The stored path finds the PDFs after a company rename; the response names only the file.
+            report = {**report, "saved_path": file_name(report["saved_path"])}
+        return {"ok": True, "application": found["application"], "report": report}
 
     def read_output(path: pathlib.Path) -> bytes | None:
         """The saved file's bytes, or None when there is no regular file there inside OUTPUT_DIR."""

@@ -147,7 +147,7 @@ def test_list_store_unavailable(settings, storage, monkeypatch):
 
 def test_detail_with_report(viewer, monkeypatch):
     application_id = record(viewer)
-    saved = generate(viewer, monkeypatch, application_id)["saved_path"]
+    assert generate(viewer, monkeypatch, application_id)["saved_path"] == RESUME_FILE_NAME
     body = viewer.get(f"/application/{application_id}").json()
     assert body["ok"] is True
     application = body["application"]
@@ -157,7 +157,7 @@ def test_detail_with_report(viewer, monkeypatch):
         k: v for k, v in VALID_APPLICATION.items() if k not in links}
     assert application["job_link"] == f"{GH_LINK}1"
     report = body["report"]
-    assert (report["status"], report["saved_path"], report["added_terms"]) == ("tailored", saved, ["Airflow"])
+    assert (report["status"], report["saved_path"], report["added_terms"]) == ("tailored", RESUME_FILE_NAME, ["Airflow"])
     assert report["base"] == TAILORED.base_breakdown and report["tailored"] == TAILORED.tailored_breakdown
     assert report["rejected_terms"] == [{"term": "Kafka", "reason": "rejected by the judge"}]
 
@@ -255,6 +255,18 @@ def test_letter_written_before_a_rename_found_beside_the_resume(viewer, settings
     generate(viewer, monkeypatch, application_id)
     save_letter(settings, application_id, b"%PDF old company letter")
     viewer.patch(f"/application/{application_id}", json={"company": "Acme Inc"}, headers=HEADERS)
+    assert viewer.get(f"/application/{application_id}/cover-letter.pdf").content == b"%PDF old company letter"
+
+
+def test_detail_after_a_rename_names_only_the_file(viewer, settings, monkeypatch):
+    application_id = record(viewer)
+    generate(viewer, monkeypatch, application_id, content=b"%PDF old company")
+    save_letter(settings, application_id, b"%PDF old company letter")
+    viewer.patch(f"/application/{application_id}", json={"company": "Acme Inc"}, headers=HEADERS)
+    assert viewer.get(f"/application/{application_id}").json()["report"]["saved_path"] == RESUME_FILE_NAME
+    assert store_of(settings).get_report(application_id)["saved_path"] == str(
+        settings.output_dir.resolve() / "Acme Corp" / application_id / RESUME_FILE_NAME)
+    assert viewer.get(f"/application/{application_id}/resume.pdf").content == b"%PDF old company"
     assert viewer.get(f"/application/{application_id}/cover-letter.pdf").content == b"%PDF old company letter"
 
 
