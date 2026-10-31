@@ -184,7 +184,25 @@ def test_update_errors_do_not_echo_values(body):
     assert "secret-ish-value" not in update_error(body)
 
 
-@pytest.mark.parametrize("model", [ApplicationRow, ApplicationUpdate, ResumeRequest])
+# --- ViewerStatusUpdate ---
+
+from app.models import ViewerStatusUpdate  # noqa: E402
+
+
+def test_viewer_status_accepted_and_extra_fields_ignored():
+    update = ViewerStatusUpdate.model_validate({"status": "applied", "company": "Other"})
+    assert update.model_dump() == {"status": "applied"}
+
+
+@pytest.mark.parametrize("body", [{"status": "ghosted"}, {"status": None}, {}, {"company": "Acme"}])
+def test_viewer_status_rejected(body):
+    with pytest.raises(ValidationError) as exc:
+        ViewerStatusUpdate.model_validate(body)
+    errors = str(exc.value.errors(include_input=False))
+    assert "status" in errors and "ghosted" not in errors
+
+
+@pytest.mark.parametrize("model", [ApplicationRow, ApplicationUpdate, ResumeRequest, ViewerStatusUpdate])
 def test_docs_examples_validate(model):
     for example in model.model_config["json_schema_extra"]["examples"]:
         model.model_validate(example)
