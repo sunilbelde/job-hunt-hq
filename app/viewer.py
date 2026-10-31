@@ -105,13 +105,26 @@ header.top { display: flex; align-items: center; justify-content: space-between;
   background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; }
 #load-error .error { color: var(--bad); margin: 0; }
 #app { display: grid; grid-template-columns: 300px 1fr; height: calc(100% - 45px); }
-#list { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
-#list button { display: block; width: 100%; text-align: left; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line);
+#side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+#filters { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); }
+#filters label { display: inline-flex; align-items: center; gap: 4px; }
+#filters select, #filters input, #list select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--text); }
+#list { flex: 1; overflow-y: auto; }
+#list > p { padding: 0 14px; }
+#list .entry { border-bottom: 1px solid var(--line); }
+#list .entry:hover { background: var(--accent-soft); }
+#list .entry.current { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+#list button.open { display: block; width: 100%; text-align: left; padding: 10px 14px 6px; border: 0;
   background: transparent; color: inherit; font: inherit; cursor: pointer; }
-#list button:hover { background: var(--accent-soft); }
-#list button[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 #list .company { font-weight: 600; }
 #list .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; font-size: 12px; }
+#list .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 0 14px 10px; font-size: 12px; }
+#list .controls .inline-note { flex-basis: 100%; }
+#list button.danger { padding: 1px 10px; }
+#list button.clear-filters { margin: 0 14px; padding: 4px 12px; font: inherit; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: inherit; cursor: pointer; }
 #detail { overflow-y: auto; padding: 16px; min-width: 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--accent-soft); color: var(--accent); }
@@ -151,14 +164,10 @@ ul.items li { margin: 3px 0; }
 .pane header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .pane iframe { width: 100%; height: 1100px; border: 0; background: #fff; }
 .pane .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
-.title-row .delete-control { margin-left: auto; }
-.status-control, .delete-control { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.status-control select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--panel); color: var(--text); }
 button.danger { padding: 4px 12px; font: inherit; border: 1px solid var(--bad); background: var(--bad-soft);
   color: var(--bad); border-radius: 6px; cursor: pointer; }
 button.danger:hover { background: var(--bad); color: var(--panel); }
-button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: default; }
+button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
 .inline-note { font-size: 12px; color: var(--good); }
 .inline-note.error { color: var(--bad); }
 .note { padding: 8px 12px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); margin-bottom: 12px; }
@@ -167,7 +176,7 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
 }
 @media (max-width: 800px) {
   #app { grid-template-columns: 1fr; height: auto; }
-  #list { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  #side { max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .pane iframe { height: 80vh; }
 }
 </style>
@@ -184,7 +193,14 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
 </div>
 
 <div id="app" class="hidden">
-  <nav id="list" aria-label="Applications"></nav>
+  <aside id="side">
+    <div id="filters" role="search" aria-label="Filter applications">
+      <label>Status <select id="filter-status"><option value="">All statuses</option></select></label>
+      <label>Recorded from <input id="filter-from" type="date"></label>
+      <label>to <input id="filter-to" type="date"></label>
+    </div>
+    <nav id="list" aria-label="Applications"></nav>
+  </aside>
   <main id="detail"><p class="muted">Select an application.</p></main>
 </div>
 
@@ -205,6 +221,10 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
   let baseLetterUrl = null;    // blob: URL of the base cover letter, fetched once per page load
   let generatedLetterUrl = null;  // blob: URL of the selected application's cover letter
   let loadToken = 0;           // ignores responses for an application no longer selected
+  let detailStatus = null;     // the selected application's status text in the details
+  const filters = { status: "", from: "", to: "" };  // "from" and "to" are YYYY-MM-DD recorded days
+  const notes = {};            // application ID → { text, error }: its last save or delete note, kept across renders
+  const busy = new Set();      // application IDs with a write in flight
 
   const $ = (id) => document.getElementById(id);
 
@@ -274,23 +294,70 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
     return report.base_score + " → " + generated;
   }
 
+  function localDay(iso) {
+    const date = new Date(iso);
+    if (isNaN(date)) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+  }
+
+  function filtering() {
+    return Boolean(filters.status || filters.from || filters.to);
+  }
+
+  // Recorded is when the application was stored (created_at), never when the job was posted.
+  function matches(item) {
+    if (filters.status && item.status !== filters.status) return false;
+    const day = localDay(item.created_at);
+    if (filters.from && day < filters.from) return false;
+    if (filters.to && day > filters.to) return false;
+    return true;
+  }
+
+  function updateCount() {
+    const total = applications.length;
+    const noun = total === 1 ? " application" : " applications";
+    $("status").textContent = filtering() ? applications.filter(matches).length + " of " + total + noun : total + noun;
+  }
+
+  function clearFilters() {
+    filters.status = filters.from = filters.to = "";
+    $("filter-status").value = $("filter-from").value = $("filter-to").value = "";
+    renderList();
+  }
+
+  function entryNote(id) {
+    const note = notes[id];
+    if (!note) return null;
+    return el("span", { class: note.error ? "inline-note error" : "inline-note", role: note.error ? "alert" : "status" }, note.text);
+  }
+
   function renderList() {
     const nav = $("list");
     nav.replaceChildren();
+    updateCount();
     if (!applications.length) {
       nav.append(el("p", { class: "muted" }, "No applications recorded."));
       return;
     }
-    for (const item of applications) {
+    const shown = applications.filter(matches);
+    if (!shown.length) {
+      nav.append(el("p", { class: "muted" }, "No applications match these filters."),
+        el("button", { type: "button", class: "clear-filters" }, "Clear filters"));
+      return;
+    }
+    for (const item of shown) {
       const score = scoreText(item.report);
-      nav.append(el("button", { type: "button", "data-id": item.id, "aria-current": item.id === selected ? "true" : "false" },
-        el("div", { class: "company" }, item.company),
-        el("div", {}, item.role),
-        el("div", { class: "meta" },
-          el("span", { class: "badge" }, item.status),
-          statusBadge(item.report),
-          score ? el("span", { class: "muted" }, score) : null,
+      nav.append(el("div", { class: item.id === selected ? "entry current" : "entry", "data-id": item.id },
+        el("button", { type: "button", class: "open", "aria-current": item.id === selected ? "true" : "false" },
+          el("div", { class: "company" }, item.company),
+          el("div", {}, item.role),
+          el("div", { class: "meta" },
+            statusBadge(item.report),
+            score ? el("span", { class: "muted" }, score) : null,
+          ),
         ),
+        el("div", { class: "controls" }, statusControl(item), deleteButton(item), entryNote(item.id)),
       ));
     }
   }
@@ -300,7 +367,6 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
     const body = await api("/applications");
     applications = body.applications;
     $("app").classList.remove("hidden");
-    $("status").textContent = applications.length + (applications.length === 1 ? " application" : " applications");
     renderList();
     const wanted = location.hash.slice(1);
     if (wanted && applications.some((a) => a.id === wanted)) select(wanted);
@@ -310,50 +376,52 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
 
   // --- status and delete ---
 
+  // Both are built per list entry from its list item; using them never selects the application.
+  // Their notes live in `notes`, so the re-render after a write (which may re-filter the list) keeps them.
+
   function statusControl(app) {
-    const select = el("select", { "aria-label": "Status" },
+    const select = el("select", { "aria-label": "Status of " + app.company + " – " + app.role, disabled: busy.has(app.id) },
       APPLICATION_STATUSES.map((value) => el("option", { value, selected: value === app.status }, value)));
-    const message = el("span", { class: "inline-note", role: "status" });
     select.addEventListener("change", async () => {
       const wanted = select.value;
-      select.disabled = true;
-      message.className = "inline-note";
-      message.textContent = "Saving…";
+      busy.add(app.id);
+      notes[app.id] = { text: "Saving…" };
+      renderList();
       try {
         const body = await api("/viewer/application/" + app.id, false, { method: "PATCH", body: { status: wanted } });
         app.status = body.status;
-        const listed = applications.find((a) => a.id === app.id);
-        if (listed) listed.status = body.status;
-        renderList();
-        message.textContent = "Saved";
+        if (selected === app.id && detailStatus) detailStatus.textContent = body.status;
+        notes[app.id] = { text: "Saved" };
       } catch (error) {
-        select.value = app.status;
-        message.className = "inline-note error";
-        message.textContent = "Not saved: " + error.message;
+        notes[app.id] = { text: "Not saved: " + error.message, error: true };  // the re-render shows the stored status
       } finally {
-        select.disabled = false;
+        busy.delete(app.id);
+        renderList();
       }
     });
-    return el("span", { class: "status-control" }, select, message);
+    return select;
   }
 
   function deleteButton(app) {
-    const button = el("button", { type: "button", class: "danger" }, "Delete");
-    const message = el("span", { class: "inline-note error", role: "alert" });
+    const button = el("button", { type: "button", class: "danger", disabled: busy.has(app.id) }, "Delete");
     button.addEventListener("click", async () => {
       if (!confirm("Delete " + app.company + " – " + app.role + "? This cannot be undone.")) return;
-      button.disabled = true;
-      message.textContent = "";
+      busy.add(app.id);
+      notes[app.id] = { text: "Deleting…" };
+      renderList();
       try {
         await api("/viewer/application/" + app.id, false, { method: "DELETE" });
       } catch (error) {
-        button.disabled = false;
-        message.textContent = "Not deleted: " + error.message;
+        busy.delete(app.id);
+        notes[app.id] = { text: "Not deleted: " + error.message, error: true };
+        renderList();
         return;
       }
+      busy.delete(app.id);
+      delete notes[app.id];
       removed(app.id);
     });
-    return el("span", { class: "delete-control" }, button, message);
+    return button;
   }
 
   function removed(id) {
@@ -366,13 +434,13 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
       history.replaceState(null, "", location.pathname + location.search);
       $("detail").replaceChildren(el("p", { class: "muted" }, "Select an application."));
     }
-    $("status").textContent = applications.length + (applications.length === 1 ? " application" : " applications");
     renderList();
   }
 
   function detailsCard(app) {
+    detailStatus = el("span", {}, app.status);
     const fields = [
-      ["Status", statusControl(app)], ["Location", app.location], ["Work type", app.work_type], ["Salary", app.salary],
+      ["Status", detailStatus],["Location", app.location], ["Work type", app.work_type], ["Salary", app.salary],
       ["Posted", app.date_posted], ["Sponsorship", app.sponsorship], ["Why it fits", app.why_it_fits],
       ["Job link", app.job_link && safeLink(app.job_link)],
       ["Careers page", app.company_careers_url && safeLink(app.company_careers_url)],
@@ -380,8 +448,7 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
       ["Recorded", when(app.created_at)], ["Updated", when(app.updated_at)],
     ].filter(([, value]) => value);
     return el("section", { class: "card" },
-      el("div", { class: "title-row" }, el("span", { class: "role" }, app.role), el("span", {}, app.company),
-        deleteButton(app)),
+      el("div", { class: "title-row" }, el("span", { class: "role" }, app.role), el("span", {}, app.company)),
       el("dl", { class: "fields" }, fields.map(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
       app.full_job_description
         ? el("details", { class: "posting-wrap" }, el("summary", {}, "Posting text"), el("pre", { class: "posting" }, app.full_job_description))
@@ -596,6 +663,7 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
 
   async function select(id) {
     selected = id;
+    detailStatus = null;
     const token = ++loadToken;
     if (generatedUrl) { URL.revokeObjectURL(generatedUrl); generatedUrl = null; }
     if (generatedLetterUrl) { URL.revokeObjectURL(generatedLetterUrl); generatedLetterUrl = null; }
@@ -651,9 +719,18 @@ button.danger:disabled, .status-control select:disabled { opacity: .6; cursor: d
   $("retry").addEventListener("click", start);
 
   $("list").addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-id]");
-    if (button) select(button.getAttribute("data-id"));
+    if (event.target.closest("button.clear-filters")) return clearFilters();
+    const button = event.target.closest("button.open");
+    if (button) select(button.closest(".entry").getAttribute("data-id"));
   });
+
+  for (const value of APPLICATION_STATUSES) $("filter-status").append(el("option", { value }, value));
+  for (const [key, id] of [["status", "filter-status"], ["from", "filter-from"], ["to", "filter-to"]]) {
+    $(id).addEventListener("change", () => {
+      filters[key] = $(id).value;
+      renderList();
+    });
+  }
 
   window.addEventListener("hashchange", () => {
     const id = location.hash.slice(1);

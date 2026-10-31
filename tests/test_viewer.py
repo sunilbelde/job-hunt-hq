@@ -727,6 +727,27 @@ def test_page_changes_status_and_deletes(viewer):
     assert '"Content-Type": "application/json"' in html and 'credentials: "omit"' in html
 
 
+def test_page_puts_status_and_delete_on_list_entries(viewer):
+    html = viewer.get("/viewer").text
+    assert 'el("div", { class: "controls" }, statusControl(item), deleteButton(item), entryNote(item.id))' in html
+    assert 'el("button", { type: "button", class: "open"' in html
+    assert 'event.target.closest("button.open")' in html  # the controls never select the entry
+    details = html[html.index("function detailsCard("):html.index("function scoreCard(")]
+    assert "statusControl" not in details and "deleteButton" not in details
+    assert '["Status", detailStatus]' in details
+
+
+def test_page_filters_by_status_and_recorded_day(viewer):
+    html = viewer.get("/viewer").text
+    assert '<option value="">All statuses</option>' in html
+    assert '<label>Recorded from <input id="filter-from" type="date"></label>' in html
+    assert '<input id="filter-to" type="date">' in html
+    matches = html[html.index("function matches("):html.index("function updateCount(")]
+    assert "localDay(item.created_at)" in matches and "date_posted" not in matches
+    assert 'applications.filter(matches).length + " of " + total + noun' in html
+    assert '"No applications match these filters."' in html and '"Clear filters"' in html
+
+
 def test_page_has_no_inline_styles_or_handlers(viewer):
     html = viewer.get("/viewer").text
     assert re.search(r"<[^>]+\sstyle=", html) is None
