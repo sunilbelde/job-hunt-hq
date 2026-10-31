@@ -229,6 +229,19 @@ def test_status_endpoints_described(schema, path, result, tag):
     assert "No job for this application" in op["responses"]["404"]["description"]
 
 
+@pytest.mark.parametrize("model", ["ResumeJobStatus", "CoverLetterJobStatus", "ResumeReport"])
+def test_saved_path_documented_as_a_file_name(schema, model):
+    description = schema["components"]["schemas"][model]["properties"]["saved_path"]["description"]
+    assert "file name" in description.lower()
+    assert "/" not in description and "absolute" not in description.lower()
+
+
+def test_no_operation_says_saved_path_is_a_path(schema):
+    for key, op in operations(schema).items():
+        description = " ".join(op.get("description", "").split())
+        assert "absolute path" not in description and "at the job's `saved_path`" not in description, key
+
+
 def test_cover_letter_description(schema):
     op = operations(schema)[("post", "/cover-letter")]
     text = response_schema(schema, operations(schema)[("get", "/cover-letter/{application_id}/status")], "200")
