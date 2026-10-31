@@ -262,9 +262,16 @@ The public address never serves these pages. Requests sent from there change you
 
 `/viewer` is a page for reviewing what the service generated for each application, changing its status and deleting it. It is served wherever the API reference is: on the installed service only on the tailnet-only docs listener (`http://127.0.0.1:8081/viewer` on the Mac mini, `https://<machine>.<tailnet>.ts.net:8444/viewer` from your tailnet); the public address answers 404.
 
-The page opens straight to the list, with no API key: its endpoints need none, so anyone who can reach the docs listener (your tailnet) can read every application, posting and resume, change a status or delete an application. The left column lists every application, most recently generated first, with its match status and base → generated score. For the selected one it shows:
+The page opens straight to the list, with no API key: its endpoints need none, so anyone who can reach the docs listener (your tailnet) can read every application, posting and resume, change a status or delete an application. The left column lists every application, most recently generated first, with its match status and base → generated score. Each entry has its own controls, so you can work through the list without opening anything:
 
-- the application's details and links, with the posting text collapsed. **Status** is a dropdown of the six statuses: choosing one saves it at once and updates the list. **Delete** asks you to confirm, naming the company and role, then removes the application and its report (its PDFs stay in the output folder);
+- **Status** is a dropdown of the six statuses: choosing one saves it at once;
+- **Delete** asks you to confirm, naming the company and role, then removes the application and its report (its PDFs stay in the output folder).
+
+Above the list, **Status** and **Recorded from / to** narrow it. The dates are the days the applications were recorded in the database (in your browser's time zone, both days included), not the posting dates. Either date can be left empty. While a filter is set, the header shows how many applications match out of the total. Filters reset when the page reloads.
+
+Clicking an entry selects it and shows:
+
+- the application's details and links, including its status, with the posting text collapsed;
 - the base and generated scores against the threshold of 70, each with its keyword and requirement coverage;
 - **What was added**: the posting keywords the judge approved and the tailored resume uses, and the requirements that improved from missing or partial;
 - **Gaps still found**: the posting keywords and requirements the generated resume still doesn't cover, and the keywords the judge rejected with the reason;
