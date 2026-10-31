@@ -92,7 +92,7 @@ The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from b
 - **THEN** the connection is refused
 
 ### Requirement: Public address serves no API docs
-The installed service's public listener, the one published through Funnel, SHALL always run with API docs disabled, whatever `.env` contains, so the public Funnel address never serves the API reference pages, the OpenAPI document, the resume viewer or the viewer's read endpoints.
+The installed service's public listener, the one published through Funnel, SHALL always run with API docs disabled, whatever `.env` contains, so the public Funnel address never serves the API reference pages, the OpenAPI document, the resume viewer, the viewer's read endpoints or the viewer's write endpoints.
 
 #### Scenario: Env file enables docs
 - **WHEN** `.env` sets `API_DOCS_ENABLED=true` and the owner runs the install script
@@ -105,6 +105,10 @@ The installed service's public listener, the one published through Funnel, SHALL
 #### Scenario: Internet client probes the viewer
 - **WHEN** a client outside the tailnet requests `https://<mac-tailscale-name>/applications`, `/application/<id>`, `/application/<id>/resume.pdf` or `/resume/base.pdf`, with or without a valid `X-API-Key`
 - **THEN** it receives 404, with no application, report or file content
+
+#### Scenario: Internet client tries a viewer write
+- **WHEN** a client outside the tailnet sends `PATCH` or `DELETE` to `https://<mac-tailscale-name>/viewer/application/<id>` for an existing application, with or without a valid `X-API-Key`
+- **THEN** it receives 404 and the application is unchanged
 
 #### Scenario: Forged headers do not reach the docs
 - **WHEN** a client sends `GET /docs` to the public listener with any `Host`, `X-Forwarded-*` or `Tailscale-*` headers
@@ -180,10 +184,10 @@ The status script SHALL report whether the docs port answers `/docs`, alongside 
 - **THEN** the status output shows the docs listener as failing and the script exits non-zero
 
 ### Requirement: Smoke test checks the docs listener
-The smoke test SHALL check that the docs listener serves the reference page, the viewer page and an OpenAPI document with the fifteen documented operations, in addition to its public-address checks.
+The smoke test SHALL check that the docs listener serves the reference page, the viewer page and an OpenAPI document with the seventeen documented operations, in addition to its public-address checks.
 
 #### Scenario: Docs listener healthy
-- **WHEN** the smoke test runs and the docs listener answers `/docs` and `/viewer` with 200 and `/openapi.json` with the fifteen operations
+- **WHEN** the smoke test runs and the docs listener answers `/docs` and `/viewer` with 200 and `/openapi.json` with the seventeen operations
 - **THEN** the docs check passes
 
 #### Scenario: Docs listener missing
@@ -191,7 +195,7 @@ The smoke test SHALL check that the docs listener serves the reference page, the
 - **THEN** the smoke test fails before creating any application
 
 #### Scenario: Wrong operation count
-- **WHEN** the docs listener's OpenAPI document lists any number of operations other than fifteen, such as the thirteen from before the status endpoints
+- **WHEN** the docs listener's OpenAPI document lists any number of operations other than seventeen, such as the fifteen from before the viewer write endpoints
 - **THEN** the smoke test fails before creating any application
 
 ### Requirement: Service runs Claude with its own configuration
