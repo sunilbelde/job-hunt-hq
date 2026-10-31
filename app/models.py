@@ -216,7 +216,10 @@ class JobState(BaseModel):
     )
     started_at: str = Field(description="When the job started, as an ISO 8601 UTC timestamp.")
     finished_at: str | None = Field(description="When the job finished, or null while it runs.")
-    saved_path: str | None = Field(description="Absolute path of the saved PDF on the service host, or null unless `done`.")
+    saved_path: str | None = Field(
+        description="File name of the saved PDF, with no folder: `SUNIL BELDE.pdf` for a resume, `SUNIL BELDE - "
+        "Cover Letter.pdf` for a cover letter. Null unless `done`."
+    )
     error: str | None = Field(
         description="Why the job failed, or null unless `failed`: `Resume generation failed`, `Cover letter "
         "generation failed`, `Storage service unavailable` or `Interrupted by a service restart`. Never holds "
@@ -284,7 +287,7 @@ class ResumeReport(BaseModel):
     tailored: ScoreBreakdown | None = Field(description="The tailored resume's breakdown, or null unless tailored.")
     rejected_terms: list[RejectedTerm] = Field(description="Posting keywords the judge rejected. Empty unless tailored.")
     generated_at: str = Field(description="When the resume was generated, UTC, ISO 8601.")
-    saved_path: str = Field(description="Where the resume was saved on the service host.")
+    saved_path: str = Field(description="File name of the saved resume, `SUNIL BELDE.pdf`, with no folder.")
 
 
 class ReportSummary(BaseModel):

@@ -8,9 +8,9 @@ Each resume is matched against the application's posting. Claude scores the base
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
 | `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that scores the base resume against the stored posting, tailors it below 70, and saves it, and returns at once with `202 {"ok": true, "application_id", "status": "running", "started_at"}`. Poll `GET /resume/{application_id}/status` for the result. The job takes about 1–5 minutes when it runs Claude (capped at about 10) and keeps running if the client disconnects. Sending it again while the job runs starts no second run and returns the same 202, so a retry is safe. It never writes a cover letter (see `POST /cover-letter`). Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 503 store failure |
-| `GET /resume/{application_id}/status` | `X-API-Key` | The application's latest resume job: `200 {"ok": true, "application_id", "status", "started_at", "finished_at", "saved_path", "match", "error"}`. `status` is `running`, `done` (`saved_path` is the resume's absolute path and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`) or `failed` (`error` is `Resume generation failed`, `Storage service unavailable` or `Interrupted by a service restart`, and any earlier resume is kept). Poll every 10–15 seconds and give up after about 12 minutes. Served on the public address too, and returns no posting text. 401 bad key, 404 unknown application or `No job for this application`, 503 store failure |
+| `GET /resume/{application_id}/status` | `X-API-Key` | The application's latest resume job: `200 {"ok": true, "application_id", "status", "started_at", "finished_at", "saved_path", "match", "error"}`. `status` is `running`, `done` (`saved_path` is the resume's file name, `SUNIL BELDE.pdf`, never a path on the Mac, and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`) or `failed` (`error` is `Resume generation failed`, `Storage service unavailable` or `Interrupted by a service restart`, and any earlier resume is kept). Poll every 10–15 seconds and give up after about 12 minutes. Served on the public address too, and returns no posting text. 401 bad key, 404 unknown application or `No job for this application`, 503 store failure |
 | `POST /cover-letter` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that writes a cover letter tailored to the stored posting and saves it beside the resume as `SUNIL BELDE - Cover Letter.pdf`, replacing any earlier one, and returns `202` like `POST /resume`. Poll `GET /cover-letter/{application_id}/status`. Call it only for applications that ask for a letter; it needs no resume. The job takes about 1–3 minutes. Always tailored: an application without usable posting text (missing, under 50 words or over 60,000 characters) gets a 422 and no job. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body or no posting text, 503 store failure |
-| `GET /cover-letter/{application_id}/status` | `X-API-Key` | The application's latest cover letter job, as for the resume, with `text` (the same letter as plain text, for forms that take pasted text) in place of `match`. A failed job's `error` is `Cover letter generation failed`, `Storage service unavailable` or `Interrupted by a service restart` |
+| `GET /cover-letter/{application_id}/status` | `X-API-Key` | The application's latest cover letter job, as for the resume, with `saved_path` `SUNIL BELDE - Cover Letter.pdf` when done and `text` (the same letter as plain text, for forms that take pasted text) in place of `match`. A failed job's `error` is `Cover letter generation failed`, `Storage service unavailable` or `Interrupted by a service restart` |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
@@ -220,15 +220,16 @@ curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
 
 curl "localhost:8080/resume/$ID/status" -H "X-API-Key: $API_KEY"
 # {"ok":true,"application_id":"3f2b…","status":"done","started_at":"…","finished_at":"…",
-#  "saved_path":"/Users/you/Library/Application Support/job-hunt-hq/Acme/3f2b…/SUNIL BELDE.pdf",
+#  "saved_path":"SUNIL BELDE.pdf",
 #  "match":{"status":"no_job_description","threshold":70,"base_score":null,"tailored_score":null,"added_terms":[]},"error":null}
-# (this posting has no text, so nothing was scored and the job finished in seconds; with posting text, poll until done)
+# (this posting has no text, so nothing was scored and the job finished in seconds; with posting text, poll until done.
+#  saved_path is only the file name: the PDF is at OUTPUT_DIR/Acme/<id>/SUNIL BELDE.pdf on the Mac)
 
 curl -X POST localhost:8080/cover-letter -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
 # {"ok":false,"message":"Application has no usable posting text: add full_job_description (at least 50 words) with PATCH /application/{application_id} first"}
 # (422: this posting has no text. With one, it returns 202, and once done
-#  GET /cover-letter/$ID/status has "saved_path":"…/Acme/3f2b…/SUNIL BELDE - Cover Letter.pdf" and "text":"Dear Acme Hiring Team,\n\n…")
+#  GET /cover-letter/$ID/status has "saved_path":"SUNIL BELDE - Cover Letter.pdf" and "text":"Dear Acme Hiring Team,\n\n…")
 
 curl -X PATCH "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
@@ -271,7 +272,7 @@ The page opens straight to the list, with no API key: its read endpoints need no
 - the base resume and the generated resume side by side, rendered by the browser's own PDF viewer (stacked, base first, on a narrow screen);
 - a **Resume / Cover letter** switch above them: **Cover letter** shows the base letter (`data/COVER_LETTER.pdf`) beside the letter `POST /cover-letter` saved for the application, the same way. The letters load only when you switch to them, and the generated pane says so when no letter was written for the application. Choosing another application goes back to the resumes.
 
-The page loads nothing from other origins and runs only its own script. Its data comes from six `GET` endpoints, documented under the `viewer` tag in `/docs`: `/applications`, `/application/{id}`, `/application/{id}/resume.pdf`, `/application/{id}/cover-letter.pdf`, `/resume/base.pdf` and `/cover-letter/base.pdf`. A saved letter is looked for under the application's current company and then beside its resume, so one written before a company rename is still found. The scores come from a report `POST /resume` stores with each successful generation. Resumes generated before reports existed show "no report" next to their saved PDF; generating the resume again creates one.
+The page loads nothing from other origins and runs only its own script. Its data comes from six `GET` endpoints, documented under the `viewer` tag in `/docs`: `/applications`, `/application/{id}`, `/application/{id}/resume.pdf`, `/application/{id}/cover-letter.pdf`, `/resume/base.pdf` and `/cover-letter/base.pdf`. A saved letter is looked for under the application's current company and then beside its resume, so one written before a company rename is still found. The scores come from a report `POST /resume` stores with each successful generation. The report keeps where the PDF was saved, but `/application/{id}` shows only its file name. Resumes generated before reports existed show "no report" next to their saved PDF; generating the resume again creates one.
 
 Tests (no network needed):
 
@@ -375,13 +376,13 @@ Logs are in `~/Library/Logs/job-hunt-hq/`:
 
 ### 5. Verify
 
-On the Mac (the smoke test reads the saved PDF from disk, so it must run there):
+On the Mac (the smoke test reads the saved PDF from disk, so it must run there). The service returns only the file name, so the test looks for the PDF under `OUTPUT_DIR`, which defaults to the service's default. If your `.env` sets another `OUTPUT_DIR`, pass the same value:
 
 ```sh
-API_KEY=... scripts/smoke_test.sh http://127.0.0.1:8080
+API_KEY=... [OUTPUT_DIR=...] scripts/smoke_test.sh http://127.0.0.1:8080
 ```
 
-First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs`, `/viewer` and a schema with the fifteen operations. Then it records a synthetic application, starts its resume, polls `GET /resume/{id}/status` on the given address until the job is done (failing if it fails or takes over a minute), checks the file is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
+First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and that the docs listener (`DOCS_URL`, default `http://127.0.0.1:8081`; `DOCS_URL=off` skips it) serves `/docs`, `/viewer` and a schema with the fifteen operations. Then it records a synthetic application, starts its resume, polls `GET /resume/{id}/status` on the given address until the job is done (failing if it fails or takes over a minute), checks that `saved_path` is the bare file name and that the file in the application's folder under `OUTPUT_DIR` is a PDF, and removes the application and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 

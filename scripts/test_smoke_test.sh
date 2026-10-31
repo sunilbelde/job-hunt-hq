@@ -6,7 +6,7 @@ fail=0
 
 # Stub curl: http://x is the public base URL, http://d the docs listener. Status codes come from
 # STUB_DOCS (public docs and viewer) / STUB_DOCS_LISTENER / STUB_VIEWER_LISTENER / STUB_APP / STUB_PATCH / STUB_RESUME /
-# STUB_LETTER / STUB_STATUS, the schema from STUB_SCHEMA and match.status from STUB_MATCH; POST /application, PATCH,
+# STUB_LETTER / STUB_STATUS, the schema from STUB_SCHEMA, match.status from STUB_MATCH and saved_path from STUB_NAME; POST /application, PATCH,
 # DELETE, /resume, its status reads and /cover-letter calls are logged to STUB_LOG. STUB_LETTER_FILE makes /cover-letter
 # write a file. The resume job reads `running` for the first STUB_RUNNING polls, then STUB_JOB (default done).
 cat > "$tmp/curl" <<'STUB'
@@ -25,7 +25,7 @@ case "$*" in
   *"/resume/"*"/status"*) echo "STATUS $*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
     job=${STUB_JOB:-done}; [ "$(grep -c '^STATUS' "$STUB_LOG")" -le "${STUB_RUNNING:-0}" ] && job=running
     printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13","status":"%s","saved_path":"%s","match":{"status":"%s"},"error":"Resume generation failed"}\n%s' \
-      "$job" "$STUB_SAVED" "${STUB_MATCH:-no_job_description}" "${STUB_STATUS:-200}" ;;
+      "$job" "${STUB_NAME:-SUNIL BELDE.pdf}" "${STUB_MATCH:-no_job_description}" "${STUB_STATUS:-200}" ;;
   *"/application"*) echo "CREATE $*" >> "$STUB_LOG"
     printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}\n%s' "$STUB_APP" ;;
   *"/resume"*) echo "$*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
@@ -48,7 +48,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$fifteen} DOCS_URL=${DOCS_URL:-http://d} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$fifteen} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     POLL_SECONDS=0 JOB_TIMEOUT=${JOB_TIMEOUT:-3} sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -67,6 +67,9 @@ run 201 404; [ $? -ne 0 ] && deleted && ok "resume404 still cleans up" || bad "r
 run 200 401; [ $? -ne 0 ] && ! deleted && ok "resume401" || bad "resume401"
 run 201 202 none; [ $? -ne 0 ] && deleted && ok "missing file" || bad "missing file"
 run 201 202 '{"not":"pdf"}'; [ $? -ne 0 ] && ok "notpdf" || bad "notpdf"
+(STUB_NAME="$saved" run 201 202); [ $? -ne 0 ] && deleted && [ -f "$saved" ] && ok "a host path in saved_path fails" || bad "host path"
+(STUB_NAME="other.pdf" run 201 202); [ $? -ne 0 ] && deleted && ok "an unexpected file name fails" || bad "file name"
+(OUTPUT_DIR="$tmp/elsewhere" run 201 202); [ $? -ne 0 ] && deleted && ok "a file missing under OUTPUT_DIR fails and still cleans up" || bad "output dir"
 (STUB_DOCS=200 run 201 202); [ $? -ne 0 ] && ! deleted && ok "docs served fails before creating anything" || bad "docs served"
 run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes" || bad "docs listener healthy"
 (STUB_DOCS_LISTENER=404 run 201 202); [ $? -ne 0 ] && ! created_any && ok "docs listener missing fails before creating anything" || bad "docs listener missing"
