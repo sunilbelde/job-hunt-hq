@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     tailoring_timeout_seconds: int = Field(default=420, ge=60, le=480)
     tailoring_max_budget_usd: float = Field(default=3.0, gt=0)
     claude_bin: str = Field(default="claude", min_length=1)
+    # The viewer's Fill form button: the Herdr CLI, and the workspace its Claude Code tabs open in.
+    herdr_bin: str = Field(default="herdr", min_length=1)
+    fill_workspace: str = Field(default="Claude-Jobs-Automation", min_length=1)
     # Serves /docs, /redoc and /openapi.json. Local development only: the launchd job pins it off.
     api_docs_enabled: bool = False
 

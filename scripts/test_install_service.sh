@@ -15,6 +15,7 @@ stub() { printf '#!/bin/sh\n%s\n' "$2" > "$bin/$1"; chmod +x "$bin/$1"; }
 stub python3.12 'exit 0'
 stub tectonic 'exit 0'
 stub claude 'exit 0'
+stub herdr 'exit 0'
 # `serve status --json` answers with STUB_SERVE_JSON (default set in run()).
 stub tailscale 'case "$*" in
   *--json*) printf "%s" "$STUB_SERVE_JSON" ;;
@@ -124,6 +125,15 @@ check "installed plist names the Claude CLI found" \
 check "install runs the live tailoring check" \
   'grep -q "app.tailoring --check --live" "$calls" && grep -q "OK: tailoring ready (subscription token" "$tmp/out"'
 check "install never prints the credential" '! grep -q "secret-token" "$tmp/out"'
+
+check "installed plist names the Herdr CLI found" \
+  '[ "$(plutil -extract EnvironmentVariables.HERDR_BIN raw "$tmp/installed.plist")" = "$bin/herdr" ]'
+
+make_repo; mv "$bin/herdr" "$tmp/herdr.off"
+run install_service.sh; rc=$?
+mv "$tmp/herdr.off" "$bin/herdr"
+check "missing Herdr CLI still installs, with the bare name" \
+  '[ $rc -eq 0 ] && [ "$(plutil -extract EnvironmentVariables.HERDR_BIN raw "$tmp/installed.plist")" = herdr ]'
 
 make_repo; mv "$bin/claude" "$tmp/claude.off"
 run install_service.sh; rc=$?

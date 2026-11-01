@@ -92,6 +92,18 @@ def fake_generate(monkeypatch):
     monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output())
 
 
+@pytest.fixture(autouse=True)
+def no_real_herdr(monkeypatch):
+    """No test reaches the owner's real Herdr session: the default launcher's runner always fails."""
+    from app.form_filler import HerdrUnavailable
+
+    def runner(herdr_bin):
+        def run(args):
+            raise HerdrUnavailable("herdr is not available in tests")
+        return run
+    monkeypatch.setattr("app.form_filler.run_herdr", runner)
+
+
 FAKE_LETTER_PDF = b"%PDF-1.5 fake cover letter"
 FAKE_LETTER_TEXT = "Dear Acme Corp Hiring Team,\n\nA paragraph.\n\nSincerely,\nJane Doe\n"
 # A posting long enough for a cover letter (50 words or more).
