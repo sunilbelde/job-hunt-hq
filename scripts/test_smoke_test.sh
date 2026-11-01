@@ -41,6 +41,7 @@ thirteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"
 fifteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/resume/{application_id}/status":{"get":{}},"/cover-letter":{"post":{}},"/cover-letter/{application_id}/status":{"get":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/application/{application_id}/cover-letter.pdf":{"get":{}},"/resume/base.pdf":{"get":{}},"/cover-letter/base.pdf":{"get":{}}}}'
 seventeen="$(printf '%s' "$fifteen" | sed 's/}}$/,"\/viewer\/application\/{application_id}":{"patch":{},"delete":{}}}}/')"
 eighteen="$(printf '%s' "$seventeen" | sed 's/}}$/,"\/viewer\/application\/{application_id}\/fill":{"post":{}}}}/')"
+twenty="$(printf '%s' "$eighteen" | sed 's/}}$/,"\/viewer\/application\/{application_id}\/resume":{"post":{}},"\/viewer\/application\/{application_id}\/cover-letter":{"post":{}}}}/')"
 
 # run <app status> <resume status> [file content | "none"]
 # Call with prefixed variables inside ( ): sh keeps VAR=x assignments made before a function call.
@@ -50,7 +51,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$eighteen} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$twenty} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     POLL_SECONDS=0 JOB_TIMEOUT=${JOB_TIMEOUT:-3} sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -81,6 +82,7 @@ run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_SCHEMA="$thirteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "thirteen operations (before the status endpoints) fail" || bad "thirteen operations"
 (STUB_SCHEMA="$fifteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "fifteen operations (before the viewer writes) fail" || bad "fifteen operations"
 (STUB_SCHEMA="$seventeen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "seventeen operations (before the fill endpoint) fail" || bad "seventeen operations"
+(STUB_SCHEMA="$eighteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "eighteen operations (before the viewer generation endpoints) fail" || bad "eighteen operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 202); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 202); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off STUB_DOCS_LISTENER=404 run 201 202) && ok "DOCS_URL=off skips the docs listener" || bad "docs off"

@@ -184,10 +184,10 @@ The status script SHALL report whether the docs port answers `/docs`, alongside 
 - **THEN** the status output shows the docs listener as failing and the script exits non-zero
 
 ### Requirement: Smoke test checks the docs listener
-The smoke test SHALL check that the docs listener serves the reference page, the viewer page and an OpenAPI document with the seventeen documented operations, in addition to its public-address checks.
+The smoke test SHALL check that the docs listener serves the reference page, the viewer page and an OpenAPI document with the twenty documented operations, in addition to its public-address checks.
 
 #### Scenario: Docs listener healthy
-- **WHEN** the smoke test runs and the docs listener answers `/docs` and `/viewer` with 200 and `/openapi.json` with the seventeen operations
+- **WHEN** the smoke test runs and the docs listener answers `/docs` and `/viewer` with 200 and `/openapi.json` with the twenty operations
 - **THEN** the docs check passes
 
 #### Scenario: Docs listener missing
@@ -195,7 +195,7 @@ The smoke test SHALL check that the docs listener serves the reference page, the
 - **THEN** the smoke test fails before creating any application
 
 #### Scenario: Wrong operation count
-- **WHEN** the docs listener's OpenAPI document lists any number of operations other than seventeen, such as the fifteen from before the viewer write endpoints
+- **WHEN** the docs listener's OpenAPI document lists any number of operations other than twenty, such as the eighteen from before the viewer generation endpoints
 - **THEN** the smoke test fails before creating any application
 
 ### Requirement: Service runs Claude with its own configuration
@@ -272,3 +272,14 @@ The smoke test SHALL require `saved_path` to be exactly `JANE DOE.pdf`, with no 
 #### Scenario: No file under OUTPUT_DIR
 - **WHEN** no PDF exists at `<OUTPUT_DIR>/Smoke Test Co/<application_id>/<saved_path>`, for example because `OUTPUT_DIR` differs from the service's
 - **THEN** the smoke test fails, says that `OUTPUT_DIR` must match the service's, and still deletes the application it created
+
+### Requirement: Service finds the Herdr CLI
+The install script SHALL put the path of the Herdr CLI it finds on its `PATH` into the launchd job as `HERDR_BIN`, or the bare name `herdr` when none is found, without failing the install.
+
+#### Scenario: Herdr installed
+- **WHEN** `herdr` is on the installing shell's `PATH`
+- **THEN** the installed plist's `HERDR_BIN` is that path
+
+#### Scenario: Herdr missing
+- **WHEN** no `herdr` is found
+- **THEN** the install completes and `HERDR_BIN` is `herdr`
