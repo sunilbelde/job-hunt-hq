@@ -5,3 +5,9 @@ __pycache__/
 .DS_Store
 deploy/logging.json
 outputs/
+
+# Personal application profile (visa details): local only, never pushed
+data/Jane Doe Profile.docx
+
+# Personal job-application skill (local only)
+.claude/skills/job-application-form-filler/
