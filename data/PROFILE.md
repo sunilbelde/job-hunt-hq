@@ -101,6 +101,8 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Claude Skills (using and writing skills)
 - OpenSpec
 - Spec-driven development
+- 2+ years of daily use of AI coding agents (as of Oct 2026)
+- Shipped tools and products that customers or business teams use every week, backed by usage metrics
 
 ### Data engineering
 
