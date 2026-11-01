@@ -84,6 +84,7 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Ollama
 - Arize Phoenix (LLM tracing and observability)
 - Weights & Biases
+- W&B Weave (LLM tracing and evaluation)
 - RAG retrieval tuning (chunking strategies, embedding choice)
 - Prompt injection defenses
 - Tool calling / function calling
