@@ -90,6 +90,8 @@ NO_JOB = "no_job"
 # What the application list carries from each report: scores and status, never posting text.
 REPORT_SUMMARY = ("status", "threshold", "base_score", "tailored_score")
 LIST_COLUMNS = ("id", "company", "role", "status", "created_at", "updated_at")
+# What the application list carries from each job: its state, never its result or saved path.
+JOB_SUMMARY = ("status", "started_at", "finished_at", "error")
 
 # Stores created before statuses existed get the columns added in place; SQLite fills existing
 # rows with the default, so they all read as verified.
@@ -356,13 +358,16 @@ class ApplicationStore:
 
     def list_with_reports(self) -> list[dict]:
         """Every application without its posting text, most recently generated first, then most recently
-        recorded; each with a summary of its report, or report None."""
+        recorded; each with a summary of its report, or report None, and each kind's job state, or None."""
         columns = ", ".join(f"a.{name}" for name in LIST_COLUMNS)
         try:
             with closing(self._connect()) as conn:
+                jobs = ", ".join(f"{alias}.{name}" for alias in ("jr", "jc") for name in JOB_SUMMARY)
                 rows = conn.execute(
-                    f"SELECT {columns}, r.generated_at, r.report FROM applications a "
+                    f"SELECT {columns}, r.generated_at, r.report, {jobs} FROM applications a "
                     "LEFT JOIN resume_reports r ON r.application_id = a.id "
+                    "LEFT JOIN generation_jobs jr ON jr.application_id = a.id AND jr.kind = 'resume' "
+                    "LEFT JOIN generation_jobs jc ON jc.application_id = a.id AND jc.kind = 'cover_letter' "
                     "ORDER BY r.generated_at IS NULL, r.generated_at DESC, a.created_at DESC"
                 ).fetchall()
         except sqlite3.Error as exc:
@@ -370,7 +375,11 @@ class ApplicationStore:
         listed = []
         for row in rows:
             item = dict(zip(LIST_COLUMNS, row))
-            generated_at, report = row[len(LIST_COLUMNS):]
+            generated_at, report = row[len(LIST_COLUMNS):len(LIST_COLUMNS) + 2]
+            resume_job = row[len(LIST_COLUMNS) + 2:len(LIST_COLUMNS) + 2 + len(JOB_SUMMARY)]
+            letter_job = row[len(LIST_COLUMNS) + 2 + len(JOB_SUMMARY):]
+            item["jobs"] = {kind: dict(zip(JOB_SUMMARY, job)) if job[0] is not None else None
+                            for kind, job in (("resume", resume_job), ("cover_letter", letter_job))}
             if report is None:
                 item["report"] = None
             else:

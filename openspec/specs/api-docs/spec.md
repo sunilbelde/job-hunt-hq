@@ -41,11 +41,11 @@ When API docs are disabled, which is the default, the system SHALL NOT serve `/d
 - **THEN** `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume` and `POST /cover-letter` behave exactly as they do with docs enabled
 
 ### Requirement: Documented endpoint coverage
-The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}` and `POST /viewer/application/{application_id}/fill`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
+The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}`, `POST /viewer/application/{application_id}/fill`, `POST /viewer/application/{application_id}/resume` and `POST /viewer/application/{application_id}/cover-letter`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
 
 #### Scenario: All endpoints listed
 - **WHEN** the OpenAPI document is fetched
-- **THEN** it contains exactly those eighteen operations, each with a non-empty summary, description and tag
+- **THEN** it contains exactly those twenty operations, each with a non-empty summary, description and tag
 
 #### Scenario: Health alias
 - **WHEN** the OpenAPI document is fetched
@@ -241,3 +241,21 @@ The OpenAPI document's descriptions SHALL say that only `GET /health`, `POST /ap
 #### Scenario: Status endpoints described as local
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the `GET /resume/{application_id}/status` and `GET /cover-letter/{application_id}/status` descriptions say they are served only on the local listener, and no description contains the word "tailnet"
+
+### Requirement: Viewer generation endpoints documented
+The OpenAPI document SHALL tag both viewer generation endpoints `viewer`, mark them as needing no API key and taking no request body, and describe their 202 response with the same shape as `POST /resume`. The resume endpoint SHALL list 202, 403, 404 and 503; the cover letter endpoint 202, 403, 404, 422 and 503.
+
+#### Scenario: Generation endpoints listed
+- **WHEN** the OpenAPI document is fetched
+- **THEN** both operations are tagged `viewer`, have no security requirement and no request body, and list the statuses above
+
+#### Scenario: Descriptions
+- **WHEN** the OpenAPI document is fetched
+- **THEN** each description says it starts the same job as its keyed endpoint, shares that endpoint's one-running-job rule, is served only where the viewer is, and refuses cross-site requests
+
+### Requirement: Application list jobs documented
+The OpenAPI document SHALL describe the `jobs` field of each `GET /applications` entry with its `resume` and `cover_letter` members, each nullable and listing exactly `status`, `started_at`, `finished_at` and `error`, with `status` limited to `running`, `done` and `failed`.
+
+#### Scenario: Jobs field
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the list entry schema has `jobs` with nullable `resume` and `cover_letter` members of exactly those four fields, and no `saved_path`, `match` or `text`

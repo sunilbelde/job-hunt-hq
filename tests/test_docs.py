@@ -31,6 +31,8 @@ VIEWER_WRITES = [
     ("patch", "/viewer/application/{application_id}"),
     ("delete", "/viewer/application/{application_id}"),
     ("post", "/viewer/application/{application_id}/fill"),
+    ("post", "/viewer/application/{application_id}/resume"),
+    ("post", "/viewer/application/{application_id}/cover-letter"),
 ]
 HEALTH = [("get", "/health"), ("get", "/healthz")]
 RESPONSES = {
@@ -52,6 +54,8 @@ RESPONSES = {
     ("patch", "/viewer/application/{application_id}"): {"200", "403", "404", "422", "503"},
     ("delete", "/viewer/application/{application_id}"): {"200", "403", "404", "503"},
     ("post", "/viewer/application/{application_id}/fill"): {"200", "403", "404", "503"},
+    ("post", "/viewer/application/{application_id}/resume"): {"202", "403", "404", "503"},
+    ("post", "/viewer/application/{application_id}/cover-letter"): {"202", "403", "404", "422", "503"},
 }
 PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/application/{application_id}/cover-letter.pdf"),
                   ("get", "/resume/base.pdf"), ("get", "/cover-letter/base.pdf")]
@@ -100,8 +104,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_eighteen_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 18
+def test_documents_exactly_the_twenty_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 20
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -211,6 +215,35 @@ def test_viewer_fill_described(schema):
     assert "never submits" in op["description"] and "already_open" in op["description"]
     assert "Herdr unavailable" in op["responses"]["503"]["description"]
     assert "requestBody" not in op
+
+
+@pytest.mark.parametrize("path, keyed", [("resume", "POST /resume"), ("cover-letter", "POST /cover-letter")])
+def test_viewer_generation_described(schema, path, keyed):
+    op = operations(schema)[("post", f"/viewer/application/{{application_id}}/{path}")]
+    description = " ".join(op["description"].split())
+    assert f"same background {'resume' if path == 'resume' else 'cover letter'} job as `{keyed}`" in description
+    assert "starts no second run" in description and "any body is ignored" in description
+    assert "requestBody" not in op and "security" not in op
+    accepted = response_schema(schema, op, "202")
+    assert set(accepted["properties"]) == {"ok", "application_id", "status", "started_at"}
+
+
+def test_viewer_letter_422_described(schema):
+    op = operations(schema)[("post", "/viewer/application/{application_id}/cover-letter")]
+    assert "posting text" in op["responses"]["422"]["description"]
+
+
+def test_list_jobs_documented(schema):
+    item = schema["components"]["schemas"]["ApplicationListItem"]
+    assert "jobs" in item["required"]
+    jobs = schema["components"]["schemas"]["ApplicationJobs"]
+    assert set(jobs["properties"]) == {"resume", "cover_letter"}
+    for member in jobs["properties"].values():
+        refs = [option.get("$ref") for option in member["anyOf"]]
+        assert "#/components/schemas/JobSummary" in refs and {"type": "null"} in member["anyOf"]
+    summary = schema["components"]["schemas"]["JobSummary"]
+    assert set(summary["properties"]) == {"status", "started_at", "finished_at", "error"}
+    assert summary["properties"]["status"]["enum"] == ["running", "done", "failed"]
 
 
 def test_resume_body_schema(schema):

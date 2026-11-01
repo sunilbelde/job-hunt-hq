@@ -104,40 +104,71 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 #load-error button { margin-top: 12px; padding: 7px 14px; font: inherit; border: 1px solid var(--accent);
   background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; }
 #load-error .error { color: var(--bad); margin: 0; }
-#app { display: grid; grid-template-columns: 300px 1fr; height: calc(100% - 45px); }
+#app { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 45px); }
 #side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
-#filters { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line);
+#filters { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
+#filters input, #filters select, .actions select { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; }
+#filter-search { width: 100%; }
+#filters .filter-row { display: flex; align-items: center; gap: 8px; }
+#filters .filter-row select { flex: 1; }
+#filters .dates { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px;
   font-size: 12px; color: var(--muted); }
-#filters label { display: inline-flex; align-items: center; gap: 4px; }
-#filters select, #filters input, #list select { font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--panel); color: var(--text); }
-#list { flex: 1; overflow-y: auto; }
-#list > p { padding: 0 14px; }
-#list .entry { border-bottom: 1px solid var(--line); }
-#list .entry:hover { background: var(--accent-soft); }
-#list .entry.current { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-#list button.open { display: block; width: 100%; text-align: left; padding: 10px 14px 6px; border: 0;
-  background: transparent; color: inherit; font: inherit; cursor: pointer; }
-#list .company { font-weight: 600; }
-#list .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; font-size: 12px; }
-#list .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 0 14px 10px; font-size: 12px; }
-#list .controls .inline-note { flex-basis: 100%; }
-#list button.danger { padding: 1px 10px; }
-#list button.fill { padding: 1px 10px; font: inherit; border: 1px solid var(--accent); background: var(--accent-soft);
-  color: var(--accent); border-radius: 6px; cursor: pointer; }
-#list button.fill:hover { background: var(--accent); color: var(--panel); }
-#list button.fill:disabled { opacity: .6; cursor: default; }
-#list button.clear-filters { margin: 0 14px; padding: 4px 12px; font: inherit; border: 1px solid var(--line); border-radius: 6px;
+#filters .dates input { width: 100%; font-size: 12px; padding: 4px 6px; }
+button.link { padding: 4px 2px; border: 0; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+button.link:hover { text-decoration: underline; }
+#list { flex: 1; overflow-y: auto; padding: 6px; }
+#list > p { padding: 0 8px; }
+#list button.entry { display: grid; gap: 2px; width: 100%; margin: 0 0 4px; padding: 9px 11px; text-align: left; border: 1px solid transparent;
+  border-radius: 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+#list button.entry:hover { background: var(--bg); border-color: var(--line); }
+#list button.entry.current { background: var(--accent-soft); border-color: var(--accent); }
+#list button.entry:focus-visible, .actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.entry .line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.entry .company { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-score { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.entry-score .pass { color: var(--good); }
+.entry-score .fail { color: var(--bad); }
+.entry .role { font-size: 13px; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.entry .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: 12px; }
+.entry .meta .badge { padding: 0 7px; font-size: 11.5px; line-height: 18px; }
+.entry .date { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.pill { display: inline-block; padding: 0 7px; border: 1px solid currentColor; border-radius: 999px; font-size: 11.5px; line-height: 16px; }
+.pill.s-verified, .pill.s-withdrawn { color: var(--muted); }
+.pill.s-applied { color: var(--accent); }
+.pill.s-interviewing { color: var(--warn); }
+.pill.s-offer { color: var(--good); }
+.pill.s-rejected { color: var(--bad); }
+.running { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); }
+.dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+#list button.clear-filters { margin: 0 8px; padding: 4px 12px; font: inherit; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); color: inherit; cursor: pointer; }
+.actions { position: sticky; top: -16px; z-index: 1; margin: -16px -16px 14px; padding: 12px 16px; background: var(--panel);
+  border-bottom: 1px solid var(--line); }
+.actions .title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.actions .title .role { font-size: 17px; font-weight: 600; }
+.actions .title .company { color: var(--muted); }
+.actions .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.actions .field { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.actions .spacer { flex: 1; }
+button.action { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font: inherit; font-size: 13px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; }
+button.action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button.action.busy { color: var(--accent); }
+button.action:disabled, .actions select:disabled { opacity: .6; cursor: default; }
+.actions button.danger { background: transparent; }
+.action-note { margin: 8px 0 0; min-height: 1.2em; font-size: 12px; color: var(--good); }
+.action-note.error { color: var(--bad); }
 #detail { overflow-y: auto; padding: 16px; min-width: 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--accent-soft); color: var(--accent); }
 .badge.good { background: var(--good-soft); color: var(--good); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.bad { background: var(--bad-soft); color: var(--bad); }
-.title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
-.title-row .role { font-size: 18px; font-weight: 600; }
-dl.fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 0; }
+.card > h2:first-child { margin-bottom: 4px; }
+dl.fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0 0; }
 dl.fields dt { color: var(--muted); }
 dl.fields dd { margin: 0; overflow-wrap: anywhere; }
 details > summary { cursor: pointer; }
@@ -171,9 +202,7 @@ ul.items li { margin: 3px 0; }
 button.danger { padding: 4px 12px; font: inherit; border: 1px solid var(--bad); background: var(--bad-soft);
   color: var(--bad); border-radius: 6px; cursor: pointer; }
 button.danger:hover { background: var(--bad); color: var(--panel); }
-button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
-.inline-note { font-size: 12px; color: var(--good); }
-.inline-note.error { color: var(--bad); }
+button.danger:disabled { opacity: .6; cursor: default; }
 .note { padding: 8px 12px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); margin-bottom: 12px; }
 @media (max-width: 1100px) {
   .panes, .columns, .req .evidence { grid-template-columns: 1fr; }
@@ -181,6 +210,7 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
 @media (max-width: 800px) {
   #app { grid-template-columns: 1fr; height: auto; }
   #side { max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .actions { position: static; }
   .pane iframe { height: 80vh; }
 }
 </style>
@@ -199,9 +229,16 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
 <div id="app" class="hidden">
   <aside id="side">
     <div id="filters" role="search" aria-label="Filter applications">
-      <label>Status <select id="filter-status"><option value="">All statuses</option></select></label>
-      <label>Recorded from <input id="filter-from" type="date"></label>
-      <label>to <input id="filter-to" type="date"></label>
+      <input id="filter-search" type="search" placeholder="Search company or role" aria-label="Search company or role" autocomplete="off">
+      <div class="filter-row">
+        <select id="filter-status" aria-label="Status"><option value="">All statuses</option></select>
+        <button id="filter-clear" type="button" class="link hidden">Clear</button>
+      </div>
+      <div class="dates">
+        <span>Recorded</span>
+        <input id="filter-from" type="date" aria-label="Recorded from" title="Recorded from">
+        <input id="filter-to" type="date" aria-label="Recorded to" title="Recorded to">
+      </div>
     </div>
     <nav id="list" aria-label="Applications"></nav>
   </aside>
@@ -226,9 +263,22 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
   let generatedLetterUrl = null;  // blob: URL of the selected application's cover letter
   let loadToken = 0;           // ignores responses for an application no longer selected
   let detailStatus = null;     // the selected application's status text in the details
-  const filters = { status: "", from: "", to: "" };  // "from" and "to" are YYYY-MM-DD recorded days
-  const notes = {};            // application ID → { text, error }: its last save or delete note, kept across renders
-  const busy = new Set();      // application IDs with a write in flight
+  const filters = { q: "", status: "", from: "", to: "" };  // "from" and "to" are YYYY-MM-DD recorded days
+  const notes = {};            // application ID → { text, error }: its last action's note, shown in its action bar
+  const busy = new Set();      // application IDs with a status, fill or delete request in flight
+  const KINDS = ["resume", "cover_letter"];
+  const KIND = {
+    resume: { label: "resume", title: "Resume", short: "Resume", path: "resume" },
+    cover_letter: { label: "cover letter", title: "Cover letter", short: "Letter", path: "cover-letter" },
+  };
+  const POLL_MS = 5000;        // how often the list is re-read while a job runs
+  const starting = new Set();  // "<id>:<kind>" with a generation request in flight
+  const known = {};            // application ID → { resume, cover_letter }: generated PDFs this page has loaded
+  let bar = null;              // the selected application's action bar
+  let currentDoc = "resume";   // the document view shown: "resume" or "letter"
+  let letterView = null;       // the selected application's cover letter panes and whether they are loaded
+  let pollTimer = null;
+  let listEpoch = 0;           // bumped by every write, so a poll that started before it cannot undo it
 
   const $ = (id) => document.getElementById(id);
 
@@ -286,16 +336,31 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
 
   // --- the list ---
 
+  function itemOf(id) {
+    return applications.find((item) => item.id === id) || null;
+  }
+
+  function jobOf(id, kind) {
+    const item = itemOf(id);
+    return item && item.jobs ? item.jobs[kind] : null;
+  }
+
+  function isRunning(job) {
+    return Boolean(job && job.status === "running");
+  }
+
   function statusBadge(report) {
     if (!report) return el("span", { class: "badge warn" }, "No report");
     const kind = report.status === "tailored" ? "good" : report.status === "no_job_description" ? "warn" : "";
     return el("span", { class: "badge " + kind }, STATUS_LABEL[report.status] || report.status);
   }
 
-  function scoreText(report) {
+  // "38 → 61", the generated score coloured against the threshold.
+  function scoreNode(report) {
     if (!report || report.base_score === null || report.base_score === undefined) return null;
     const generated = report.status === "tailored" ? report.tailored_score : report.base_score;
-    return report.base_score + " → " + generated;
+    return el("span", { class: "entry-score" }, report.base_score + " → ",
+      el("strong", { class: generated >= report.threshold ? "pass" : "fail" }, generated));
   }
 
   function localDay(iso) {
@@ -305,12 +370,19 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
   }
 
+  function shortDay(iso) {
+    const date = new Date(iso);
+    return isNaN(date) ? "" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
   function filtering() {
-    return Boolean(filters.status || filters.from || filters.to);
+    return Boolean(filters.q.trim() || filters.status || filters.from || filters.to);
   }
 
   // Recorded is when the application was stored (created_at), never when the job was posted.
   function matches(item) {
+    const q = filters.q.trim().toLowerCase();
+    if (q && !item.company.toLowerCase().includes(q) && !item.role.toLowerCase().includes(q)) return false;
     if (filters.status && item.status !== filters.status) return false;
     const day = localDay(item.created_at);
     if (filters.from && day < filters.from) return false;
@@ -322,18 +394,36 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     const total = applications.length;
     const noun = total === 1 ? " application" : " applications";
     $("status").textContent = filtering() ? applications.filter(matches).length + " of " + total + noun : total + noun;
+    $("filter-clear").classList.toggle("hidden", !filtering());
   }
 
   function clearFilters() {
-    filters.status = filters.from = filters.to = "";
-    $("filter-status").value = $("filter-from").value = $("filter-to").value = "";
+    filters.q = filters.status = filters.from = filters.to = "";
+    $("filter-search").value = $("filter-status").value = $("filter-from").value = $("filter-to").value = "";
     renderList();
   }
 
-  function entryNote(id) {
-    const note = notes[id];
-    if (!note) return null;
-    return el("span", { class: note.error ? "inline-note error" : "inline-note", role: note.error ? "alert" : "status" }, note.text);
+  function runningNote(item) {
+    const kinds = KINDS.filter((kind) => isRunning(item.jobs && item.jobs[kind]));
+    if (!kinds.length) return null;
+    return el("span", { class: "running" }, el("span", { class: "dot", "aria-hidden": "true" }),
+      kinds.map((kind) => KIND[kind].short + "…").join(" "));
+  }
+
+  // One button per application: it only selects. Every action is in the selected application's action bar.
+  function entry(item) {
+    const current = item.id === selected;
+    return el("button", { type: "button", class: current ? "entry current" : "entry", "data-id": item.id,
+                          "aria-current": current ? "true" : "false" },
+      el("span", { class: "line" }, el("span", { class: "company" }, item.company), scoreNode(item.report)),
+      el("span", { class: "role" }, item.role),
+      el("span", { class: "meta" },
+        el("span", { class: "pill s-" + item.status }, item.status),
+        statusBadge(item.report),
+        runningNote(item),
+        el("span", { class: "date", title: "Recorded " + when(item.created_at) }, shortDay(item.created_at)),
+      ),
+    );
   }
 
   function renderList() {
@@ -350,20 +440,7 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
         el("button", { type: "button", class: "clear-filters" }, "Clear filters"));
       return;
     }
-    for (const item of shown) {
-      const score = scoreText(item.report);
-      nav.append(el("div", { class: item.id === selected ? "entry current" : "entry", "data-id": item.id },
-        el("button", { type: "button", class: "open", "aria-current": item.id === selected ? "true" : "false" },
-          el("div", { class: "company" }, item.company),
-          el("div", {}, item.role),
-          el("div", { class: "meta" },
-            statusBadge(item.report),
-            score ? el("span", { class: "muted" }, score) : null,
-          ),
-        ),
-        el("div", { class: "controls" }, statusControl(item), fillButton(item), deleteButton(item), entryNote(item.id)),
-      ));
-    }
+    nav.append(...shown.map(entry));
   }
 
   async function loadList() {
@@ -372,88 +449,207 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     applications = body.applications;
     $("app").classList.remove("hidden");
     renderList();
+    schedulePoll();
     const wanted = location.hash.slice(1);
     if (wanted && applications.some((a) => a.id === wanted)) select(wanted);
   }
 
-  // --- the detail ---
+  // --- job progress ---
 
-  // --- status and delete ---
+  function anyRunning() {
+    return applications.some((item) => KINDS.some((kind) => isRunning(item.jobs && item.jobs[kind])));
+  }
 
-  // Both are built per list entry from its list item; using them never selects the application.
-  // Their notes live in `notes`, so the re-render after a write (which may re-filter the list) keeps them.
+  // One timer at a time, and only while some job runs.
+  function schedulePoll() {
+    if (pollTimer === null && anyRunning()) pollTimer = setTimeout(poll, POLL_MS);
+  }
 
-  function statusControl(app) {
-    const select = el("select", { "aria-label": "Status of " + app.company + " – " + app.role, disabled: busy.has(app.id) },
-      APPLICATION_STATUSES.map((value) => el("option", { value, selected: value === app.status }, value)));
-    select.addEventListener("change", async () => {
-      const wanted = select.value;
-      busy.add(app.id);
-      notes[app.id] = { text: "Saving…" };
-      renderList();
-      try {
-        const body = await api("/viewer/application/" + app.id, false, { method: "PATCH", body: { status: wanted } });
-        app.status = body.status;
-        if (selected === app.id && detailStatus) detailStatus.textContent = body.status;
-        notes[app.id] = { text: "Saved" };
-      } catch (error) {
-        notes[app.id] = { text: "Not saved: " + error.message, error: true };  // the re-render shows the stored status
-      } finally {
-        busy.delete(app.id);
-        renderList();
+  async function poll() {
+    pollTimer = null;
+    const epoch = listEpoch;
+    let body;
+    try {
+      body = await api("/applications");
+    } catch (_) {
+      if (pollTimer === null) pollTimer = setTimeout(poll, POLL_MS);  // keep the last list and try again
+      return;
+    }
+    if (epoch !== listEpoch) return schedulePoll();  // a write landed meanwhile; this list may predate it
+    const before = new Map(applications.map((item) => [item.id, item.jobs || {}]));
+    applications = body.applications;
+    for (const item of applications) {
+      for (const kind of KINDS) {
+        const now = item.jobs && item.jobs[kind];
+        if (isRunning((before.get(item.id) || {})[kind]) && now && !isRunning(now)) finished(item, kind, now);
       }
-    });
-    return select;
+    }
+    renderList();
+    renderActions();
+    schedulePoll();
+  }
+
+  function finished(item, kind, job) {
+    const title = KIND[kind].title;
+    if (job.status === "failed") {
+      notes[item.id] = { text: title + " failed: " + (job.error || "unknown error"), error: true };
+      return;  // the documents shown are still the current ones
+    }
+    (known[item.id] = known[item.id] || {})[kind] = true;
+    notes[item.id] = { text: title + " generated" };
+    if (item.id !== selected) return;
+    if (kind === "resume") select(item.id, { keepDocument: true });  // new PDF, scores, additions and gaps
+    else refreshLetters();
+  }
+
+  // --- the action bar ---
+
+  function hasDocument(id, kind) {
+    const item = itemOf(id);
+    const job = jobOf(id, kind);
+    return Boolean((job && job.status === "done") || (kind === "resume" && item && item.report)
+      || (known[id] && known[id][kind]));
+  }
+
+  function actionBar(app) {
+    const status = el("select", { "aria-label": "Status of " + app.company + " – " + app.role },
+      APPLICATION_STATUSES.map((value) => el("option", { value, selected: value === app.status }, value)));
+    status.addEventListener("change", () => changeStatus(app, status.value));
+    const buttons = {};
+    for (const kind of KINDS) {
+      buttons[kind] = el("button", { type: "button", class: "action", "data-kind": kind });
+      buttons[kind].addEventListener("click", () => startGeneration(app, kind));
+    }
+    const fill = el("button", { type: "button", class: "action",
+      title: "Open a Claude Code tab in Herdr that fills this application's form" }, "Fill form");
+    fill.addEventListener("click", () => fillForm(app));
+    const del = el("button", { type: "button", class: "danger" }, "Delete");
+    del.addEventListener("click", () => deleteApplication(app));
+    const note = el("p", { class: "action-note", role: "status", "aria-live": "polite" });
+    bar = { id: app.id, status, buttons, fill, del, note };
+    const node = el("section", { class: "actions", "aria-label": "Actions" },
+      el("div", { class: "title" }, el("span", { class: "role" }, app.role), el("span", { class: "company" }, app.company)),
+      el("div", { class: "row" },
+        el("label", { class: "field" }, "Status", status),
+        buttons.resume, buttons.cover_letter, fill, el("span", { class: "spacer" }), del),
+      note);
+    renderActions();
+    return node;
+  }
+
+  // Brings the action bar in line with the list, the requests in flight and the last note.
+  function renderActions() {
+    if (!bar || bar.id !== selected) return;
+    const id = bar.id;
+    const item = itemOf(id);
+    const writing = busy.has(id);
+    if (item && !writing) bar.status.value = item.status;
+    bar.status.disabled = bar.fill.disabled = bar.del.disabled = writing;
+    for (const kind of KINDS) {
+      const running = isRunning(jobOf(id, kind));
+      const pending = starting.has(id + ":" + kind);
+      const button = bar.buttons[kind];
+      button.disabled = running || pending;
+      button.classList.toggle("busy", running || pending);
+      button.replaceChildren(...(running || pending
+        ? [el("span", { class: "dot", "aria-hidden": "true" }), (pending ? "Starting " : "Generating ") + KIND[kind].label + "…"]
+        : [(hasDocument(id, kind) ? "Regenerate " : "Generate ") + KIND[kind].label]));
+    }
+    const note = notes[id];
+    bar.note.textContent = note ? note.text : "";
+    bar.note.classList.toggle("error", Boolean(note && note.error));
+  }
+
+  async function changeStatus(app, wanted) {
+    busy.add(app.id);
+    notes[app.id] = { text: "Saving…" };
+    renderActions();
+    try {
+      const body = await api("/viewer/application/" + app.id, false, { method: "PATCH", body: { status: wanted } });
+      listEpoch++;
+      const item = itemOf(app.id);
+      if (item) item.status = body.status;
+      app.status = body.status;
+      if (selected === app.id && detailStatus) detailStatus.textContent = body.status;
+      notes[app.id] = { text: "Status saved" };
+    } catch (error) {
+      notes[app.id] = { text: "Not saved: " + error.message, error: true };  // the re-render shows the stored status
+    } finally {
+      busy.delete(app.id);
+      renderList();
+      renderActions();
+    }
+  }
+
+  // Starts the same background job as the keyed API; regenerating asks first, since the new file replaces the old.
+  async function startGeneration(app, kind) {
+    const label = KIND[kind].label;
+    if (hasDocument(app.id, kind) && !confirm("Regenerate the " + label + " for " + app.company + " – " + app.role
+        + "? The new " + label + " replaces the current one when the run finishes.")) return;
+    const key = app.id + ":" + kind;
+    starting.add(key);
+    notes[app.id] = { text: "Starting the " + label + "…" };
+    renderActions();
+    try {
+      const body = await api("/viewer/application/" + app.id + "/" + KIND[kind].path, false, { method: "POST" });
+      listEpoch++;
+      const item = itemOf(app.id);
+      if (item) {
+        item.jobs = item.jobs || { resume: null, cover_letter: null };
+        item.jobs[kind] = { status: "running", started_at: body.started_at, finished_at: null, error: null };
+      }
+      notes[app.id] = { text: KIND[kind].title + " started; it takes a few minutes" };
+      schedulePoll();
+    } catch (error) {
+      notes[app.id] = { text: KIND[kind].title + " not started: " + error.message, error: true };
+    } finally {
+      starting.delete(key);
+      renderList();
+      renderActions();
+    }
   }
 
   // Opens a Herdr tab running Claude Code with the form-filler skill for this application. Nothing is sent but
   // the ID; the session asks for anything else in its own tab, and never submits unless asked there.
-  function fillButton(app) {
-    const button = el("button", { type: "button", class: "fill", disabled: busy.has(app.id),
-      title: "Open a Claude Code tab in Herdr that fills this application's form" }, "Fill form");
-    button.addEventListener("click", async () => {
-      busy.add(app.id);
-      notes[app.id] = { text: "Opening…" };
-      renderList();
-      try {
-        const body = await api("/viewer/application/" + app.id + "/fill", false, { method: "POST" });
-        notes[app.id] = { text: (body.already_open ? "Already open in Herdr tab " : "Opened Herdr tab ") + body.tab_label };
-      } catch (error) {
-        notes[app.id] = { text: "Not opened: " + error.message, error: true };
-      } finally {
-        busy.delete(app.id);
-        renderList();
-      }
-    });
-    return button;
+  async function fillForm(app) {
+    busy.add(app.id);
+    notes[app.id] = { text: "Opening…" };
+    renderActions();
+    try {
+      const body = await api("/viewer/application/" + app.id + "/fill", false, { method: "POST" });
+      notes[app.id] = { text: (body.already_open ? "Already open in Herdr tab " : "Opened Herdr tab ") + body.tab_label };
+    } catch (error) {
+      notes[app.id] = { text: "Not opened: " + error.message, error: true };
+    } finally {
+      busy.delete(app.id);
+      renderActions();
+    }
   }
 
-  function deleteButton(app) {
-    const button = el("button", { type: "button", class: "danger", disabled: busy.has(app.id) }, "Delete");
-    button.addEventListener("click", async () => {
-      if (!confirm("Delete " + app.company + " – " + app.role + "? This cannot be undone.")) return;
-      busy.add(app.id);
-      notes[app.id] = { text: "Deleting…" };
-      renderList();
-      try {
-        await api("/viewer/application/" + app.id, false, { method: "DELETE" });
-      } catch (error) {
-        busy.delete(app.id);
-        notes[app.id] = { text: "Not deleted: " + error.message, error: true };
-        renderList();
-        return;
-      }
+  async function deleteApplication(app) {
+    if (!confirm("Delete " + app.company + " – " + app.role + "? This cannot be undone.")) return;
+    busy.add(app.id);
+    notes[app.id] = { text: "Deleting…" };
+    renderActions();
+    try {
+      await api("/viewer/application/" + app.id, false, { method: "DELETE" });
+    } catch (error) {
       busy.delete(app.id);
-      delete notes[app.id];
-      removed(app.id);
-    });
-    return button;
+      notes[app.id] = { text: "Not deleted: " + error.message, error: true };
+      renderActions();
+      return;
+    }
+    listEpoch++;
+    busy.delete(app.id);
+    delete notes[app.id];
+    removed(app.id);
   }
 
   function removed(id) {
     applications = applications.filter((a) => a.id !== id);
     if (selected === id) {
       selected = null;
+      bar = letterView = null;
       loadToken++;  // drop any PDF still loading for it
       for (const url of [generatedUrl, generatedLetterUrl]) if (url) URL.revokeObjectURL(url);
       generatedUrl = generatedLetterUrl = null;
@@ -462,6 +658,8 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     }
     renderList();
   }
+
+  // --- the detail ---
 
   function detailsCard(app) {
     detailStatus = el("span", {}, app.status);
@@ -474,7 +672,7 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
       ["Recorded", when(app.created_at)], ["Updated", when(app.updated_at)],
     ].filter(([, value]) => value);
     return el("section", { class: "card" },
-      el("div", { class: "title-row" }, el("span", { class: "role" }, app.role), el("span", {}, app.company)),
+      el("h2", {}, "Details"),
       el("dl", { class: "fields" }, fields.map(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
       app.full_job_description
         ? el("details", { class: "posting-wrap" }, el("summary", {}, "Posting text"), el("pre", { class: "posting" }, app.full_job_description))
@@ -626,6 +824,8 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
       if (token !== loadToken) return;
       generatedUrl = URL.createObjectURL(blob);
       showPdf(generatedPane, generatedUrl, "Generated resume");
+      (known[app.id] = known[app.id] || {}).resume = true;
+      renderActions();
     } catch (error) {
       if (token !== loadToken) return;
       if (error.status === 404) {
@@ -652,6 +852,8 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
       if (token !== loadToken) return;
       generatedLetterUrl = URL.createObjectURL(blob);
       showPdf(generatedPane, generatedLetterUrl, "Generated cover letter");
+      (known[app.id] = known[app.id] || {}).cover_letter = true;
+      renderActions();
     } catch (error) {
       if (token !== loadToken) return;
       showEmpty(generatedPane, error.status === 404
@@ -662,24 +864,36 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
 
   // Resume and cover letter panes share one spot; the letters are fetched only the first time they are shown.
   function documentSwitch(app, token, resumePanes, letterPanes) {
+    const view = letterView = { app, token, panes: letterPanes, loaded: false };
     const resumeTab = el("button", { type: "button", "aria-pressed": "true", "data-doc": "resume" }, "Resume");
     const letterTab = el("button", { type: "button", "aria-pressed": "false", "data-doc": "letter" }, "Cover letter");
     const node = el("div", { class: "switch", role: "group", "aria-label": "Document" }, resumeTab, letterTab);
-    let lettersLoaded = false;
-    node.addEventListener("click", (event) => {
-      const button = event.target.closest("button[data-doc]");
-      if (!button) return;
-      const letter = button.getAttribute("data-doc") === "letter";
+    function show(letter) {
+      currentDoc = letter ? "letter" : "resume";
       resumeTab.setAttribute("aria-pressed", String(!letter));
       letterTab.setAttribute("aria-pressed", String(letter));
       resumePanes.classList.toggle("hidden", letter);
       letterPanes.classList.toggle("hidden", !letter);
-      if (letter && !lettersLoaded) {
-        lettersLoaded = true;
+      if (letter && !view.loaded) {
+        view.loaded = true;
         loadLetters(app, token, letterPanes);
       }
+    }
+    node.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-doc]");
+      if (button) show(button.getAttribute("data-doc") === "letter");
     });
+    if (currentDoc === "letter") show(true);
     return node;
+  }
+
+  // A new cover letter for the selected application: fetch it now if the letters are shown, else on the next switch.
+  function refreshLetters() {
+    if (!letterView) return;
+    if (generatedLetterUrl) { URL.revokeObjectURL(generatedLetterUrl); generatedLetterUrl = null; }
+    letterView.panes.replaceChildren();
+    letterView.loaded = currentDoc === "letter";
+    if (letterView.loaded) loadLetters(letterView.app, letterView.token, letterView.panes);
   }
 
   function applyMeters(root) {
@@ -687,16 +901,20 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     for (const fill of root.querySelectorAll(".fill")) fill.style.width = fill.getAttribute("data-width");
   }
 
-  async function select(id) {
+  // keepDocument: reload after a finished job without leaving the document view or the scroll position.
+  async function select(id, { keepDocument = false } = {}) {
     selected = id;
     detailStatus = null;
+    bar = letterView = null;
+    if (!keepDocument) currentDoc = "resume";
     const token = ++loadToken;
     if (generatedUrl) { URL.revokeObjectURL(generatedUrl); generatedUrl = null; }
     if (generatedLetterUrl) { URL.revokeObjectURL(generatedLetterUrl); generatedLetterUrl = null; }
     if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
     renderList();
     const detail = $("detail");
-    detail.replaceChildren(el("p", { class: "muted" }, "Loading…"));
+    const scroll = detail.scrollTop;
+    if (!keepDocument) detail.replaceChildren(el("p", { class: "muted" }, "Loading…"));
     let body;
     try {
       body = await api("/application/" + id);
@@ -707,7 +925,7 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     if (token !== loadToken) return;
     const app = body.application;
     const report = body.report && body.report.version === 1 ? body.report : null;
-    const parts = [detailsCard(app)];
+    const parts = [actionBar(app), detailsCard(app)];
     let generatedNote = null;
     let legacyNote = null;
     if (!report) {
@@ -725,7 +943,7 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
     parts.push(documentSwitch(app, token, resumePanes, letterPanes), resumePanes, letterPanes);
     detail.replaceChildren(...parts);
     applyMeters(detail);
-    detail.scrollTop = 0;
+    detail.scrollTop = keepDocument ? scroll : 0;
     loadPdfs(app, token, basePane, generatedPane, legacyNote);
   }
 
@@ -746,8 +964,13 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
 
   $("list").addEventListener("click", (event) => {
     if (event.target.closest("button.clear-filters")) return clearFilters();
-    const button = event.target.closest("button.open");
-    if (button) select(button.closest(".entry").getAttribute("data-id"));
+    const button = event.target.closest("button.entry");
+    if (button) select(button.getAttribute("data-id"));
+  });
+  $("filter-clear").addEventListener("click", clearFilters);
+  $("filter-search").addEventListener("input", () => {
+    filters.q = $("filter-search").value;
+    renderList();
   });
 
   for (const value of APPLICATION_STATUSES) $("filter-status").append(el("option", { value }, value));

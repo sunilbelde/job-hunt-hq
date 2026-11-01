@@ -17,4 +17,4 @@
 - [x] 3.2 Update `scripts/smoke_test.sh` and `scripts/test_smoke_test.sh` to eighteen operations.
 - [x] 3.3 Pass `HERDR_BIN` through `scripts/install_service.sh` and the plist template; cover it in `scripts/test_install_service.sh`.
 - [x] 3.4 Update README (viewer section, settings table, smoke test) and `.env.example`.
-- [ ] 3.5 Reinstall the service and click **Fill form** on one application at the Mac mini.
+- [x] 3.5 Reinstall the service and click **Fill form** on one application at the Mac mini.
