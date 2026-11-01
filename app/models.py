@@ -234,8 +234,8 @@ class JobState(BaseModel):
     started_at: str = Field(description="When the job started, as an ISO 8601 UTC timestamp.")
     finished_at: str | None = Field(description="When the job finished, or null while it runs.")
     saved_path: str | None = Field(
-        description="File name of the saved PDF, with no folder: `JANE DOE.pdf` for a resume, `JANE DOE - "
-        "Cover Letter.pdf` for a cover letter. Null unless `done`."
+        description="File name of the saved PDF, with no folder: `<name>.pdf` for a resume, `<name> - Cover "
+        "Letter.pdf` for a cover letter, `<name>` being the `\\name` in the base resume. Null unless `done`."
     )
     error: str | None = Field(
         description="Why the job failed, or null unless `failed`: `Resume generation failed`, `Cover letter "
@@ -304,7 +304,9 @@ class ResumeReport(BaseModel):
     tailored: ScoreBreakdown | None = Field(description="The tailored resume's breakdown, or null unless tailored.")
     rejected_terms: list[RejectedTerm] = Field(description="Posting keywords the judge rejected. Empty unless tailored.")
     generated_at: str = Field(description="When the resume was generated, UTC, ISO 8601.")
-    saved_path: str = Field(description="File name of the saved resume, `JANE DOE.pdf`, with no folder.")
+    saved_path: str = Field(
+        description="File name of the saved resume, `<name>.pdf` (the base resume's `\\name`), with no folder."
+    )
 
 
 class ReportSummary(BaseModel):

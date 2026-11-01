@@ -1,6 +1,8 @@
 #!/bin/sh
 # Tests scripts/smoke_test.sh with a stubbed curl (no network).
 here=$(cd "$(dirname "$0")" && pwd)
+# The smoke test expects files named after the sample resume's \name{JANE DOE}.
+export JOB_HUNT_DATA_DIR="$here/../data/samples"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 

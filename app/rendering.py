@@ -1,9 +1,12 @@
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "data"
+# The owner's resume template and profile: gitignored files in data/. JOB_HUNT_DATA_DIR overrides the folder;
+# the tests point it at data/samples, the made-up copies that are committed.
+TEMPLATE_DIR = Path(os.environ.get("JOB_HUNT_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 RENDER_TIMEOUT_SECONDS = 120
 TEMPLATE_SUFFIXES = {".tex", ".cls", ".sty", ".png", ".jpg", ".jpeg"}
 

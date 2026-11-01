@@ -8,6 +8,7 @@
 # without starting one either. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
+# The expected file name comes from \name{...} in data/BASE.tex (JOB_HUNT_DATA_DIR overrides the folder).
 # Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081] [JOB_TIMEOUT=60] [OUTPUT_DIR=<the service's>] scripts/smoke_test.sh <base_url>
 set -eu
 
@@ -38,6 +39,11 @@ job_timeout=${JOB_TIMEOUT:-60}
 poll_seconds=${POLL_SECONDS:-1}  # tests set 0; each poll counts as one second of JOB_TIMEOUT
 # The service returns only the file name, so the folder is found from OUTPUT_DIR (same default as the service).
 output_dir=${OUTPUT_DIR:-$HOME/Library/Application Support/job-hunt-hq}
+# The service names its files after \name{...} in its BASE.tex (app/storage.py's owner_name); read it the same way.
+data_dir=${JOB_HUNT_DATA_DIR:-$(cd "$(dirname "$0")/.." && pwd)/data}
+owner=$(sed -n 's/^\\name{\([^{}]*\)}.*/\1/p' "$data_dir/BASE.tex" 2>/dev/null | head -n 1 | tr '/\\:' '---' \
+  | sed 's/^[ .]*//; s/[ .]*$//')
+owner=${owner:-Resume}
 
 json_field() {
   python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
@@ -163,8 +169,8 @@ fi
 name=$(printf '%s' "$body" | json_field saved_path)
 case "$name" in
   */*) echo "FAIL: saved_path is a path ($name), want only the file name" >&2; exit 1 ;;
-  "JANE DOE.pdf") ;;
-  *) echo "FAIL: saved_path is $name, want JANE DOE.pdf" >&2; exit 1 ;;
+  "$owner.pdf") ;;
+  *) echo "FAIL: saved_path is $name, want $owner.pdf" >&2; exit 1 ;;
 esac
 saved="$output_dir/Smoke Test Co/$application_id/$name"
 echo "Saved: $saved"
@@ -179,7 +185,7 @@ fi
 echo "OK: resume saved as a PDF ($(wc -c < "$saved" | tr -d ' ') bytes)"
 
 # A cover letter is always tailored, so without posting text the service refuses it before any Claude run.
-letter="$(dirname "$saved")/JANE DOE - Cover Letter.pdf"
+letter="$(dirname "$saved")/$owner - Cover Letter.pdf"
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/cover-letter" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
   -d "{\"application_id\":\"$application_id\"}")

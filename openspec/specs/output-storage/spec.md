@@ -48,8 +48,19 @@ A resume file SHALL appear at its path only once completely written. Replacing a
 - **WHEN** writing a replacement resume fails partway
 - **THEN** the previously saved resume at that path is unchanged and no temporary file is left behind
 
+### Requirement: Saved files are named after the owner
+The resume and cover letter file names SHALL use the owner's name: the `\name{...}` of the base resume (`data/BASE.tex`) as written, read once at startup, with `/`, `\`, `:` and control characters replaced by `-` and leading and trailing spaces and dots removed. Without a readable `BASE.tex` or a non-empty name, the name SHALL be `Resume`. The scenarios in these specs use the sample resume's `\name{JANE DOE}`.
+
+#### Scenario: Name from the base resume
+- **WHEN** `data/BASE.tex` has `\name{JANE DOE}`
+- **THEN** resumes are saved as `JANE DOE.pdf` and cover letters as `JANE DOE - Cover Letter.pdf`
+
+#### Scenario: No name
+- **WHEN** `data/BASE.tex` is missing or has no `\name{...}` line
+- **THEN** resumes are saved as `Resume.pdf` and cover letters as `Resume - Cover Letter.pdf`
+
 ### Requirement: Resume file path
-The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is the application's UUID in lowercase. Missing folders SHALL be created.
+The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/<name>.pdf` (`<name>` as in the requirement above), where the company folder is derived from the application's stored `company` at generation time and `application_id` is the application's UUID in lowercase. Missing folders SHALL be created.
 
 #### Scenario: First resume for an application
 - **WHEN** a resume is generated for application `<id>` whose company is "Acme Corp" and no folders exist yet
@@ -65,7 +76,7 @@ The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<a
 - **AND** the file under `<OUTPUT_DIR>/Acme/<id>/` is left unchanged
 
 ### Requirement: Cover letter file path
-The cover letter for an application SHALL be saved at `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE - Cover Letter.pdf`, the folder that application's resume uses, with the company folder derived from the stored company exactly as for the resume. The path SHALL NOT depend on whether a resume exists.
+The cover letter for an application SHALL be saved at `<OUTPUT_DIR>/<company folder>/<application_id>/<name> - Cover Letter.pdf`, the folder that application's resume uses, with the company folder derived from the stored company exactly as for the resume. The path SHALL NOT depend on whether a resume exists.
 
 #### Scenario: Location next to the resume
 - **WHEN** a cover letter is generated for application `<id>` whose company is "Acme Corp"
