@@ -597,7 +597,8 @@ def test_list_orders_by_generation_then_recording(store, db_path):
     assert listed[0]["report"] == {"generated_at": "2026-10-20T10:00:00Z", "status": "tailored", "threshold": 70,
                                    "base_score": 57, "tailored_score": 81}
     assert listed[2]["report"] is None
-    assert set(listed[2]) == {"id", "company", "role", "status", "created_at", "updated_at", "report"}
+    assert set(listed[2]) == {"id", "company", "role", "status", "created_at", "updated_at", "report", "jobs"}
+    assert listed[2]["jobs"] == {"resume": None, "cover_letter": None}
     assert "secret posting" not in repr(listed)
 
 
@@ -626,6 +627,30 @@ def test_old_store_gets_the_jobs_table_with_rows_unchanged(old_store_path):
     assert len(rows) == 2 and all(item["report"] is None for item in rows)
     assert jobs(old_store_path) == []
     assert all(store.get_job(item["id"], "resume") == NO_JOB for item in rows)
+
+
+def test_list_carries_job_states_only(store):
+    running, _ = store.record(row("https://example.com/1"))
+    finished, _ = store.record(row("https://example.com/2"))
+    idle, _ = store.record(row("https://example.com/3"))
+    store.start_job(running, "resume", "2026-10-28T10:00:00Z")
+    store.start_job(running, "cover_letter", "2026-10-28T10:00:01Z")
+    store.finish_job(running, "cover_letter", "2026-10-28T10:00:01Z", "failed", error="Cover letter generation failed")
+    store.start_job(finished, "resume", "2026-10-28T09:00:00Z")
+    store.finish_job(finished, "resume", "2026-10-28T09:00:00Z", "done", saved_path="/out/Acme/secret/JANE DOE.pdf",
+                     result={"match": MATCH})
+    store.start_job(finished, "cover_letter", "2026-10-28T09:00:01Z")
+    store.finish_job(finished, "cover_letter", "2026-10-28T09:00:01Z", "done", saved_path="/out/Acme/secret/letter.pdf",
+                     result={"text": "Dear hiring team, secret letter"})
+    by_id = {item["id"]: item["jobs"] for item in store.list_with_reports()}
+    assert by_id[running]["resume"] == {"status": "running", "started_at": "2026-10-28T10:00:00Z", "finished_at": None,
+                                        "error": None}
+    assert by_id[running]["cover_letter"]["status"] == "failed"
+    assert by_id[running]["cover_letter"]["error"] == "Cover letter generation failed"
+    assert by_id[finished]["resume"]["status"] == by_id[finished]["cover_letter"]["status"] == "done"
+    assert set(by_id[finished]["resume"]) == {"status", "started_at", "finished_at", "error"}
+    assert by_id[idle] == {"resume": None, "cover_letter": None}
+    assert "secret" not in repr(by_id) and "no_job_description" not in repr(by_id)
 
 
 def test_new_job_claimed(store):
