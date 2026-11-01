@@ -184,6 +184,15 @@ class ApplicationUpdated(BaseModel):
     status: ApplicationStatus
 
 
+class FillFormStarted(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    tab_id: str = Field(description="The Herdr tab the Claude Code session runs in, such as `wK:t3`.")
+    tab_label: str = Field(description="The tab's label: `<Company>-<Role>-<application_id>`.")
+    already_open: bool = Field(description="True when a tab for this application was already open in the "
+                                           "workspace; nothing new was started.")
+
+
 class ResumeMatch(BaseModel):
     status: MatchStatus = Field(
         description="How the saved resume was chosen. `no_job_description`: the application has no usable "

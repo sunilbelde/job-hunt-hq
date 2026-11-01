@@ -123,6 +123,10 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 #list .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 0 14px 10px; font-size: 12px; }
 #list .controls .inline-note { flex-basis: 100%; }
 #list button.danger { padding: 1px 10px; }
+#list button.fill { padding: 1px 10px; font: inherit; border: 1px solid var(--accent); background: var(--accent-soft);
+  color: var(--accent); border-radius: 6px; cursor: pointer; }
+#list button.fill:hover { background: var(--accent); color: var(--panel); }
+#list button.fill:disabled { opacity: .6; cursor: default; }
 #list button.clear-filters { margin: 0 14px; padding: 4px 12px; font: inherit; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); color: inherit; cursor: pointer; }
 #detail { overflow-y: auto; padding: 16px; min-width: 0; }
@@ -357,7 +361,7 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
             score ? el("span", { class: "muted" }, score) : null,
           ),
         ),
-        el("div", { class: "controls" }, statusControl(item), deleteButton(item), entryNote(item.id)),
+        el("div", { class: "controls" }, statusControl(item), fillButton(item), deleteButton(item), entryNote(item.id)),
       ));
     }
   }
@@ -400,6 +404,28 @@ button.danger:disabled, #list select:disabled { opacity: .6; cursor: default; }
       }
     });
     return select;
+  }
+
+  // Opens a Herdr tab running Claude Code with the form-filler skill for this application. Nothing is sent but
+  // the ID; the session asks for anything else in its own tab, and never submits unless asked there.
+  function fillButton(app) {
+    const button = el("button", { type: "button", class: "fill", disabled: busy.has(app.id),
+      title: "Open a Claude Code tab in Herdr that fills this application's form" }, "Fill form");
+    button.addEventListener("click", async () => {
+      busy.add(app.id);
+      notes[app.id] = { text: "Opening…" };
+      renderList();
+      try {
+        const body = await api("/viewer/application/" + app.id + "/fill", false, { method: "POST" });
+        notes[app.id] = { text: (body.already_open ? "Already open in Herdr tab " : "Opened Herdr tab ") + body.tab_label };
+      } catch (error) {
+        notes[app.id] = { text: "Not opened: " + error.message, error: true };
+      } finally {
+        busy.delete(app.id);
+        renderList();
+      }
+    });
+    return button;
   }
 
   function deleteButton(app) {

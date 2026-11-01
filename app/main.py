@@ -20,6 +20,7 @@ from pydantic.json_schema import models_json_schema
 from app.applications import NO_JOB, ApplicationStore, ApplicationStoreError, utc_now
 from app.cover_letter import posting_usable as letter_posting_usable
 from app.cover_letter import run as write_cover_letter
+from app.form_filler import FormFillLauncher, HerdrUnavailable
 from app.generation import generate_output
 from app.models import (
     ApplicationDetail,
@@ -31,6 +32,7 @@ from app.models import (
     CoverLetterJobStatus,
     CoverLetterRequest,
     ErrorResponse,
+    FillFormStarted,
     GenerationAccepted,
     HealthStatus,
     ResumeJobStatus,
@@ -111,6 +113,7 @@ ERROR_DESCRIPTIONS = {
     "422_letter": "The body is not JSON, not a JSON object, or fails validation, or the application has no usable "
                   "posting text (missing, under 50 words, or over 60,000 characters). `message` says which.",
     503: "Application store unavailable.",
+    "503_herdr": "Application store unavailable, or Herdr could not be reached or refused the request (`Herdr unavailable`).",
 }
 
 
@@ -286,6 +289,7 @@ def create_app(
     storage: Storage | None = None,
     applications: ApplicationStore | None = None,
     start_job: Callable[[Callable[[], None]], None] | None = None,
+    form_filler: FormFillLauncher | None = None,
 ) -> FastAPI:
     """Build the app. Settings are validated here, so bad config fails at startup. start_job runs a generation
     job in the background, on its own thread unless given."""
@@ -770,7 +774,8 @@ def create_app(
     )(job_status("cover_letter", "text"))
 
     if docs:
-        register_viewer(app, settings, applications, store_unavailable, application_id_path)
+        form_filler = form_filler or FormFillLauncher(settings.herdr_bin, settings.claude_bin, settings.fill_workspace)
+        register_viewer(app, settings, applications, store_unavailable, application_id_path, form_filler)
     else:
         # PATCH and DELETE share this path, so without a GET route it would answer 405 and reveal that the
         # viewer's read exists somewhere. Answer exactly as for an unknown path instead.
@@ -782,7 +787,7 @@ def create_app(
 
 
 def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationStore, store_unavailable,
-                    application_id_path) -> None:
+                    application_id_path, form_filler: FormFillLauncher) -> None:
     """The resume viewer's read endpoints. Only for an app with docs enabled: on the public listener none of
     these paths exist, so saved resumes and posting text never leave the tailnet. They take no API key, so
     this docs-only registration is their only guard."""
@@ -937,6 +942,44 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         if not deleted:
             return application_not_found()
         return {"ok": True, "application_id": target}
+
+    @app.post(
+        "/viewer/application/{application_id}/fill",
+        tags=["viewer"],
+        summary="Open a form-filling session for an application",
+        description=(
+            "Opens a tab in the Herdr workspace `Claude-Jobs-Automation` (`FILL_WORKSPACE`; created if missing), "
+            "labelled `<Company>-<Role>-<application_id>`, and runs `claude --chrome "
+            "\"/job-application-form-filler <application_id>\"` in the repo there. The session is interactive: "
+            "it asks for permissions and answers in that tab, and never submits unless asked there. If a tab whose "
+            "label ends with this ID is already open in the workspace, nothing is started and `already_open` is "
+            "true. Any request body is ignored. " + viewer_writes
+        ),
+        responses={
+            200: {"model": FillFormStarted, "description": "The tab was opened, or one was already open."},
+            **errors(403, 404, "503_herdr"),
+        },
+    )
+    async def viewer_fill_form(request: Request, application_id: str = application_id_path):
+        if not same_origin(request):
+            return application_error(403, "Cross-site request refused")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+        try:
+            row = await run_in_threadpool(applications.get, target)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if row is None:
+            return application_not_found()
+        try:
+            started = await run_in_threadpool(form_filler.start, row["company"], row["role"], target)
+        except HerdrUnavailable as exc:
+            logger.error(json.dumps({"event": "herdr_error", "application_id": target, "error": str(exc)}))
+            return application_error(503, "Herdr unavailable")
+        return {"ok": True, "application_id": target, "tab_id": started.tab_id, "tab_label": started.tab_label,
+                "already_open": started.already_open}
 
     def read_output(path: pathlib.Path) -> bytes | None:
         """The saved file's bytes, or None when there is no regular file there inside OUTPUT_DIR."""
