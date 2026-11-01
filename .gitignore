@@ -8,6 +8,7 @@ outputs/
 
 # Personal application profile (visa details): local only, never pushed
 data/Jane Doe Profile.docx
+data/Jane Doe Profile.md
 
 # Personal job-application skill (local only)
 .claude/skills/job-application-form-filler/
