@@ -47,6 +47,12 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Agent harnesses
 - Testing
 - Code quality
+- Code reviews
+- Data structures and algorithms
+- NumPy
+- Pandas
+- Probability
+- Statistics
 - Reliability
 - Context engineering
 - Post-training (supervised fine-tuning)
@@ -64,6 +70,8 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Mixtral
 - LLM evaluation and benchmarking (latency, accuracy, reasoning quality, hallucination rate, cost)
 - LLM regression testing across model versions
+- LLM-as-a-judge evaluation
+- Golden datasets for evaluation
 - Chain-of-Thought prompting
 - Few-shot prompting
 - Fine-tuning
@@ -122,7 +130,24 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 ### Machine learning and NLP
 
 - Deep learning
+- Classical machine learning algorithms
+- Logistic regression
+- Support vector machines (SVMs)
+- Decision trees
+- Random forests
 - XGBoost
+- Gradient descent
+- Matrix factorization
+- Recommender systems
+- PCA
+- t-SNE
+- Clustering techniques
+- Neural networks
+- Convolutional neural networks (CNNs)
+- Recurrent neural networks (RNNs)
+- R-CNN
+- Transformers
+- Autoencoders
 - Search ranking and relevance
 - Human-in-the-loop annotation and review systems
 - BERT
