@@ -15,7 +15,7 @@ from app.main import create_app
 from app.rendering import RenderError
 from app.storage import COVER_LETTER_FILE_NAME, RESUME_FILE_NAME, LocalStorage
 from app.tailoring import Match
-from tests.conftest import API_KEY, FAKE_PDF, GH_LINK, VALID_APPLICATION, fake_output
+from tests.conftest import API_KEY, FAKE_LETTER_TEXT, FAKE_PDF, GH_LINK, LONG_POSTING, VALID_APPLICATION, fake_output
 
 HEADERS = {"X-API-Key": API_KEY}
 UNKNOWN = "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"
@@ -728,25 +728,70 @@ def test_page_changes_status_and_deletes(viewer):
     assert '"Content-Type": "application/json"' in html and 'credentials: "omit"' in html
 
 
-def test_page_puts_status_and_delete_on_list_entries(viewer):
+def test_page_list_entries_only_select(viewer):
     html = viewer.get("/viewer").text
-    assert 'el("div", { class: "controls" }, statusControl(item), fillButton(item), deleteButton(item), entryNote(item.id))' in html
-    assert 'el("button", { type: "button", class: "open"' in html
-    assert 'event.target.closest("button.open")' in html  # the controls never select the entry
+    entry = html[html.index("function entry(item) {"):html.index("function renderList(")]
+    assert 'el("button", { type: "button", class: current ? "entry current" : "entry"' in entry
+    for name in ("statusControl", "el(\"select\"", "Fill form", "Delete", "addEventListener"):
+        assert name not in entry, name
+    for shown in ("item.company", "item.role", '"pill s-" + item.status', "statusBadge(item.report)",
+                  "scoreNode(item.report)", "runningNote(item)", "shortDay(item.created_at)"):
+        assert shown in entry, shown
+    assert 'event.target.closest("button.entry")' in html
+
+
+def test_page_puts_actions_in_the_detail_bar(viewer):
+    html = viewer.get("/viewer").text
+    bar = html[html.index("function actionBar(app) {"):html.index("function renderActions(")]
+    for part in ("APPLICATION_STATUSES.map", "startGeneration(app, kind)", '"Fill form"', '"Delete"', '"aria-live": "polite"'):
+        assert part in bar, part
+    assert "const parts = [actionBar(app), detailsCard(app)];" in html
     details = html[html.index("function detailsCard("):html.index("function scoreCard(")]
-    assert "statusControl" not in details and "deleteButton" not in details and "fillButton" not in details
-    assert '["Status", detailStatus]' in details
+    assert "actionBar" not in details and '["Status", detailStatus]' in details
+
+
+def test_page_generates_and_regenerates(viewer):
+    html = viewer.get("/viewer").text
+    assert '"/viewer/application/" + app.id + "/" + KIND[kind].path, false, { method: "POST" }' in html
+    assert 'path: "resume"' in html and 'path: "cover-letter"' in html
+    assert '(hasDocument(id, kind) ? "Regenerate " : "Generate ") + KIND[kind].label' in html
+    start = html[html.index("async function startGeneration("):html.index("async function fillForm(")]
+    assert start.index("hasDocument(app.id, kind) && !confirm(") < start.index("api(")
+    assert "replaces the current one" in start
+    assert '"Generating "' in html
+
+
+def test_page_polls_while_a_job_runs(viewer):
+    html = viewer.get("/viewer").text
+    assert "const POLL_MS = 5000;" in html
+    assert 'if (pollTimer === null && anyRunning()) pollTimer = setTimeout(poll, POLL_MS);' in html
+    poll = html[html.index("async function poll() {"):html.index("function finished(")]
+    assert 'api("/applications")' in poll and "epoch !== listEpoch" in poll and "finished(item, kind, now)" in poll
+    done = html[html.index("function finished("):html.index("// --- the action bar ---")]
+    assert 'select(item.id, { keepDocument: true })' in done and "refreshLetters()" in done
+    assert '" failed: "' in done
 
 
 def test_page_filters_by_status_and_recorded_day(viewer):
     html = viewer.get("/viewer").text
     assert '<option value="">All statuses</option>' in html
-    assert '<label>Recorded from <input id="filter-from" type="date"></label>' in html
-    assert '<input id="filter-to" type="date">' in html
+    assert '<input id="filter-from" type="date" aria-label="Recorded from"' in html
+    assert '<input id="filter-to" type="date" aria-label="Recorded to"' in html
     matches = html[html.index("function matches("):html.index("function updateCount(")]
     assert "localDay(item.created_at)" in matches and "date_posted" not in matches
     assert 'applications.filter(matches).length + " of " + total + noun' in html
     assert '"No applications match these filters."' in html and '"Clear filters"' in html
+
+
+def test_page_searches_company_and_role(viewer):
+    html = viewer.get("/viewer").text
+    assert '<input id="filter-search" type="search"' in html
+    matches = html[html.index("function matches("):html.index("function updateCount(")]
+    assert "item.company.toLowerCase().includes(q)" in matches and "item.role.toLowerCase().includes(q)" in matches
+    assert "filters.q.trim().toLowerCase()" in matches
+    clear = html[html.index("function clearFilters("):html.index("function runningNote(")]
+    assert 'filters.q = filters.status = filters.from = filters.to = "";' in clear
+    assert 'return Boolean(filters.q.trim() || filters.status || filters.from || filters.to);' in html
 
 
 def test_page_has_no_inline_styles_or_handlers(viewer):
@@ -872,3 +917,154 @@ def test_page_calls_only_its_own_origin(viewer):
     html = viewer.get("/viewer").text
     assert re.findall(r"https?://[^\s\"'`)<]*", html) == []
     assert "tailnet" not in html.lower() and "ts.net" not in html
+
+
+# --- generating from the viewer ---
+
+KINDS = [("resume", "resume", "/resume"), ("cover-letter", "cover_letter", "/cover-letter")]
+
+
+def viewer_generate(client, application_id, path, headers=SAME_ORIGIN, **kwargs):
+    return client.post(f"/viewer/application/{application_id}/{path}", headers=headers, **kwargs)
+
+
+def held_client(settings):
+    """A docs-on app whose jobs never start running, so they stay `running`; returns the client and the jobs."""
+    held = []
+    client = TestClient(create_app(settings.model_copy(update={"api_docs_enabled": True}),
+                                   LocalStorage(settings.output_dir), start_job=held.append))
+    return client, held
+
+
+@pytest.mark.parametrize("path, kind, keyed", KINDS)
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}, SAME_ORIGIN])
+def test_generation_started_without_a_key(viewer, path, kind, keyed, headers):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+    r = viewer_generate(viewer, application_id.upper(), path, headers)
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert set(body) == {"ok", "application_id", "status", "started_at"}
+    assert (body["ok"], body["application_id"], body["status"]) == (True, application_id, "running")
+    job = viewer.get(f"{keyed}/{application_id}/status", headers=HEADERS).json()
+    assert job["status"] == "done" and job["started_at"] == body["started_at"]
+    listed = viewer.get("/applications").json()["applications"][0]["jobs"]
+    assert listed[kind]["status"] == "done"
+
+
+def test_resume_result_readable_through_the_keyed_status(viewer, monkeypatch):
+    application_id = record(viewer)
+    monkeypatch.setattr("app.main.generate_output", lambda application, settings: fake_output(FAKE_PDF, TAILORED))
+    assert viewer_generate(viewer, application_id, "resume").status_code == 202
+    job = viewer.get(f"/resume/{application_id}/status", headers=HEADERS).json()
+    assert job["match"]["status"] == "tailored" and job["saved_path"] == RESUME_FILE_NAME
+    assert viewer.get(f"/application/{application_id}/resume.pdf").content == FAKE_PDF
+    assert viewer.get(f"/application/{application_id}").json()["report"]["status"] == "tailored"
+
+
+def test_letter_result_readable_through_the_keyed_status(viewer):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+    viewer_generate(viewer, application_id, "cover-letter")
+    job = viewer.get(f"/cover-letter/{application_id}/status", headers=HEADERS).json()
+    assert job["status"] == "done" and job["text"] == FAKE_LETTER_TEXT
+
+
+@pytest.mark.parametrize("path, kind, keyed", KINDS)
+def test_one_running_job_shared_with_the_keyed_endpoint(settings, path, kind, keyed):
+    client, held = held_client(settings)
+    application_id = record(client, full_job_description=LONG_POSTING)
+    first = client.post(keyed, json={"application_id": application_id}, headers=HEADERS)
+    assert first.status_code == 202
+    again = viewer_generate(client, application_id, path)
+    assert again.status_code == 202 and again.json()["started_at"] == first.json()["started_at"]
+    assert len(held) == 1
+    assert client.get("/applications").json()["applications"][0]["jobs"][kind] == {
+        "status": "running", "started_at": first.json()["started_at"], "finished_at": None, "error": None}
+
+
+def test_resume_and_letter_run_together(settings):
+    client, held = held_client(settings)
+    application_id = record(client, full_job_description=LONG_POSTING)
+    assert viewer_generate(client, application_id, "resume").status_code == 202
+    assert viewer_generate(client, application_id, "cover-letter").status_code == 202
+    assert len(held) == 2
+    jobs = client.get("/applications").json()["applications"][0]["jobs"]
+    assert jobs["resume"]["status"] == jobs["cover_letter"]["status"] == "running"
+
+
+@pytest.mark.parametrize("posting", [None, "Too short to write a letter for."])
+def test_letter_without_posting_text(viewer, posting):
+    application_id = record(viewer, full_job_description=posting)
+    keyed = viewer.post("/cover-letter", json={"application_id": application_id}, headers=HEADERS).json()["message"]
+    assert_error(viewer_generate(viewer, application_id, "cover-letter"), 422, keyed)
+    assert viewer.get("/applications").json()["applications"][0]["jobs"]["cover_letter"] is None
+
+
+@pytest.mark.parametrize("path", ["resume", "cover-letter"])
+@pytest.mark.parametrize("path_id", ["abc", "1", UNKNOWN])
+def test_generation_unknown_id(viewer, path, path_id):
+    assert_error(viewer_generate(viewer, path_id, path), 404, "Application not found")
+
+
+@pytest.mark.parametrize("path", ["resume", "cover-letter"])
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},
+                                     {"Origin": "https://evil.example"}])
+def test_generation_cross_site_refused(viewer, settings, path, headers):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+    assert_error(viewer_generate(viewer, application_id, path, headers), 403, "Cross-site request refused")
+    assert viewer.get("/applications").json()["applications"][0]["jobs"] == {"resume": None, "cover_letter": None}
+
+
+@pytest.mark.parametrize("path", ["resume", "cover-letter"])
+def test_generation_store_unavailable(viewer, monkeypatch, path):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+
+    def fail(self, *args):
+        raise ApplicationStoreError("OperationalError: disk I/O error")
+    monkeypatch.setattr(ApplicationStore, "start_job", fail)
+    assert_error(viewer_generate(viewer, application_id, path), 503, "Application store unavailable")
+
+
+@pytest.mark.parametrize("path", ["resume", "cover-letter"])
+@pytest.mark.parametrize("headers", [{}, HEADERS])
+def test_generation_not_served_without_docs(settings, storage, path, headers):
+    public = TestClient(create_app(settings, storage))
+    application_id = record(public, full_job_description=LONG_POSTING)
+    unknown = public.get("/no-such-path").json()
+    r = viewer_generate(public, application_id, path, {**headers, **SAME_ORIGIN})
+    assert (r.status_code, r.json()) == (404, unknown)
+    assert public.get(f"/resume/{application_id}/status", headers=HEADERS).status_code == 404
+
+
+def test_generation_ignores_a_body(viewer):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+    r = viewer_generate(viewer, application_id, "resume", json={"application_id": UNKNOWN})
+    assert r.status_code == 202 and r.json()["application_id"] == application_id
+
+
+def test_keyed_generation_still_needs_the_key(viewer):
+    application_id = record(viewer)
+    assert viewer.post("/resume", json={"application_id": application_id}, headers=SAME_ORIGIN).status_code == 401
+
+
+def test_generation_logged_as_an_application_request(viewer, caplog):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+    caplog.set_level(logging.INFO, logger="app.requests")
+    for path in ("resume", "cover-letter"):
+        caplog.clear()
+        viewer_generate(viewer, application_id, path)
+        (line,) = request_lines(caplog)
+        assert {k: v for k, v in line.items() if k != "duration_ms"} == {
+            "event": "application_request", "method": "POST", "status": 202, "application_id": application_id}
+    assert "Acme Corp" not in caplog.text and "retrieval systems" not in caplog.text
+
+
+def test_list_jobs_carry_no_results(viewer, monkeypatch):
+    application_id = record(viewer, full_job_description=LONG_POSTING)
+    generate(viewer, monkeypatch, application_id)
+    viewer_generate(viewer, application_id, "cover-letter")
+    r = viewer.get("/applications")
+    jobs = r.json()["applications"][0]["jobs"]
+    assert set(jobs) == {"resume", "cover_letter"}
+    assert set(jobs["resume"]) == set(jobs["cover_letter"]) == {"status", "started_at", "finished_at", "error"}
+    for text in (RESUME_FILE_NAME, COVER_LETTER_FILE_NAME, "Dear Acme", "saved_path", '"match"', '"text"'):
+        assert text not in r.text, text
