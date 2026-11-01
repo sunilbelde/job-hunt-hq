@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.applications import ApplicationStore, ApplicationStoreError
+from app.form_filler import FillStarted, HerdrUnavailable
 from app.main import create_app
 from app.rendering import RenderError
 from app.storage import COVER_LETTER_FILE_NAME, RESUME_FILE_NAME, LocalStorage
@@ -729,11 +730,11 @@ def test_page_changes_status_and_deletes(viewer):
 
 def test_page_puts_status_and_delete_on_list_entries(viewer):
     html = viewer.get("/viewer").text
-    assert 'el("div", { class: "controls" }, statusControl(item), deleteButton(item), entryNote(item.id))' in html
+    assert 'el("div", { class: "controls" }, statusControl(item), fillButton(item), deleteButton(item), entryNote(item.id))' in html
     assert 'el("button", { type: "button", class: "open"' in html
     assert 'event.target.closest("button.open")' in html  # the controls never select the entry
     details = html[html.index("function detailsCard("):html.index("function scoreCard(")]
-    assert "statusControl" not in details and "deleteButton" not in details
+    assert "statusControl" not in details and "deleteButton" not in details and "fillButton" not in details
     assert '["Status", detailStatus]' in details
 
 
@@ -752,3 +753,114 @@ def test_page_has_no_inline_styles_or_handlers(viewer):
     html = viewer.get("/viewer").text
     assert re.search(r"<[^>]+\sstyle=", html) is None
     assert re.search(r"<[^>]+\son[a-z]+=", html) is None
+
+
+# --- Fill form ---
+
+class FakeLauncher:
+    def __init__(self, error=None, already_open=False):
+        self.calls, self.error, self.already_open = [], error, already_open
+
+    def start(self, company, role, application_id):
+        self.calls.append((company, role, application_id))
+        if self.error:
+            raise self.error
+        return FillStarted("wK:t9", f"{company}-{role}-{application_id}", "wK", self.already_open)
+
+
+def fill_client(settings, launcher):
+    return TestClient(create_app(settings.model_copy(update={"api_docs_enabled": True}),
+                                 LocalStorage(settings.output_dir), form_filler=launcher))
+
+
+def fill(client, application_id, headers=SAME_ORIGIN):
+    return client.post(f"/viewer/application/{application_id}/fill", headers=headers)
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}, SAME_ORIGIN])
+def test_fill_opens_a_tab_without_a_key(settings, headers):
+    launcher = FakeLauncher()
+    client = fill_client(settings, launcher)
+    application_id = record(client)
+    r = fill(client, application_id.upper(), headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "application_id": application_id, "tab_id": "wK:t9",
+                        "tab_label": f"{VALID_APPLICATION['company']}-{VALID_APPLICATION['role']}-{application_id}",
+                        "already_open": False}
+    assert launcher.calls == [(VALID_APPLICATION["company"], VALID_APPLICATION["role"], application_id)]
+
+
+def test_fill_already_open(settings):
+    client = fill_client(settings, FakeLauncher(already_open=True))
+    assert fill(client, record(client)).json()["already_open"] is True
+
+
+def test_fill_ignores_a_body_and_changes_nothing(settings):
+    launcher = FakeLauncher()
+    client = fill_client(settings, launcher)
+    application_id = record(client)
+    before = client.get(f"/application/{application_id}").json()
+    r = client.post(f"/viewer/application/{application_id}/fill", json={"company": "Other", "status": "offer"},
+                    headers=SAME_ORIGIN)
+    assert r.status_code == 200
+    assert client.get(f"/application/{application_id}").json() == before
+    assert launcher.calls[0][0] == VALID_APPLICATION["company"]
+
+
+@pytest.mark.parametrize("path_id", ["abc", "1", UNKNOWN])
+def test_fill_unknown_id(settings, path_id):
+    launcher = FakeLauncher()
+    assert_error(fill(fill_client(settings, launcher), path_id), 404, "Application not found")
+    assert launcher.calls == []
+
+
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},
+                                     {"Origin": "https://evil.example"}])
+def test_fill_cross_site_refused(settings, headers):
+    launcher = FakeLauncher()
+    client = fill_client(settings, launcher)
+    assert_error(fill(client, record(client), headers), 403, "Cross-site request refused")
+    assert_error(fill(client, "abc", headers), 403, "Cross-site request refused")
+    assert launcher.calls == []
+
+
+def test_fill_herdr_unavailable(settings, caplog):
+    client = fill_client(settings, FakeLauncher(error=HerdrUnavailable("herdr tab create exited 1")))
+    application_id = record(client)
+    with caplog.at_level(logging.ERROR, logger="app"):
+        assert_error(fill(client, application_id), 503, "Herdr unavailable")
+    events = [json.loads(r.getMessage()) for r in caplog.records if r.getMessage().startswith("{")]
+    assert {"event": "herdr_error", "application_id": application_id, "error": "herdr tab create exited 1"} in events
+
+
+def test_fill_with_the_default_launcher_never_reaches_real_herdr(viewer):
+    assert_error(fill(viewer, record(viewer)), 503, "Herdr unavailable")
+
+
+def test_fill_store_unavailable(settings, monkeypatch):
+    launcher = FakeLauncher()
+    client = fill_client(settings, launcher)
+    application_id = record(client)
+
+    def fail(self, *args):
+        raise ApplicationStoreError("OperationalError: disk I/O error")
+    monkeypatch.setattr(ApplicationStore, "get", fail)
+    assert_error(fill(client, application_id), 503, "Application store unavailable")
+    assert launcher.calls == []
+
+
+@pytest.mark.parametrize("headers", [{}, HEADERS])
+def test_fill_not_served_without_docs(settings, storage, headers):
+    launcher = FakeLauncher()
+    public = TestClient(create_app(settings, storage, form_filler=launcher))
+    application_id = record(public)
+    unknown = public.get("/no-such-path").json()
+    r = public.post(f"/viewer/application/{application_id}/fill", headers={**headers, **SAME_ORIGIN})
+    assert (r.status_code, r.json()) == (404, unknown)
+    assert launcher.calls == []
+
+
+def test_page_has_a_fill_button(viewer):
+    html = viewer.get("/viewer").text
+    assert '"/viewer/application/" + app.id + "/fill", false, { method: "POST" }' in html
+    assert '"Fill form"' in html

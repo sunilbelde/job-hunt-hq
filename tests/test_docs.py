@@ -30,6 +30,7 @@ VIEWER_READS = [
 VIEWER_WRITES = [
     ("patch", "/viewer/application/{application_id}"),
     ("delete", "/viewer/application/{application_id}"),
+    ("post", "/viewer/application/{application_id}/fill"),
 ]
 HEALTH = [("get", "/health"), ("get", "/healthz")]
 RESPONSES = {
@@ -50,6 +51,7 @@ RESPONSES = {
     ("get", "/cover-letter/base.pdf"): {"200", "404"},
     ("patch", "/viewer/application/{application_id}"): {"200", "403", "404", "422", "503"},
     ("delete", "/viewer/application/{application_id}"): {"200", "403", "404", "503"},
+    ("post", "/viewer/application/{application_id}/fill"): {"200", "403", "404", "503"},
 }
 PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/application/{application_id}/cover-letter.pdf"),
                   ("get", "/resume/base.pdf"), ("get", "/cover-letter/base.pdf")]
@@ -98,8 +100,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_seventeen_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 17
+def test_documents_exactly_the_eighteen_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 18
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -200,6 +202,15 @@ def test_viewer_writes_described(schema, key):
 
 def test_viewer_delete_says_files_are_kept(schema):
     assert "files are kept" in operations(schema)[("delete", "/viewer/application/{application_id}")]["description"]
+
+
+def test_viewer_fill_described(schema):
+    op = operations(schema)[("post", "/viewer/application/{application_id}/fill")]
+    assert "Claude-Jobs-Automation" in op["description"] and "<Company>-<Role>-<application_id>" in op["description"]
+    assert "/job-application-form-filler <application_id>" in op["description"]
+    assert "never submits" in op["description"] and "already_open" in op["description"]
+    assert "Herdr unavailable" in op["responses"]["503"]["description"]
+    assert "requestBody" not in op
 
 
 def test_resume_body_schema(schema):
