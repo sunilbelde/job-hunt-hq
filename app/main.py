@@ -6,7 +6,7 @@ import secrets
 import sys
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Path, Request, Security
@@ -93,8 +93,9 @@ TAGS = [
     {"name": "cover letters", "description": "Write a cover letter for a recorded application, only when it asks "
                                              "for one, in the background, and poll the job's status."},
     {"name": "viewer", "description": "Read applications, their generation reports, resume and cover letter PDFs, "
-                                      "and change an application's status or delete it, for the resume viewer at "
-                                      "`/viewer`. No API key; served only where these docs are."},
+                                      "and change an application's status, delete it, open a form-filling session "
+                                      "or generate its resume and cover letter, for the resume viewer at `/viewer`. "
+                                      "No API key; served only where these docs are."},
 ]
 
 ERROR_DESCRIPTIONS = {
@@ -112,6 +113,8 @@ ERROR_DESCRIPTIONS = {
                "(`No job for this application`).",
     "422_letter": "The body is not JSON, not a JSON object, or fails validation, or the application has no usable "
                   "posting text (missing, under 50 words, or over 60,000 characters). `message` says which.",
+    "422_viewer_letter": "The application has no usable posting text (missing, under 50 words, or over 60,000 "
+                         "characters). Add it with `PATCH /application/{application_id}` first.",
     503: "Application store unavailable.",
     "503_herdr": "Application store unavailable, or Herdr could not be reached or refused the request (`Herdr unavailable`).",
 }
@@ -183,6 +186,8 @@ JOB_EVENTS = {"resume": "resume_job", "cover_letter": "cover_letter_job"}
 # The generic errors a failed job records. Details are logged, never stored: the status endpoints are public.
 JOB_ERRORS = {"resume": "Resume generation failed", "cover_letter": "Cover letter generation failed"}
 STORAGE_UNAVAILABLE = "Storage service unavailable"
+NO_LETTER_POSTING = ("Application has no usable posting text: add full_job_description (at least 50 words) with "
+                     "PATCH /application/{application_id} first")
 
 
 def generation_fields(match=None, run=None) -> dict[str, Any]:
@@ -760,8 +765,7 @@ def create_app(
         if error is not None:
             return error
         if not letter_posting_usable(application.full_job_description):
-            return application_error(422, "Application has no usable posting text: add full_job_description "
-                                          "(at least 50 words) with PATCH /application/{application_id} first")
+            return application_error(422, NO_LETTER_POSTING)
         return await start_generation(request, "cover_letter", application, cover_letter_work(application))
 
     app.get(
@@ -775,7 +779,12 @@ def create_app(
 
     if docs:
         form_filler = form_filler or FormFillLauncher(settings.herdr_bin, settings.claude_bin, settings.fill_workspace)
-        register_viewer(app, settings, applications, store_unavailable, application_id_path, form_filler)
+        def generate(request: Request, kind: str, application: StoredApplication) -> Awaitable[JSONResponse]:
+            work = resume_work(application) if kind == "resume" else cover_letter_work(application)
+            return start_generation(request, kind, application, work)
+
+        register_viewer(app, settings, applications, store_unavailable, application_id_path, form_filler, generate,
+                        accepted)
     else:
         # PATCH and DELETE share this path, so without a GET route it would answer 405 and reveal that the
         # viewer's read exists somewhere. Answer exactly as for an unknown path instead.
@@ -787,7 +796,7 @@ def create_app(
 
 
 def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationStore, store_unavailable,
-                    application_id_path, form_filler: FormFillLauncher) -> None:
+                    application_id_path, form_filler: FormFillLauncher, generate, accepted) -> None:
     """The resume viewer's read endpoints. Only for an app with docs enabled: on the public listener none of
     these paths exist, so saved resumes and posting text never leave the tailnet. They take no API key, so
     this docs-only registration is their only guard."""
@@ -812,7 +821,9 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         description=(
             "Every recorded application with its ID, company, role, status and recording times, most recently "
             "generated first and then most recently recorded. `report` summarises the latest generation (when, "
-            "how the resume was chosen, the scores), or is null when none is stored. No posting text."
+            "how the resume was chosen, the scores), or is null when none is stored. `jobs` gives each kind's latest "
+            "job state (`running`, `done` or `failed`, with its times and fixed error) and never its result. No "
+            "posting text."
         ),
         responses={200: {"model": ApplicationList, "description": "The applications."}, **errors(503)},
     )
@@ -980,6 +991,61 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             return application_error(503, "Herdr unavailable")
         return {"ok": True, "application_id": target, "tab_id": started.tab_id, "tab_label": started.tab_label,
                 "already_open": started.already_open}
+
+    async def viewer_generate(request: Request, application_id: str, kind: str):
+        if not same_origin(request):
+            return application_error(403, "Cross-site request refused")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+        try:
+            row = await run_in_threadpool(applications.get, target)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if row is None:
+            return application_not_found()
+        application = StoredApplication.model_validate(row)
+        if kind == "cover_letter" and not letter_posting_usable(application.full_job_description):
+            return application_error(422, NO_LETTER_POSTING)
+        return await generate(request, kind, application)
+
+    viewer_generation = (
+        "Takes no request body; any body is ignored. It shares that endpoint's job: a request while a {kind} job for "
+        "the application is running, from either endpoint, starts no second run and returns 202 with that job's "
+        "`started_at`. Poll `GET /applications` (its `jobs`) or the keyed `GET {status}`. " + viewer_writes
+    )
+
+    @app.post(
+        "/viewer/application/{application_id}/resume",
+        tags=["viewer"],
+        summary="Generate a resume from the viewer",
+        description=(
+            "Starts the same background resume job as `POST /resume`, for the resume viewer's Generate and "
+            "Regenerate resume actions, and returns 202 at once. "
+            + viewer_generation.format(kind="resume", status="/resume/{application_id}/status")
+        ),
+        status_code=202,
+        responses={202: accepted, **errors(403, 404, 503)},
+    )
+    async def viewer_generate_resume(request: Request, application_id: str = application_id_path):
+        return await viewer_generate(request, application_id, "resume")
+
+    @app.post(
+        "/viewer/application/{application_id}/cover-letter",
+        tags=["viewer"],
+        summary="Write a cover letter from the viewer",
+        description=(
+            "Starts the same background cover letter job as `POST /cover-letter`, for the resume viewer's Generate "
+            "and Regenerate cover letter actions, and returns 202 at once. Like that endpoint it needs usable "
+            "posting text, or answers 422 and starts nothing. "
+            + viewer_generation.format(kind="cover letter", status="/cover-letter/{application_id}/status")
+        ),
+        status_code=202,
+        responses={202: accepted, **errors(403, 404, "422_viewer_letter", 503)},
+    )
+    async def viewer_generate_cover_letter(request: Request, application_id: str = application_id_path):
+        return await viewer_generate(request, application_id, "cover_letter")
 
     def read_output(path: pathlib.Path) -> bytes | None:
         """The saved file's bytes, or None when there is no regular file there inside OUTPUT_DIR."""

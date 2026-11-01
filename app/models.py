@@ -315,6 +315,20 @@ class ReportSummary(BaseModel):
     tailored_score: int | None
 
 
+class JobSummary(BaseModel):
+    status: JobStatus = Field(description="`running`, `done` or `failed`, as on the job's status endpoint.")
+    started_at: str = Field(description="When the job started, as an ISO 8601 UTC timestamp.")
+    finished_at: str | None = Field(description="When the job finished, or null while it runs.")
+    error: str | None = Field(description="The job's fixed failure message, or null unless `failed`.")
+
+
+class ApplicationJobs(BaseModel):
+    resume: JobSummary | None = Field(description="The latest resume job's state, or null if none was ever started.")
+    cover_letter: JobSummary | None = Field(
+        description="The latest cover letter job's state, or null if none was ever started."
+    )
+
+
 class ApplicationListItem(BaseModel):
     id: str
     company: str
@@ -323,6 +337,10 @@ class ApplicationListItem(BaseModel):
     created_at: str
     updated_at: str | None
     report: ReportSummary | None = Field(description="The latest generation's summary, or null if none is stored.")
+    jobs: ApplicationJobs = Field(
+        description="Each kind's latest job state, so the viewer can show running jobs. Never the job's result, "
+        "letter text or saved file: read those from the keyed status endpoints."
+    )
 
 
 class ApplicationList(BaseModel):
