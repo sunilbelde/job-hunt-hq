@@ -37,6 +37,8 @@ command -v tectonic >/dev/null 2>&1 || die "tectonic not found. Install it: brew
 # Resume tailoring needs the Claude Code CLI and a credential; without them the service still runs,
 # but resumes that need scoring fail, so these are warnings at the end rather than errors here.
 claude_bin=$(command -v claude 2>/dev/null || true)
+# The viewer's Fill form button runs Herdr; without it only that button fails.
+herdr_bin=$(command -v herdr 2>/dev/null || true)
 if grep -Eq '^[[:space:]]*(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)[[:space:]]*=[[:space:]]*[^[:space:]#]' "$repo/.env" 2>/dev/null; then
   has_credential=yes
 else
@@ -79,7 +81,7 @@ else
 fi
 "$venv_py" "$repo/deploy/render_template.py" "$tmp_template" \
   "$tmp_plist" REPO="$repo" USER="$(id -un)" HOME="$HOME" PORT="$port" DOCS_PORT="$docs_port" \
-  CLAUDE_BIN="${claude_bin:-claude}"
+  CLAUDE_BIN="${claude_bin:-claude}" HERDR_BIN="${herdr_bin:-herdr}"
 plutil -lint "$tmp_plist" >/dev/null || die "generated plist is invalid"
 : > "$log_dir/launchd.log"
 
