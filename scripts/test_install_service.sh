@@ -21,13 +21,18 @@ stub tailscale 'case "$*" in
   *--json*) printf "%s" "$STUB_SERVE_JSON" ;;
   *) echo "https://mac-mini.ts.net (Funnel on) |-- / proxy http://127.0.0.1:8080" ;;
 esac'
-# The API funnelled on 443 and the docs listener tailnet-only on 8444.
-serve_json='{"Web":{"mac-mini.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8080"}}},"mac-mini.ts.net:8444":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8081"}}}},"AllowFunnel":{"mac-mini.ts.net:443":true}}'
+# The API funnelled on 443; the local listener on 8081 has no mapping.
+serve_json='{"Web":{"mac-mini.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8080"}}}},"AllowFunnel":{"mac-mini.ts.net:443":true}}'
+# What earlier installs set up: the docs listener tailnet-only on 8444, now a leftover to remove.
+leftover_json='{"Web":{"mac-mini.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8080"}}},"mac-mini.ts.net:8444":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8081"}}}},"AllowFunnel":{"mac-mini.ts.net:443":true}}'
 stub pmset 'printf " sleep                0\n"'
 # /docs and /viewer status codes: STUB_PUBLIC_DOCS / STUB_PUBLIC_VIEWER on the public port 8080,
-# STUB_DOCS / STUB_VIEWER on any other port.
+# STUB_DOCS / STUB_VIEWER on any other port. The public port's /healthz and status paths answer
+# STUB_PUBLIC_HEALTHZ / STUB_PUBLIC_STATUS (default 404).
 stub curl 'echo "curl $*" >> "$CALLS"
 case "$*" in
+  *:8080/healthz*) printf "%s" "${STUB_PUBLIC_HEALTHZ:-404}" ;;
+  *:8080/resume/*/status*) printf "%s" "${STUB_PUBLIC_STATUS:-404}" ;;
   *:8080/docs*) printf "%s" "${STUB_PUBLIC_DOCS:-404}" ;;
   *:8080/viewer*) printf "%s" "${STUB_PUBLIC_VIEWER:-404}" ;;
   */docs*) printf "%s" "${STUB_DOCS:-200}" ;;
@@ -82,15 +87,17 @@ check "installed plist runs the launcher with the docs port" \
   'plutil -extract ProgramArguments json -o - "$tmp/installed.plist" | grep -q "\"-m\",\"app.serve\",.*\"--docs-port\",\"8081\""'
 check "install checks /docs on both ports" \
   'grep -q "127.0.0.1:8080/docs" "$calls" && grep -q "127.0.0.1:8081/docs" "$calls"'
-check "install prints the docs URLs" \
-  'grep -q "http://127.0.0.1:8081/docs" "$tmp/out" && grep -q "https://mac-mini.ts.net:8444/docs" "$tmp/out"'
+check "install prints the local docs URL and no tailnet one" \
+  'grep -q "http://127.0.0.1:8081/docs" "$tmp/out" && ! grep -q "ts.net:8444" "$tmp/out" && ! grep -q "tailnet:" "$tmp/out"'
 check "install checks /viewer on both ports" \
   'grep -q "127.0.0.1:8080/viewer" "$calls" && grep -q "127.0.0.1:8081/viewer" "$calls"'
-check "install prints the viewer URLs" \
-  'grep -q "http://127.0.0.1:8081/viewer" "$tmp/out" && grep -q "https://mac-mini.ts.net:8444/viewer" "$tmp/out"'
+check "install prints the local viewer URL" 'grep -q "http://127.0.0.1:8081/viewer" "$tmp/out"'
+check "install checks the moved endpoints are 404 on the public port" \
+  'grep -q "127.0.0.1:8080/healthz" "$calls" && grep -q "127.0.0.1:8080/resume/00000000-0000-0000-0000-000000000000/status" "$calls"'
+check "install suggests no tailscale serve command for the local listener" '! grep -q "8081" "$tmp/out" || ! grep -q "tailscale serve --bg" "$tmp/out"'
 check "logging config written with home log dir" \
   'grep -q "$home/Library/Logs/job-hunt-hq/service.log" "$repo/deploy/logging.json"'
-check "no tailscale warning when serve is configured" '! grep -q "WARNING" "$tmp/out"'
+check "no tailscale warning when only the public port is mapped" '! grep -q "WARNING" "$tmp/out"'
 
 run install_service.sh; rc=$?
 check "reinstall exits 0" '[ $rc -eq 0 ]'
@@ -159,10 +166,9 @@ check "DOCS_PORT is rendered into the plist" \
 
 make_repo
 run install_service.sh DOCS_PORT=off; rc=$?
-check "DOCS_PORT=off installs without a docs listener" \
-  '[ $rc -eq 0 ] && plutil -lint "$tmp/installed.plist" >/dev/null && ! grep -q "docs-port" "$tmp/installed.plist" && ! grep -q "API docs on" "$tmp/out"'
-check "DOCS_PORT=off keeps API docs off" \
-  '[ "$(plutil -extract EnvironmentVariables.API_DOCS_ENABLED raw "$tmp/installed.plist")" = false ]'
+check "DOCS_PORT=off refused" \
+  '[ $rc -ne 0 ] && grep -q "DOCS_PORT=off is no longer supported" "$tmp/out" && grep -q "local listener is required" "$tmp/out"'
+check "DOCS_PORT=off installs nothing" '! grep -q "^sudo" "$calls" && [ ! -f "$tmp/installed.plist" ]'
 
 make_repo
 run install_service.sh DOCS_PORT=8080; rc=$?
@@ -181,6 +187,16 @@ run install_service.sh STUB_PUBLIC_VIEWER=200; rc=$?
 check "install fails when the public port serves the viewer" '[ $rc -ne 0 ] && grep -q "must not serve API docs or the viewer" "$tmp/out"'
 
 make_repo
+run install_service.sh STUB_PUBLIC_HEALTHZ=200; rc=$?
+check "install fails when the public port serves /healthz" \
+  '[ $rc -ne 0 ] && grep -q "127.0.0.1:8080/healthz answered 200" "$tmp/out" && grep -q "serves only its four endpoints" "$tmp/out"'
+
+make_repo
+run install_service.sh STUB_PUBLIC_STATUS=401; rc=$?
+check "install fails when the public port serves the status endpoint" \
+  '[ $rc -ne 0 ] && grep -q "/resume/00000000-0000-0000-0000-000000000000/status answered 401" "$tmp/out"'
+
+make_repo
 run install_service.sh STUB_VIEWER=404; rc=$?
 check "install fails when the docs listener does not serve the viewer" '[ $rc -ne 0 ] && grep -q "did not answer http://127.0.0.1:8081/viewer" "$tmp/out"'
 
@@ -189,14 +205,14 @@ run install_service.sh STUB_DOCS=000; rc=$?
 check "install fails when the docs listener does not answer" '[ $rc -ne 0 ] && grep -q "docs listener did not answer" "$tmp/out"'
 
 make_repo
-run install_service.sh STUB_SERVE_JSON='{"Web":{"mac-mini.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8080"}}}},"AllowFunnel":{"mac-mini.ts.net:443":true}}'; rc=$?
-check "missing docs mapping warns with the serve command" \
-  '[ $rc -eq 0 ] && grep -q "WARNING: tailscale serve is not proxying the docs port 8081" "$tmp/out" && grep -q "tailscale serve --bg --https=8444 http://127.0.0.1:8081" "$tmp/out"'
+run install_service.sh STUB_SERVE_JSON="$leftover_json"; rc=$?
+check "leftover tailnet mapping warns with the command that removes it" \
+  '[ $rc -eq 0 ] && grep -q "WARNING: tailscale serve publishes the local listener at https://mac-mini.ts.net:8444" "$tmp/out" && grep -q "Run: tailscale serve --https=8444 off" "$tmp/out"'
 
 make_repo
 run install_service.sh STUB_SERVE_JSON='{"Web":{"mac-mini.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8081"}}}},"AllowFunnel":{"mac-mini.ts.net:8443":true}}'; rc=$?
 check "funnelled docs mapping warns that docs are public" \
-  'grep -q "Funnel publishes the docs listener at https://mac-mini.ts.net:8443" "$tmp/out" && grep -q "tailscale funnel --https=8443 off" "$tmp/out"'
+  'grep -q "Funnel publishes the local listener at https://mac-mini.ts.net:8443" "$tmp/out" && grep -q "tailscale funnel --https=8443 off" "$tmp/out" && grep -q "then: tailscale serve --https=8443 off" "$tmp/out"'
 
 # --- uninstall ---
 make_repo
@@ -206,7 +222,7 @@ check "uninstall exits 0" '[ $rc -eq 0 ]'
 check "uninstall boots out and removes plist" \
   'grep -q "sudo launchctl bootout system/local.job-hunt-hq" "$calls" && grep -q "sudo rm -f /Library/LaunchDaemons/local.job-hunt-hq.plist" "$calls"'
 check "uninstall keeps output files" '[ -f "$data/f.pdf" ]'
-check "uninstall reminds to remove the docs mapping" 'grep -q "tailscale serve --https=8444 off" "$tmp/out"'
+check "uninstall no longer mentions the tailnet docs mapping" '! grep -q "8444" "$tmp/out"'
 
 # --- status ---
 make_repo
@@ -216,16 +232,21 @@ check "status reports not loaded" '[ $rc -ne 0 ] && grep -q "not loaded" "$tmp/o
 run service_status.sh STUB_LOADED=1; rc=$?
 check "status reports running pid and health" '[ $rc -eq 0 ] && grep -q "pid: 4242" "$tmp/out" && grep -q "health:    ok" "$tmp/out"'
 run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld"; rc=$?
-check "status reports the docs listener" \
-  '[ $rc -eq 0 ] && grep -q "docs:      ok (http://127.0.0.1:8081/docs)" "$tmp/out" && grep -q "tailnet:   https://mac-mini.ts.net:8444/docs" "$tmp/out"'
+check "status reports the docs listener as local only" \
+  '[ $rc -eq 0 ] && grep -q "docs:      ok (http://127.0.0.1:8081/docs, local only)" "$tmp/out" && ! grep -q "tailnet:" "$tmp/out"'
+run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld" STUB_SERVE_JSON="$leftover_json"
+check "status warns about a leftover tailnet mapping" \
+  'grep -q "tailnet:   WARNING: tailscale serve publishes the local listener at https://mac-mini.ts.net:8444; run: tailscale serve --https=8444 off" "$tmp/out"'
 run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld" STUB_DOCS=000; rc=$?
 check "status fails when the docs listener is down" '[ $rc -ne 0 ] && grep -q "docs:      FAILING" "$tmp/out"'
 run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld" STUB_SERVE_JSON='{"Web":{"mac-mini.ts.net:8443":{"Handlers":{"/":{"Proxy":"127.0.0.1:8081"}}}},"AllowFunnel":{"mac-mini.ts.net:8443":true}}'
-check "status warns when Funnel publishes the docs" 'grep -q "WARNING: Funnel publishes the docs listener" "$tmp/out"'
+check "status warns when Funnel publishes the docs" 'grep -q "WARNING: Funnel publishes the local listener" "$tmp/out" && grep -q "tailscale funnel --https=8443 off" "$tmp/out"'
+# A plist from an earlier DOCS_PORT=off install: no --docs-port argument.
 make_repo
-run install_service.sh DOCS_PORT=off; cp "$tmp/installed.plist" "$tmp/ld/local.job-hunt-hq.plist"
+run install_service.sh; sed -e '/<string>--docs-port<\/string>/,+1d' "$tmp/installed.plist" > "$tmp/ld/local.job-hunt-hq.plist"
 run service_status.sh STUB_LOADED=1 LAUNCHD_DIR="$tmp/ld"; rc=$?
-check "status reports docs off" '[ $rc -eq 0 ] && grep -q "docs:      off" "$tmp/out"'
+check "status reports an old docs-off install as not configured" \
+  '[ $rc -ne 0 ] && grep -q "docs:      not configured; reinstall" "$tmp/out"'
 
 make_repo
 run install_service.sh; cp "$tmp/installed.plist" "$tmp/ld/local.job-hunt-hq.plist"; : > "$calls"

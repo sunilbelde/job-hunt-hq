@@ -9,9 +9,17 @@ fail=0
 # STUB_LETTER / STUB_STATUS, the schema from STUB_SCHEMA, match.status from STUB_MATCH and saved_path from STUB_NAME; POST /application, PATCH,
 # DELETE, /resume, its status reads and /cover-letter calls are logged to STUB_LOG. STUB_LETTER_FILE makes /cover-letter
 # write a file. The resume job reads `running` for the first STUB_RUNNING polls, then STUB_JOB (default done).
+# On the public address the moved endpoints answer 404 unless STUB_PUBLIC_HEALTHZ, STUB_PUBLIC_MOVED (the all-zero
+# ID probes), STUB_PUBLIC_DELETE (the all-zero DELETE) or STUB_PUBLIC_STATUS (a real ID's status) say otherwise;
+# those probes are logged as a bare PROBE line.
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
+  *"http://x/healthz"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_HEALTHZ:-404}" ;;
+  *"-X DELETE http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_DELETE:-404}" ;;
+  *"http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_MOVED:-404}" ;;
+  *"http://x/resume/"*"/status"*) echo "PUBLICSTATUS" >> "$STUB_LOG"
+    printf '{"ok":true,"status":"done","saved_path":"JANE DOE.pdf","match":{"status":"no_job_description"}}\n%s' "${STUB_PUBLIC_STATUS:-404}" ;;
   *"http://d/docs"*) printf '%s' "$STUB_DOCS_LISTENER" ;;
   *"http://d/viewer"*) printf '%s' "${STUB_VIEWER_LISTENER:-$STUB_DOCS_LISTENER}" ;;
   *"http://d/openapi.json"*) printf '%s\n%s' "$STUB_SCHEMA" "$STUB_DOCS_LISTENER" ;;
@@ -54,9 +62,9 @@ run() {
     POLL_SECONDS=0 JOB_TIMEOUT=${JOB_TIMEOUT:-3} sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
-deleted() { grep -q "DELETE.*http://x/application/$id" "$tmp/log"; }
+deleted() { grep -q "DELETE.*http://d/application/$id" "$tmp/log"; }
 sent_as_string() { grep -q "/resume .*-d {\"application_id\":\"$id\"}" "$tmp/log"; }
-patched() { grep -q "PATCH .*http://x/application/$id .*-d {\"full_job_description\":null}" "$tmp/log"; }
+patched() { grep -q "PATCH .*http://d/application/$id .*-d {\"full_job_description\":null}" "$tmp/log"; }
 patched_before_resume() { [ "$(grep -n "^PATCH" "$tmp/log" | cut -d: -f1)" -lt "$(grep -n "/resume" "$tmp/log" | head -n 1 | cut -d: -f1)" ]; }
 ok() { echo "ok $1"; }
 bad() { echo "FAIL $1"; fail=1; }
@@ -83,7 +91,12 @@ run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_SCHEMA="$seventeen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "seventeen operations (before the fill endpoint) fail" || bad "seventeen operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 202); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 202); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
-(DOCS_URL=off STUB_DOCS_LISTENER=404 run 201 202) && ok "DOCS_URL=off skips the docs listener" || bad "docs off"
+(DOCS_URL=off run 201 202); [ $? -eq 2 ] && [ ! -s "$tmp/log" ] && ok "DOCS_URL=off is refused before any request" || bad "docs off"
+run 201 202 && [ "$(grep -c '^PROBE' "$tmp/log")" -eq 5 ] && ok "the public address is probed for the five moved endpoints" || bad "probes"
+(STUB_PUBLIC_HEALTHZ=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public /healthz fails before creating anything" || bad "public healthz"
+(STUB_PUBLIC_MOVED=401 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public status endpoint (401) fails before creating anything" || bad "public status probe"
+(STUB_PUBLIC_DELETE=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public DELETE /application fails before creating anything" || bad "public delete"
+(STUB_PUBLIC_STATUS=200 STUB_STATUS=404 run 201 202); [ $? -ne 0 ] && deleted && ! grep -q PUBLICSTATUS "$tmp/log" && ok "status served only on the public address fails" || bad "status only public"
 run 201 202 && ! patched && ! grep -q "full_job_description" "$tmp/log" && ok "fresh application has no posting text" || bad "fresh posting text"
 run 200 202 && patched && patched_before_resume && ok "leftover application's posting text cleared before the resume" || bad "leftover cleared"
 (STUB_PATCH=500 run 200 202); [ $? -ne 0 ] && ! grep -q "/resume" "$tmp/log" && ok "failed PATCH stops before the resume" || bad "failed patch"
@@ -95,8 +108,8 @@ run 201 202 && letter_sent && letter_after_resume && ok "cover letter requested 
 (STUB_LETTER=500 run 201 202); [ $? -ne 0 ] && ok "a cover letter 500 fails" || bad "letter 500"
 (STUB_LETTER_FILE=1 run 201 202); [ $? -ne 0 ] && ok "a cover letter file beside the resume fails" || bad "letter file"
 run 201 404; ! grep -q "^LETTER" "$tmp/log" && ok "no cover letter request after a failed resume" || bad "letter after failure"
-polled() { grep -q "^STATUS .*http://x/resume/$id/status" "$tmp/log"; }
-run 201 202 && polled && ok "resume status polled on the public address" || bad "status polled"
+polled() { grep -q "^STATUS .*http://d/resume/$id/status" "$tmp/log"; }
+run 201 202 && polled && ! grep -q PUBLICSTATUS "$tmp/log" && ok "resume status polled on the local listener" || bad "status polled"
 (STUB_RUNNING=2 run 201 202) && [ "$(grep -c '^STATUS' "$tmp/log")" -eq 3 ] && ok "polls until the job is done" || bad "polls until done"
 (STUB_JOB=failed run 201 202); [ $? -ne 0 ] && deleted && ! grep -q "^LETTER" "$tmp/log" && ok "a failed job fails and still cleans up" || bad "failed job"
 (STUB_RUNNING=99 run 201 202); [ $? -ne 0 ] && deleted && [ "$(grep -c '^STATUS' "$tmp/log")" -eq 4 ] && ok "a job still running at the timeout fails and still cleans up" || bad "job timeout"

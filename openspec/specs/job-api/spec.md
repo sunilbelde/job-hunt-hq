@@ -100,11 +100,19 @@ When writing the resume file or creating its folders fails, the system SHALL mar
 - **AND** the job record contains no filesystem path, secret or exception text
 
 ### Requirement: Health endpoints
-The system SHALL expose `GET /healthz` and `GET /health`, each returning 200 `{"status": "ok"}` without authentication and without touching storage.
+The system SHALL expose `GET /healthz` and `GET /health`, each returning 200 `{"status": "ok"}` without authentication and without touching storage. The installed service's public listener SHALL serve only `GET /health`; `GET /healthz` there SHALL be handled as an unknown path.
 
 #### Scenario: Health check
-- **WHEN** any client sends `GET /healthz` or `GET /health`
+- **WHEN** any client sends `GET /healthz` or `GET /health` to the docs port or to a development server
 - **THEN** the system responds 200 `{"status": "ok"}` and makes no storage call
+
+#### Scenario: Public listener health
+- **WHEN** a client sends `GET /health` to the public listener
+- **THEN** it responds 200 `{"status": "ok"}`
+
+#### Scenario: Alias not public
+- **WHEN** a client sends `GET /healthz` to the public listener
+- **THEN** it responds 404
 
 ### Requirement: Resume request body with UUID
 The system SHALL accept as the `POST /resume` body only a JSON object whose `application_id` is a JSON string, and SHALL ignore other fields. Non-JSON or non-object bodies, or a missing or non-string `application_id`, SHALL get 422 with `{"ok": false, "message": ...}` that does not echo the submitted value, with no lookup, generation or file write.

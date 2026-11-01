@@ -1,6 +1,6 @@
 """The resume viewer: its page and the base resume and cover letter it shows beside each generated one.
 
-The page is served only where API docs are enabled (the tailnet-only docs listener) and holds no data
+The page is served only where API docs are enabled (the installed service's local listener, reached only from the Mac) and holds no data
 itself: on load it reads everything from the viewer's read endpoints, which need no API key.
 """
 import threading

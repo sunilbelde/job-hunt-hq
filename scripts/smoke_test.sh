@@ -1,18 +1,18 @@
 #!/bin/sh
-# Smoke test: check that the public address serves no API docs or resume viewer and that the docs
-# listener serves both,
-# then record a synthetic application on a running service, start its resume, poll the resume job's
-# status until it is done, and check that the file it names (a bare file name, never a host path) is a PDF in the
+# Smoke test: check that the public address serves no API docs, no resume viewer and nothing but its
+# four endpoints, and that the local docs listener serves the docs, the viewer and the full API,
+# then record a synthetic application on the public address, start its resume there, poll the resume
+# job's status on the local listener until it is done, and check that the file it names (a bare file name, never a host path) is a PDF in the
 # application's folder under OUTPUT_DIR. The application has no posting text, so the
 # service saves the base resume without starting a Claude run, and refuses a cover letter (422)
 # without starting one either. Must run on the Mac itself, since it
 # reads the saved file from disk. If this run created the application, it deletes it and its
 # resume folder again; an application left over from an earlier run is reused and kept.
-# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081|off] [JOB_TIMEOUT=60] [OUTPUT_DIR=<the service's>] scripts/smoke_test.sh <base_url>
+# Usage: API_KEY=... [DOCS_URL=http://127.0.0.1:8081] [JOB_TIMEOUT=60] [OUTPUT_DIR=<the service's>] scripts/smoke_test.sh <base_url>
 set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  echo "Usage: API_KEY=<key> [DOCS_URL=<docs listener url>|off] [JOB_TIMEOUT=<seconds, default 60>] [OUTPUT_DIR=<the service's, default ~/Library/Application Support/job-hunt-hq>] $0 <base_url>   (run on the Mac hosting the service)"
+  echo "Usage: API_KEY=<key> [DOCS_URL=<local docs listener url, default http://127.0.0.1:8081>] [JOB_TIMEOUT=<seconds, default 60>] [OUTPUT_DIR=<the service's, default ~/Library/Application Support/job-hunt-hq>] $0 <base_url>   (run on the Mac hosting the service)"
   echo "The synthetic application has no posting text, so the check never starts a Claude run, for the resume or the cover letter."
   exit 0
 fi
@@ -24,6 +24,14 @@ fi
 base=${1%/}
 docs=${DOCS_URL:-http://127.0.0.1:8081}
 docs=${docs%/}
+if [ "$docs" = off ]; then
+  # Job status, the posting-text PATCH and the cleanup DELETE are served only on the local listener.
+  echo "DOCS_URL=off is no longer supported: the smoke test needs the local listener" >&2
+  echo "Usage: API_KEY=<key> [DOCS_URL=<local docs listener url>] $0 <base_url>" >&2
+  exit 2
+fi
+# An ID no application has: the public-address probes below can never touch a real row.
+zero=00000000-0000-0000-0000-000000000000
 link=https://example.com/job-hunt-hq-smoke-test
 # How long to wait for the resume job. Without posting text it takes about a second.
 job_timeout=${JOB_TIMEOUT:-60}
@@ -40,7 +48,7 @@ created=""
 saved=""
 cleanup() {
   [ "$created" = 1 ] || return 0
-  curl -sS -o /dev/null -X DELETE "$base/application/$application_id" -H "X-API-Key: $API_KEY" || true
+  curl -sS -o /dev/null -X DELETE "$docs/application/$application_id" -H "X-API-Key: $API_KEY" || true
   if [ -n "$saved" ]; then
     # rmdir only removes empty folders, so nothing but the smoke test's own file can be lost.
     rm -f "$saved"
@@ -59,24 +67,35 @@ for path in /docs /openapi.json /viewer; do
   fi
 done
 
-# The docs listener (tailnet only) serves the reference, the viewer and a schema with the eighteen operations.
-if [ "$docs" != off ]; then
-  for path in /docs /viewer; do
-    status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
-    if [ "$status" != "200" ]; then
-      echo "FAIL: GET $docs$path returned $status, want 200 (is the docs listener running? DOCS_URL=off skips this)" >&2
-      exit 1
-    fi
-  done
-  resp=$(curl -sS -w '\n%{http_code}' "$docs/openapi.json" || true)
-  status=$(printf '%s\n' "$resp" | tail -n 1)
-  count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
-methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
-print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
-  if [ "$status" != "200" ] || [ "$count" != "18" ]; then
-    echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 18" >&2
+# Nor anything but GET /health and the three POSTs: the rest is served on the local listener only.
+# The keyed PATCH and DELETE use the all-zero ID, so even a service that wrongly serves them changes nothing.
+for probe in "GET /healthz" "GET /resume/$zero/status" "GET /cover-letter/$zero/status" \
+             "PATCH /application/$zero" "DELETE /application/$zero"; do
+  method=${probe% *}; path=${probe#* }
+  status=$(curl -sS -o /dev/null -w '%{http_code}' -X "$method" "$base$path" -H "X-API-Key: $API_KEY" \
+    -H 'Content-Type: application/json' -d '{}')
+  if [ "$status" != "404" ]; then
+    echo "FAIL: $method $path returned $status, want 404 (the public address serves only its four endpoints)" >&2
     exit 1
   fi
+done
+
+# The local docs listener serves the reference, the viewer and a schema with the eighteen operations.
+for path in /docs /viewer; do
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
+  if [ "$status" != "200" ]; then
+    echo "FAIL: GET $docs$path returned $status, want 200 (is the local docs listener running?)" >&2
+    exit 1
+  fi
+done
+resp=$(curl -sS -w '\n%{http_code}' "$docs/openapi.json" || true)
+status=$(printf '%s\n' "$resp" | tail -n 1)
+count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
+methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
+print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
+if [ "$status" != "200" ] || [ "$count" != "18" ]; then
+  echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 18" >&2
+  exit 1
 fi
 
 resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/application" \
@@ -94,7 +113,7 @@ application_id=$(printf '%s' "$body" | json_field application_id)
 # An older smoke test stored posting text, which would make the service score and tailor (a paid
 # Claude run). Clear it on a reused application, so the resume is always the unscored base one.
 if [ "$created" != 1 ]; then
-  status=$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "$base/application/$application_id" \
+  status=$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "$docs/application/$application_id" \
     -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' -d '{"full_job_description":null}')
   if [ "$status" != "200" ]; then
     echo "FAIL: PATCH /application returned $status while clearing the smoke test's posting text" >&2
@@ -111,10 +130,10 @@ if [ "$status" != "202" ]; then
   exit 1
 fi
 
-# The resume is generated in the background: poll its job on the public address until it finishes.
+# The resume is generated in the background: poll its job on the local listener until it finishes.
 waited=0
 while :; do
-  resp=$(curl -sS -w '\n%{http_code}' "$base/resume/$application_id/status" -H "X-API-Key: $API_KEY")
+  resp=$(curl -sS -w '\n%{http_code}' "$docs/resume/$application_id/status" -H "X-API-Key: $API_KEY")
   status=$(printf '%s\n' "$resp" | tail -n 1)
   body=$(printf '%s\n' "$resp" | sed '$d')
   if [ "$status" != "200" ]; then
