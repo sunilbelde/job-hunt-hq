@@ -166,4 +166,5 @@ rather than only the area: an entry "Browser automation" does not tell the judge
 - Architecture diagrams (creating and maintaining)
 - Technical design documents
 - Zero-to-one product delivery as part of a team (idea to production)
+- Personally built 0-to-1 prototypes of production systems, multiple times (built them myself, not just specced them for others)
 - Mentoring engineers
