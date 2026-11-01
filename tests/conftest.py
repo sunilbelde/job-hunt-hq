@@ -1,5 +1,10 @@
+import os
 import sys
 from pathlib import Path
+
+# Before any app import: the app reads its resume template from the committed samples, never the owner's
+# gitignored files in data/.
+os.environ["JOB_HUNT_DATA_DIR"] = str(Path(__file__).resolve().parent.parent / "data" / "samples")
 
 import pytest
 from fastapi.testclient import TestClient

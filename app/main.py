@@ -745,8 +745,8 @@ def create_app(
             "returns 202 at once. The run continues in the background, whether or not the client stays connected: "
             "poll `GET /cover-letter/{application_id}/status` until `status` is `done` or `failed`. When done, the "
             "letter is saved on the service host beside the application's resume, replacing any earlier one, the "
-            "job's `saved_path` is its file name (`JANE DOE - Cover Letter.pdf`), and the job's `text` is the same "
-            "letter as plain text, for application forms that take pasted text. Call it only for applications that "
+            "job's `saved_path` is its file name (`<name> - Cover Letter.pdf`, `<name>` being the `\\name` in the "
+            "base resume), and the job's `text` is the same letter as plain text, for application forms that take pasted text. Call it only for applications that "
             "ask for a cover letter: `POST /resume` never writes one. The application itself is not changed, and no "
             "resume is needed.\n\n"
             "A request while a cover letter job for the application is still running starts no second run: it "
@@ -1144,8 +1144,8 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         tags=["viewer"],
         summary="Read the base cover letter",
         description=(
-            "The generic base cover letter committed as `data/COVER_LETTER.pdf`, served unchanged and read again "
-            "on every request, so a letter the owner re-renders shows straight away. The service never generates "
+            "The generic base cover letter kept in `data/COVER_LETTER.pdf` (local only), served unchanged and read "
+            "again on every request, so a letter the owner re-renders shows straight away. The service never generates "
             "or edits it, and tailored letters do not use it. Sent inline with `Cache-Control: no-store`."
         ),
         responses={**pdf_ok("The base cover letter."), **errors("404_base_letter")},

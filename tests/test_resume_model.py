@@ -96,7 +96,7 @@ def test_split_items_keeps_parentheses_together():
 def test_resume_text_has_fixed_parts_and_plain_bullets(base):
     text = resume_model.resume_text(base, base.content())
     assert "Lakeside University" in text
-    assert "AWS Solutions Architect – Associate" in text
+    assert "Example Cloud Architect – Associate" in text
     assert "75% source-field recall" in text and "**" not in text
     assert "JANE DOE" not in text  # the name and contact line are not scored
 

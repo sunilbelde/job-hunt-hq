@@ -39,7 +39,7 @@ def viewer(settings):
 
 @pytest.fixture
 def base_letter(tmp_path, monkeypatch):
-    """A stand-in for the committed data/COVER_LETTER.pdf."""
+    """A stand-in for the owner's data/COVER_LETTER.pdf."""
     path = tmp_path / "data" / "COVER_LETTER.pdf"
     path.parent.mkdir()
     path.write_bytes(b"%PDF-base-letter")
@@ -322,9 +322,10 @@ def test_base_cover_letter_missing(viewer, base_letter):
     assert_error(viewer.get("/cover-letter/base.pdf"), 404, "Base cover letter not found")
 
 
-def test_base_cover_letter_is_the_committed_file():
+def test_base_cover_letter_is_the_data_folders_file():
     from app.viewer import BASE_COVER_LETTER
-    assert BASE_COVER_LETTER == Path(__file__).resolve().parent.parent / "data" / "COVER_LETTER.pdf"
+    # data/samples/ here: the tests' JOB_HUNT_DATA_DIR. The service reads the owner's data/COVER_LETTER.pdf.
+    assert BASE_COVER_LETTER == Path(__file__).resolve().parent.parent / "data" / "samples" / "COVER_LETTER.pdf"
 
 
 # --- GET /resume/base.pdf ---

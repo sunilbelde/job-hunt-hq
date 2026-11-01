@@ -40,7 +40,7 @@ BASE_COVER_LETTER = TEMPLATE_DIR / "COVER_LETTER.pdf"
 
 
 def read_base_cover_letter() -> bytes | None:
-    """The committed base cover letter, read again on every call, or None when it is missing or unreadable."""
+    """The owner's base cover letter (data/COVER_LETTER.pdf), read again on every call, or None when it is missing or unreadable."""
     try:
         return BASE_COVER_LETTER.read_bytes()
     except OSError:

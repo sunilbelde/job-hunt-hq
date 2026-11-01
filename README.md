@@ -1,6 +1,6 @@
 # job-hunt-hq
 
-A small FastAPI service that runs on a Mac mini used as a personal server. `POST /application` records a job posting, and `POST /resume` renders a resume PDF for a recorded application and saves it on the Mac's disk at `OUTPUT_DIR/<company>/<application id>/JANE DOE.pdf`. Nothing depends on a cloud service: storage, secrets and the process all live on the Mac, and four of its endpoints are published over HTTPS through [Tailscale](https://tailscale.com) Funnel, so outside tools (such as Muse) can call them. Everything else, the API reference and the resume viewer included, is served only on the Mac itself.
+A small FastAPI service that runs on a Mac mini used as a personal server. `POST /application` records a job posting, and `POST /resume` renders a resume PDF for a recorded application and saves it on the Mac's disk at `OUTPUT_DIR/<company>/<application id>/<name>.pdf`, `<name>` being the `\name{...}` in your `data/BASE.tex`. Nothing depends on a cloud service: storage, secrets and the process all live on the Mac, and four of its endpoints are published over HTTPS through [Tailscale](https://tailscale.com) Funnel, so outside tools (such as Muse) can call them. Everything else, the API reference and the resume viewer included, is served only on the Mac itself.
 
 Each resume is matched against the application's posting. Claude scores the base resume (`data/BASE.tex` + `data/resume.cls`, compiled with [tectonic](https://tectonic-typesetting.github.io/)). Below 70 it reworks the wording, order and emphasis of the base resume's own facts, plus the extra facts about each job in your profile (`data/PROFILE.md`), into the same one-page template, requirement by requirement and in your own words. Scripts check every rule. Posting keywords the base resume lacks get in only when a profile fact states them or a separate Claude judge finds them in your resume or profile. See [How resumes are tailored](#how-resumes-are-tailored). For the applications that ask for one, `POST /cover-letter` writes a one-page cover letter tailored to the posting from the same facts. See [How cover letters are written](#how-cover-letters-are-written).
 
@@ -10,9 +10,9 @@ On the installed service only `GET /health`, `POST /application`, `POST /resume`
 |---|---|---|
 | `GET /healthz`, `GET /health` | none | `200 {"status": "ok"}`, no storage access |
 | `POST /resume` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that scores the base resume against the stored posting, tailors it below 70, and saves it, and returns at once with `202 {"ok": true, "application_id", "status": "running", "started_at"}`. Poll `GET /resume/{application_id}/status` for the result. The job takes about 1–5 minutes when it runs Claude (capped at about 10) and keeps running if the client disconnects. Sending it again while the job runs starts no second run and returns the same 202, so a retry is safe. It never writes a cover letter (see `POST /cover-letter`). Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body, 503 store failure |
-| `GET /resume/{application_id}/status` | `X-API-Key` | The application's latest resume job: `200 {"ok": true, "application_id", "status", "started_at", "finished_at", "saved_path", "match", "error"}`. `status` is `running`, `done` (`saved_path` is the resume's file name, `JANE DOE.pdf`, never a path on the Mac, and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`) or `failed` (`error` is `Resume generation failed`, `Storage service unavailable` or `Interrupted by a service restart`, and any earlier resume is kept). Poll every 10–15 seconds and give up after about 12 minutes. Served only on the local listener, and returns no posting text. 401 bad key, 404 unknown application or `No job for this application`, 503 store failure |
-| `POST /cover-letter` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that writes a cover letter tailored to the stored posting and saves it beside the resume as `JANE DOE - Cover Letter.pdf`, replacing any earlier one, and returns `202` like `POST /resume`. Poll `GET /cover-letter/{application_id}/status`. Call it only for applications that ask for a letter; it needs no resume. The job takes about 1–3 minutes. Always tailored: an application without usable posting text (missing, under 50 words or over 60,000 characters) gets a 422 and no job. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body or no posting text, 503 store failure |
-| `GET /cover-letter/{application_id}/status` | `X-API-Key` | The application's latest cover letter job, as for the resume, with `saved_path` `JANE DOE - Cover Letter.pdf` when done and `text` (the same letter as plain text, for forms that take pasted text) in place of `match`. A failed job's `error` is `Cover letter generation failed`, `Storage service unavailable` or `Interrupted by a service restart` |
+| `GET /resume/{application_id}/status` | `X-API-Key` | The application's latest resume job: `200 {"ok": true, "application_id", "status", "started_at", "finished_at", "saved_path", "match", "error"}`. `status` is `running`, `done` (`saved_path` is the resume's file name, `<name>.pdf`, never a path on the Mac, and `match` is `{"status", "threshold", "base_score", "tailored_score", "added_terms"}`) or `failed` (`error` is `Resume generation failed`, `Storage service unavailable` or `Interrupted by a service restart`, and any earlier resume is kept). Poll every 10–15 seconds and give up after about 12 minutes. Served only on the local listener, and returns no posting text. 401 bad key, 404 unknown application or `No job for this application`, 503 store failure |
+| `POST /cover-letter` | `X-API-Key` | Body `{"application_id": "<uuid>"}`. Starts a background job that writes a cover letter tailored to the stored posting and saves it beside the resume as `<name> - Cover Letter.pdf`, replacing any earlier one, and returns `202` like `POST /resume`. Poll `GET /cover-letter/{application_id}/status`. Call it only for applications that ask for a letter; it needs no resume. The job takes about 1–3 minutes. Always tailored: an application without usable posting text (missing, under 50 words or over 60,000 characters) gets a 422 and no job. Errors are `{"ok": false, "message"}`: 401 bad key, 404 unknown application, 422 bad body or no posting text, 503 store failure |
+| `GET /cover-letter/{application_id}/status` | `X-API-Key` | The application's latest cover letter job, as for the resume, with `saved_path` `<name> - Cover Letter.pdf` when done and `text` (the same letter as plain text, for forms that take pasted text) in place of `match`. A failed job's `error` is `Cover letter generation failed`, `Storage service unavailable` or `Interrupted by a service restart` |
 | `POST /application` | `X-API-Key` | Records a verified posting. `201 {"ok": true, "application_id"}` for a new one, `200` with the existing ID if its `job_link` is already stored. Errors are `{"ok": false, "message"}`: 401 bad key, 422 bad body, 503 store failure |
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
@@ -158,7 +158,7 @@ Everything it writes, including the draft PDF (`out/build/tailored.pdf`), the ch
 
 The checks can't catch every overstatement ("led" where your record says "built"), so skim each letter before you send it.
 
-**The base cover letter.** A generic letter, written once with the same rules, is kept for your reference at `data/COVER_LETTER.md` (text) and `data/COVER_LETTER.pdf`. The service never generates or edits it, and tailored letters don't use it; the [resume viewer](#resume-viewer) only shows the committed PDF beside each generated letter. To draft it again:
+**The base cover letter.** A generic letter, written once with the same rules, is kept for your reference at `data/COVER_LETTER.md` (text) and `data/COVER_LETTER.pdf`. The service never generates or edits it, and tailored letters don't use it; the [resume viewer](#resume-viewer) only shows this PDF beside each generated letter. Both files are local only; `data/samples/` has a made-up pair. To draft it again:
 
 ```sh
 .claude/skills/write-cover-letter/scripts/run prepare --template data --profile data/PROFILE.md --out /tmp/letter-base
@@ -174,8 +174,9 @@ With `--posting posting.txt --company "Acme" --role "ML Engineer"` added to `pre
 
 ### Resume files
 
-Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/JANE DOE.pdf`, using the application's company at the time you generate. The folder keeps the company name as written (spaces, case, accents), with `/`, `\`, `:` and control characters replaced by `-`, leading and trailing spaces and dots removed, and the name cut to 100 characters. An empty result becomes `unknown-company`, and a name starting with `applications.sqlite3` gets a leading `_` so it can't collide with the store.
+Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/<name>.pdf`, using the application's company at the time you generate. The folder keeps the company name as written (spaces, case, accents), with `/`, `\`, `:` and control characters replaced by `-`, leading and trailing spaces and dots removed, and the name cut to 100 characters. An empty result becomes `unknown-company`, and a name starting with `applications.sqlite3` gets a leading `_` so it can't collide with the store.
 
+- `<name>` is the `\name{...}` of `data/BASE.tex` as written, read when the service starts (restart it after changing the name), with `/`, `\` and `:` replaced by `-`. Without a readable name the files are `Resume.pdf` and `Resume - Cover Letter.pdf`.
 - Generating again for the same application replaces the file in one step; a failed render or write leaves the previous file intact.
 - Folders are readable only by your user and files are mode 600. The service serves resumes and cover letters over HTTP only to the [resume viewer](#resume-viewer), on the Mac-only local listener, without the API key.
 - Files are kept until you delete them. Deleting an application, or renaming its company, leaves existing resume folders where they are.
@@ -183,6 +184,25 @@ Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/JANE DOE.p
 ### Upgrading from `POST /jobs`
 
 `POST /jobs`, `GET /files/...` and signed download links are gone (both return 404). Record the posting with `POST /application`, then call `POST /resume` with the returned ID, and read errors from `ok`/`message` rather than `detail`. `LINK_SIGNING_SECRET`, `PUBLIC_BASE_URL`, `SIGNED_URL_TTL_SECONDS` and `OUTPUT_RETENTION_DAYS` are no longer used: remove them from `.env` (they're ignored if left in). Files under `OUTPUT_DIR/outputs/` from the old endpoint are no longer served or cleaned up; delete that folder by hand.
+
+## Your data (local only)
+
+The repository is public, so your own files never go into it. Everything in `data/` is gitignored except `data/samples/`, which holds made-up copies of the files the service needs, for a fictional Jane Doe:
+
+| File | What it is |
+|---|---|
+| `BASE.tex`, `resume.cls` | The one-page base resume and its class. `\name{...}` names the saved PDFs |
+| `PROFILE.md` | Your profile: facts per job and skills beyond the resume (see [How resumes are tailored](#how-resumes-are-tailored)) |
+| `COVER_LETTER.md`, `COVER_LETTER.pdf` | The base cover letter (see [How cover letters are written](#how-cover-letters-are-written)) |
+| `BASE.pdf` | `BASE.tex` rendered, for reference |
+
+To start, copy them and replace each with your own:
+
+```sh
+cp -n data/samples/* data/
+```
+
+The service, the skills and the smoke test read `data/`. The tests read `data/samples/` instead (they set `JOB_HUNT_DATA_DIR`, which overrides the folder), so they pass on a fresh clone and never see your files. Anything else you keep in `data/`, such as notes for application forms, stays local too.
 
 ## Configuration
 
@@ -209,6 +229,7 @@ Rendering needs `tectonic` on your PATH; the first render downloads TeX packages
 ```sh
 brew install python@3.12 tectonic
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+cp -n data/samples/* data/   # then replace them with your own; see "Your data"
 .venv/bin/uvicorn app.main:create_app --factory --port 8080
 
 ID=$(curl -s -X POST localhost:8080/application -H "X-API-Key: $API_KEY" \
@@ -224,16 +245,16 @@ curl -X POST localhost:8080/resume -H "X-API-Key: $API_KEY" \
 
 curl "localhost:8080/resume/$ID/status" -H "X-API-Key: $API_KEY"
 # {"ok":true,"application_id":"3f2b…","status":"done","started_at":"…","finished_at":"…",
-#  "saved_path":"JANE DOE.pdf",
+#  "saved_path":"<name>.pdf",
 #  "match":{"status":"no_job_description","threshold":70,"base_score":null,"tailored_score":null,"added_terms":[]},"error":null}
 # (this posting has no text, so nothing was scored and the job finished in seconds; with posting text, poll until done.
-#  saved_path is only the file name: the PDF is at OUTPUT_DIR/Acme/<id>/JANE DOE.pdf on the Mac)
+#  saved_path is only the file name: the PDF is at OUTPUT_DIR/Acme/<id>/<name>.pdf on the Mac)
 
 curl -X POST localhost:8080/cover-letter -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d "{\"application_id\":\"$ID\"}"
 # {"ok":false,"message":"Application has no usable posting text: add full_job_description (at least 50 words) with PATCH /application/{application_id} first"}
 # (422: this posting has no text. With one, it returns 202, and once done
-#  GET /cover-letter/$ID/status has "saved_path":"JANE DOE - Cover Letter.pdf" and "text":"Dear Acme Hiring Team,\n\n…")
+#  GET /cover-letter/$ID/status has "saved_path":"<name> - Cover Letter.pdf" and "text":"Dear Acme Hiring Team,\n\n…")
 
 curl -X PATCH "localhost:8080/application/$ID" -H "X-API-Key: $API_KEY" \
   -H 'Content-Type: application/json' -d '{"status":"applied"}'
@@ -359,6 +380,7 @@ Resume tailoring also needs the [Claude Code CLI](https://code.claude.com/docs/e
 
 ```sh
 cp .env.example .env
+cp -n data/samples/* data/   # then replace them with your resume, profile and cover letter ("Your data")
 # API_KEY: openssl rand -hex 32
 # A Claude credential for resume tailoring, one of:
 #   CLAUDE_CODE_OAUTH_TOKEN: run `claude setup-token` and paste the token as one line

@@ -10,6 +10,7 @@ from app.storage import (
     StorageError,
     company_folder,
     cover_letter_path,
+    owner_name,
     rename_legacy_folders,
     resume_path,
 )
@@ -122,6 +123,27 @@ def test_cover_letter_path_beside_resume(storage, root, company, folder):
     assert not path.exists()
     assert [p.name for p in resume.parent.iterdir()] == [RESUME_FILE_NAME]
 
+
+
+def test_file_names_come_from_the_base_resumes_name():
+    # The tests' data folder is data/samples, whose BASE.tex has \name{JANE DOE}.
+    assert (RESUME_FILE_NAME, COVER_LETTER_FILE_NAME) == ("JANE DOE.pdf", "JANE DOE - Cover Letter.pdf")
+
+
+@pytest.mark.parametrize("tex,name", [
+    ("\\name{Sam Lee} % comment\n\\address{x}\n", "Sam Lee"),
+    ("\\name{A/B: C\\D }\n", "A-B- C-D"),
+    ("\\name{ . }\n", "Resume"),
+    ("% \\name{Commented}\n", "Resume"),
+    ("no name here\n", "Resume"),
+])
+def test_owner_name(tmp_path, tex, name):
+    (tmp_path / "BASE.tex").write_text(tex, encoding="utf-8")
+    assert owner_name(tmp_path) == name
+
+
+def test_owner_name_without_a_base_resume(tmp_path):
+    assert owner_name(tmp_path) == "Resume"
 
 def test_cover_letter_without_resume(storage, root):
     path = storage.save_cover_letter("AT&T / Mobility: West", A, b"letter")
