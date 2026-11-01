@@ -41,11 +41,11 @@ When API docs are disabled, which is the default, the system SHALL NOT serve `/d
 - **THEN** `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume` and `POST /cover-letter` behave exactly as they do with docs enabled
 
 ### Requirement: Documented endpoint coverage
-The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}` and `DELETE /viewer/application/{application_id}`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
+The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}` and `POST /viewer/application/{application_id}/fill`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
 
 #### Scenario: All endpoints listed
 - **WHEN** the OpenAPI document is fetched
-- **THEN** it contains exactly those seventeen operations, each with a non-empty summary, description and tag
+- **THEN** it contains exactly those eighteen operations, each with a non-empty summary, description and tag
 
 #### Scenario: Health alias
 - **WHEN** the OpenAPI document is fetched
@@ -223,3 +223,21 @@ The OpenAPI document SHALL tag `PATCH /viewer/application/{application_id}` and 
 #### Scenario: Delete keeps files
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the `DELETE /viewer/application/{application_id}` description says generated resume and cover letter files are kept
+
+### Requirement: Viewer fill endpoint documented
+The OpenAPI document SHALL tag `POST /viewer/application/{application_id}/fill` `viewer`, mark it as needing no API key and taking no request body, and list 200, 403, 404 and 503. Its description SHALL name the Herdr workspace, the tab label format and the command it runs, say that the session never submits unless asked in it, and explain `already_open`. The 503 description SHALL mention `Herdr unavailable`.
+
+#### Scenario: Fill endpoint listed
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the fill operation is tagged `viewer`, has no security requirement and no request body, and its description says it is served only where the viewer is, refuses cross-site requests, and names `Claude-Jobs-Automation`, `<Company>-<Role>-<application_id>` and `/job-application-form-filler <application_id>`
+
+### Requirement: Reference says where endpoints are served
+The OpenAPI document's descriptions SHALL say that only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public address, and that every other operation is served only on the Mac's local listener. No description SHALL say an operation is served on the tailnet or that the status endpoints are served on the public address.
+
+#### Scenario: Service description
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the top-level description names the four public operations and says the rest are local-only
+
+#### Scenario: Status endpoints described as local
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the `GET /resume/{application_id}/status` and `GET /cover-letter/{application_id}/status` descriptions say they are served only on the local listener, and no description contains the word "tailnet"

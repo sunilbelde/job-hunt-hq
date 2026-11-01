@@ -420,3 +420,27 @@ def test_swagger_page_loads_scripts_and_styles(docs_client):
 
 def test_oauth2_redirect_served_when_enabled(docs_client):
     assert docs_client.get("/docs/oauth2-redirect").status_code == 200
+
+
+PUBLIC_OPERATIONS = ("GET /health", "POST /application", "POST /resume", "POST /cover-letter")
+
+
+def test_description_names_the_public_operations(schema):
+    description = " ".join(schema["info"]["description"].split())
+    for operation in PUBLIC_OPERATIONS:
+        method, path = operation.split()
+        assert f"`{method} {path}`" in description, operation
+    assert "only on the Mac's local listener" in description and "404 on the public address" in description
+
+
+@pytest.mark.parametrize("path", ["/resume/{application_id}/status", "/cover-letter/{application_id}/status"])
+def test_status_endpoints_described_as_local_only(schema, path):
+    description = " ".join(operations(schema)[("get", path)]["description"].split())
+    assert "only on the local listener" in description and "public address answers 404" in description
+    assert "public address too" not in description
+
+
+def test_no_description_mentions_the_tailnet(schema):
+    assert "tailnet" not in schema["info"]["description"].lower()
+    for key, op in operations(schema).items():
+        assert "tailnet" not in op["description"].lower(), key

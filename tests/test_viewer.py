@@ -864,3 +864,11 @@ def test_page_has_a_fill_button(viewer):
     html = viewer.get("/viewer").text
     assert '"/viewer/application/" + app.id + "/fill", false, { method: "POST" }' in html
     assert '"Fill form"' in html
+
+
+def test_page_calls_only_its_own_origin(viewer):
+    # Relative paths only, so opened at http://127.0.0.1:8081/viewer every request stays on loopback.
+    # The page's one http(s) mention is the protocol check that guards the posting's own link.
+    html = viewer.get("/viewer").text
+    assert re.findall(r"https?://[^\s\"'`)<]*", html) == []
+    assert "tailnet" not in html.lower() and "ts.net" not in html

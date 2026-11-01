@@ -1,9 +1,10 @@
 #!/bin/sh
 # Installs (or reinstalls) the service as a launchd daemon that starts at boot,
-# restarts on crash and listens on 127.0.0.1: the public API on PORT (default 8080)
-# and the API plus its docs on DOCS_PORT (default 8081, or "off"). Run as your own
+# restarts on crash and listens on 127.0.0.1: the four public endpoints Funnel publishes
+# on PORT (default 8080), and the full API, its docs and the resume viewer on DOCS_PORT
+# (default 8081), the local listener reached only from this Mac. Run as your own
 # user; it uses sudo only for the launchd steps. Safe to run again after `git pull`.
-# Usage: [PORT=8080] [DOCS_PORT=8081|off] scripts/install_service.sh
+# Usage: [PORT=8080] [DOCS_PORT=8081] scripts/install_service.sh
 set -eu
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
@@ -28,8 +29,8 @@ step() { echo "==> $*"; }
 
 step "Checking prerequisites"
 case "$docs_port" in
-  off) ;;
-  ''|*[!0-9]*) die "DOCS_PORT must be a port number or off, got '$docs_port'" ;;
+  off) die "DOCS_PORT=off is no longer supported: the local listener is required for job status, application edits and the resume viewer" ;;
+  ''|*[!0-9]*) die "DOCS_PORT must be a port number, got '$docs_port'" ;;
   "$port") die "DOCS_PORT ($docs_port) must differ from PORT ($port)" ;;
 esac
 command -v python3.12 >/dev/null 2>&1 || die "python3.12 not found. Install it: brew install python@3.12"
@@ -72,14 +73,8 @@ step "Writing launchd and logging configuration"
 mkdir -p "$log_dir"
 "$venv_py" "$repo/deploy/render_template.py" "$repo/deploy/logging.json.template" \
   "$repo/deploy/logging.json" LOG_DIR="$log_dir"
-tmp_plist=$(mktemp); tmp_template=$(mktemp); trap 'rm -f "$tmp_plist" "$tmp_template"' EXIT
-if [ "$docs_port" = off ]; then
-  sed -e '/<string>--docs-port<\/string>/d' -e '/__DOCS_PORT__/d' \
-    "$repo/deploy/local.job-hunt-hq.plist.template" > "$tmp_template"
-else
-  cp "$repo/deploy/local.job-hunt-hq.plist.template" "$tmp_template"
-fi
-"$venv_py" "$repo/deploy/render_template.py" "$tmp_template" \
+tmp_plist=$(mktemp); trap 'rm -f "$tmp_plist"' EXIT
+"$venv_py" "$repo/deploy/render_template.py" "$repo/deploy/local.job-hunt-hq.plist.template" \
   "$tmp_plist" REPO="$repo" USER="$(id -un)" HOME="$HOME" PORT="$port" DOCS_PORT="$docs_port" \
   CLAUDE_BIN="${claude_bin:-claude}" HERDR_BIN="${herdr_bin:-herdr}"
 plutil -lint "$tmp_plist" >/dev/null || die "generated plist is invalid"
@@ -107,12 +102,15 @@ for path in /docs /viewer; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
   [ "$code" = 404 ] || die "http://127.0.0.1:$port$path answered $code, want 404: the public port must not serve API docs or the viewer"
 done
-if [ "$docs_port" != off ]; then
-  for path in /docs /viewer; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$docs_port$path" || true)
-    [ "$code" = 200 ] || die "docs listener did not answer http://127.0.0.1:$docs_port$path (got $code); see $log_dir/launchd.log"
-  done
-fi
+# Nor anything but its four endpoints: these are served on the local listener only.
+for path in /healthz /resume/00000000-0000-0000-0000-000000000000/status; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
+  [ "$code" = 404 ] || die "http://127.0.0.1:$port$path answered $code, want 404: the public port serves only its four endpoints"
+done
+for path in /docs /viewer; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$docs_port$path" || true)
+  [ "$code" = 200 ] || die "docs listener did not answer http://127.0.0.1:$docs_port$path (got $code); see $log_dir/launchd.log"
+done
 echo "OK: service is running on http://127.0.0.1:$port (logs: $log_dir)"
 
 if ! command -v tailscale >/dev/null 2>&1; then
@@ -122,23 +120,20 @@ elif ! tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$port"; then
   echo "         Run: tailscale serve --bg --https=443 http://127.0.0.1:$port" >&2
 fi
 
-if [ "$docs_port" != off ]; then
-  echo "API docs on this Mac: http://127.0.0.1:$docs_port/docs"
-  echo "Resume viewer on this Mac: http://127.0.0.1:$docs_port/viewer"
-  if command -v tailscale >/dev/null 2>&1; then
-    rc=0
-    docs_url=$(tailscale serve status --json 2>/dev/null | "$venv_py" "$repo/deploy/tailscale_docs.py" "$docs_port") || rc=$?
-    case $rc in
-      0) echo "API docs on your tailnet: $docs_url/docs"
-         echo "Resume viewer on your tailnet: $docs_url/viewer" ;;
-      3) case "$docs_url" in https://*:*) https_port=${docs_url##*:} ;; *) https_port=443 ;; esac
-         echo "WARNING: Funnel publishes the docs listener at $docs_url: the API docs and resume viewer are public." >&2
-         echo "         Run: tailscale funnel --https=$https_port off" >&2
-         echo "         then: tailscale serve --bg --https=8444 http://127.0.0.1:$docs_port" >&2 ;;
-      *) echo "WARNING: tailscale serve is not proxying the docs port $docs_port." >&2
-         echo "         Run: tailscale serve --bg --https=8444 http://127.0.0.1:$docs_port" >&2 ;;
-    esac
-  fi
+echo "API docs on this Mac: http://127.0.0.1:$docs_port/docs"
+echo "Resume viewer on this Mac: http://127.0.0.1:$docs_port/viewer"
+# The local listener is for this Mac only: any Tailscale mapping to it is a leftover to remove.
+if command -v tailscale >/dev/null 2>&1; then
+  rc=0
+  docs_url=$(tailscale serve status --json 2>/dev/null | "$venv_py" "$repo/deploy/tailscale_docs.py" "$docs_port") || rc=$?
+  case "$docs_url" in https://*:*) https_port=${docs_url##*:} ;; *) https_port=443 ;; esac
+  case $rc in
+    0) echo "WARNING: tailscale serve publishes the local listener at $docs_url: the API docs and resume viewer are reachable from your tailnet." >&2
+       echo "         Run: tailscale serve --https=$https_port off" >&2 ;;
+    3) echo "WARNING: Funnel publishes the local listener at $docs_url: the API docs and resume viewer are public." >&2
+       echo "         Run: tailscale funnel --https=$https_port off" >&2
+       echo "         then: tailscale serve --https=$https_port off" >&2 ;;
+  esac
 fi
 
 # Resume tailoring: the CLI, a credential, and one minimal live call to see the credential works.

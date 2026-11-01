@@ -37,19 +37,23 @@ fi
 if [ -f "$plist" ]; then
   docs_port=$(sed -n '/<string>--docs-port<\/string>/{n;s/.*<string>\([0-9]*\)<\/string>.*/\1/p;}' "$plist")
   if [ -z "$docs_port" ]; then
-    echo "docs:      off"
+    # Installed with the retired DOCS_PORT=off: no job status, edits or viewer anywhere.
+    echo "docs:      not configured; reinstall (scripts/install_service.sh)"
+    status=1
   elif [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$docs_port/docs")" = 200 ]; then
-    echo "docs:      ok (http://127.0.0.1:$docs_port/docs)"
+    echo "docs:      ok (http://127.0.0.1:$docs_port/docs, local only)"
   else
     echo "docs:      FAILING (http://127.0.0.1:$docs_port/docs)"
     status=1
   fi
+  # The local listener is for this Mac only: any Tailscale mapping to it is a leftover to remove.
   if [ -n "$docs_port" ] && command -v tailscale >/dev/null 2>&1; then
     docs_url=$(tailscale serve status --json 2>/dev/null | "$repo/.venv/bin/python" "$repo/deploy/tailscale_docs.py" "$docs_port")
-    case $? in
-      0) echo "tailnet:   $docs_url/docs" ;;
-      3) echo "tailnet:   WARNING: Funnel publishes the docs listener at $docs_url: the API docs are public" ;;
-      *) echo "tailnet:   docs not proxied; run: tailscale serve --bg --https=8444 http://127.0.0.1:$docs_port" ;;
+    rc=$?
+    case "$docs_url" in https://*:*) https_port=${docs_url##*:} ;; *) https_port=443 ;; esac
+    case $rc in
+      0) echo "tailnet:   WARNING: tailscale serve publishes the local listener at $docs_url; run: tailscale serve --https=$https_port off" ;;
+      3) echo "tailnet:   WARNING: Funnel publishes the local listener at $docs_url: the API docs are public; run: tailscale funnel --https=$https_port off, then tailscale serve --https=$https_port off" ;;
     esac
   fi
 fi
