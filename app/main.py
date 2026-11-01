@@ -80,6 +80,10 @@ BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequ
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
+Only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public
+address (the one Tailscale Funnel publishes); every other operation here is served only on the Mac's local
+listener, `http://127.0.0.1:8081`, and answers 404 on the public address.
+
 Every endpoint except the health checks and the viewer's endpoints needs the `X-API-Key` header. Every error is a JSON object
 `{"ok": false, "message": "..."}`; the message names fields and rules but never echoes submitted values.
 
@@ -183,7 +187,7 @@ def json_body(model: type[BaseModel], description: str) -> dict[str, Any]:
 LOGGED_STATE = ("application_id", "duplicate")
 
 JOB_EVENTS = {"resume": "resume_job", "cover_letter": "cover_letter_job"}
-# The generic errors a failed job records. Details are logged, never stored: the status endpoints are public.
+# The generic errors a failed job records. Details are logged, never stored: the status endpoints return them.
 JOB_ERRORS = {"resume": "Resume generation failed", "cover_letter": "Cover letter generation failed"}
 STORAGE_UNAVAILABLE = "Storage service unavailable"
 NO_LETTER_POSTING = ("Application has no usable posting text: add full_job_description (at least 50 words) with "
@@ -251,7 +255,7 @@ def request_event(path: str) -> str | None:
 def same_origin(request: Request) -> bool:
     """Whether a browser could have sent this from the viewer page itself. Sec-Fetch-Site, sent by every current
     browser, decides; Origin is the fallback for older ones. Clients that send neither (curl) are let through:
-    the guard is against other websites, not against callers on the tailnet."""
+    the guard is against other websites, not against callers on the Mac itself."""
     site = request.headers.get("sec-fetch-site")
     if site is not None:
         return site == "same-origin"
@@ -720,7 +724,8 @@ def create_app(
         "A job that was running when the service restarted is `failed` with `Interrupted by a service restart`; "
         "request it again.\n\n"
         "Returns only the job's state and result: no posting text and no generation report. Reading it never "
-        "starts or changes a job."
+        "starts or changes a job.\n\n"
+        "Served only on the local listener on the Mac; the public address answers 404."
     )
 
     app.get(
@@ -798,7 +803,7 @@ def create_app(
 def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationStore, store_unavailable,
                     application_id_path, form_filler: FormFillLauncher, generate, accepted) -> None:
     """The resume viewer's read endpoints. Only for an app with docs enabled: on the public listener none of
-    these paths exist, so saved resumes and posting text never leave the tailnet. They take no API key, so
+    these paths exist, so saved resumes and posting text never leave the Mac. They take no API key, so
     this docs-only registration is their only guard."""
     base_resume = BaseResumeCache()
     output_root = settings.output_dir.resolve()
@@ -877,7 +882,7 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
     # and a delete so the docs flag never becomes a key bypass for the full PATCH /application body.
     viewer_writes = (
         "Takes no API key, so it is served only where the viewer is: on the installed service, only the "
-        "tailnet docs listener. A request a browser marks as coming from another site gets 403."
+        "local listener on the Mac. A request a browser marks as coming from another site gets 403."
     )
 
     async def read_status(request: Request) -> tuple[str | None, str | None]:

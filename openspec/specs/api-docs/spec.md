@@ -231,6 +231,17 @@ The OpenAPI document SHALL tag `POST /viewer/application/{application_id}/fill` 
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the fill operation is tagged `viewer`, has no security requirement and no request body, and its description says it is served only where the viewer is, refuses cross-site requests, and names `Claude-Jobs-Automation`, `<Company>-<Role>-<application_id>` and `/job-application-form-filler <application_id>`
 
+### Requirement: Reference says where endpoints are served
+The OpenAPI document's descriptions SHALL say that only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public address, and that every other operation is served only on the Mac's local listener. No description SHALL say an operation is served on the tailnet or that the status endpoints are served on the public address.
+
+#### Scenario: Service description
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the top-level description names the four public operations and says the rest are local-only
+
+#### Scenario: Status endpoints described as local
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the `GET /resume/{application_id}/status` and `GET /cover-letter/{application_id}/status` descriptions say they are served only on the local listener, and no description contains the word "tailnet"
+
 ### Requirement: Viewer generation endpoints documented
 The OpenAPI document SHALL tag both viewer generation endpoints `viewer`, mark them as needing no API key and taking no request body, and describe their 202 response with the same shape as `POST /resume`. The resume endpoint SHALL list 202, 403, 404 and 503; the cover letter endpoint 202, 403, 404, 422 and 503.
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Runs resume and cover letter generation in the background and records each run's state and result per application, so clients whose connections drop before a run finishes can poll the public status endpoints for the outcome.
+Runs resume and cover letter generation in the background and records each run's state and result per application, so clients whose connections drop before a run finishes can poll the status endpoints on the local listener for the outcome.
 
 ## Requirements
 
@@ -118,13 +118,6 @@ On startup, before serving requests, the system SHALL mark every job still `runn
 - **WHEN** the cover letter job for `<id>` failed
 - **THEN** the status endpoint gives 200 with `status` `failed`, `error` "Cover letter generation failed", and `saved_path` and `text` null
 
-### Requirement: Status endpoints on the public port
-Both status endpoints SHALL be served on the public port and on the docs port. They SHALL return only the fields listed above: no posting text, application fields other than the ID, scores breakdown, added-term evidence or full report. The viewer reads SHALL stay docs-port only.
-
-#### Scenario: Public listener
-- **WHEN** an authenticated client calls `GET /resume/<id>/status` on the public port
-- **THEN** it gets the job status, while `GET /application/<id>` on the same port still answers 404
-
 ### Requirement: Status endpoint authentication and lookup
 Both status endpoints SHALL check `X-API-Key` first and respond 401 `{"ok": false, "message"}` when it is missing or wrong, before reading the store. With a valid key, an ID that is not a hyphenated UUID, names no application, or has no job of that kind SHALL get 404 "Application not found" or "No job for this application" respectively. A store failure SHALL get 503.
 
@@ -175,3 +168,14 @@ The job record SHALL continue to store the absolute path of the saved PDF. Only 
 #### Scenario: Stored path unchanged by a status read
 - **WHEN** a resume job for `<id>` is `done` and a client reads `GET /resume/<id>/status`
 - **THEN** the response's `saved_path` is `SUNIL BELDE.pdf`, and the stored job record still holds the absolute path `<OUTPUT_DIR>/<company folder>/<id>/SUNIL BELDE.pdf`
+
+### Requirement: Status endpoints on the local listener only
+Both status endpoints SHALL be served on the docs port, the loopback-only local listener, and SHALL NOT be served on the public port, where they are handled as unknown paths. They SHALL return only the fields listed above: no posting text, application fields other than the ID, scores breakdown, added-term evidence or full report.
+
+#### Scenario: Local listener
+- **WHEN** an authenticated client on the Mac calls `GET /resume/<id>/status` on the docs port after `POST /resume` for `<id>` was sent to the public port
+- **THEN** it gets that job's status
+
+#### Scenario: Public listener
+- **WHEN** an authenticated client calls `GET /resume/<id>/status` or `GET /cover-letter/<id>/status` on the public port for an application with a job
+- **THEN** it gets 404, as for an unknown path, and no job state

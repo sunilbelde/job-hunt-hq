@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A page, served only on the owner's tailnet, for reviewing each application's generated resume against the base resume (the two PDFs side by side, the application details, the scores and what tailoring added or left as gaps) and its generated cover letter against the base cover letter, and for changing an application's status or deleting it.
+A page, served only on the Mac mini itself (the loopback-only local listener), for reviewing each application's generated resume against the base resume (the two PDFs side by side, the application details, the scores and what tailoring added or left as gaps) and its generated cover letter against the base cover letter, and for changing an application's status or deleting it.
 
 ## Requirements
 
@@ -428,7 +428,7 @@ The viewer write endpoints SHALL respond 403 `{"ok": false, "message": "Cross-si
 - **THEN** the response carries no `Access-Control-Allow-Origin` header
 
 ### Requirement: Viewer write endpoints only where the viewer is
-The viewer write endpoints SHALL exist only when API docs are enabled. When docs are disabled, a request to either SHALL be handled as an unknown path, whatever `X-API-Key` it carries. The keyed `PATCH` and `DELETE /application/{application_id}` SHALL behave as before on every listener.
+The viewer write endpoints SHALL exist only when API docs are enabled. When docs are disabled, a request to either SHALL be handled as an unknown path, whatever `X-API-Key` it carries. The keyed `PATCH` and `DELETE /application/{application_id}` SHALL behave as before on the docs port and on a development server, and SHALL NOT be served on the installed service's public listener.
 
 #### Scenario: Docs disabled
 - **WHEN** API docs are disabled and a client sends `PATCH` or `DELETE /viewer/application/<id>` for an existing row, with or without a valid key
@@ -437,6 +437,10 @@ The viewer write endpoints SHALL exist only when API docs are enabled. When docs
 #### Scenario: Keyed endpoints still need the key
 - **WHEN** API docs are enabled and a client sends `DELETE /application/<id>` without `X-API-Key`
 - **THEN** the response is 401 and the row still exists
+
+#### Scenario: Keyed endpoints not public
+- **WHEN** a client sends `PATCH` or `DELETE /application/<id>` with a valid key to the installed service's public listener
+- **THEN** the response is 404 and the row is unchanged
 
 ### Requirement: Status changed from the viewer
 The selected application's action bar SHALL show its status as a control listing the six application statuses, with the current one selected. Choosing a different status SHALL save it at once, update the action bar, the details and that application's list entry without reloading the page, and show that it was saved. If the save fails, the viewer SHALL show the error message in the action bar and put the control back to the stored status. List entries SHALL carry no status control.
@@ -579,6 +583,17 @@ The selected application's action bar SHALL offer a **Fill form** button that po
 #### Scenario: Herdr not running
 - **WHEN** the endpoint answers 503 `Herdr unavailable`
 - **THEN** the action bar shows "Not opened: Herdr unavailable"
+
+### Requirement: Viewer requests stay on its own origin
+Every request the viewer page makes, for lists, details, PDFs, status changes, deletes, form-filling sessions and resume and cover letter generation, SHALL go to the origin the page was loaded from, using relative paths, so that opened at `http://127.0.0.1:<docs port>/viewer` it uses only loopback endpoints. The page SHALL not describe itself as reachable from the tailnet.
+
+#### Scenario: Opened on the Mac
+- **WHEN** the owner opens `http://127.0.0.1:8081/viewer`, opens an application, changes its status and opens its PDFs
+- **THEN** every request the page sends is to `http://127.0.0.1:8081`
+
+#### Scenario: No absolute service URL
+- **WHEN** the viewer page's HTML and script are inspected
+- **THEN** they contain no absolute `http://` or `https://` URL to the service, its Tailscale hostname or its public address
 
 ### Requirement: Viewer resume generation endpoint
 Where the viewer is served, `POST /viewer/application/{application_id}/resume` SHALL, without the API key, start a resume job for that application exactly as `POST /resume` does, under the same one-running-job rule, and respond 202 with the same body. It SHALL ignore any request body.
