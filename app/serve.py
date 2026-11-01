@@ -1,5 +1,5 @@
-"""Runs the installed service: the public API on one loopback port and, optionally, the same API plus
-its reference pages on a second loopback port that Tailscale publishes to the tailnet only.
+"""Runs the installed service: the four endpoints Funnel publishes on one loopback port and, optionally,
+the full API, its reference pages and the resume viewer on a second loopback port reached only from the Mac.
 
 Usage: python -m app.serve --port 8080 [--docs-port 8081] [--host 127.0.0.1] [--log-config <path>]
 """
@@ -32,6 +32,35 @@ def by_local_port(public, routes: dict[int, object]):
         await target(scope, receive, send)
 
     return app
+
+
+# The only requests the public listener (the one Funnel publishes) passes on. Exact matches: no path
+# parameters, no trailing slash, no other method, so nothing else on that port reveals that it exists.
+PUBLIC_ROUTES = frozenset({
+    ("GET", "/health"),
+    ("POST", "/application"),
+    ("POST", "/resume"),
+    ("POST", "/cover-letter"),
+})
+NOT_FOUND = b'{"detail":"Not Found"}'
+
+
+def public_only(app):
+    """ASGI app passing only PUBLIC_ROUTES on to app; every other HTTP request gets the same 404 an
+    unknown path gets, before any routing, key check or logging. Lifespan goes through unchanged."""
+
+    async def guarded(scope, receive, send):
+        if scope["type"] == "http" and (scope.get("method"), scope.get("path")) not in PUBLIC_ROUTES:
+            await send({"type": "http.response.start", "status": 404, "headers": [
+                (b"content-type", b"application/json"), (b"content-length", str(len(NOT_FOUND)).encode())]})
+            await send({"type": "http.response.body", "body": NOT_FOUND})
+            return
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        await app(scope, receive, send)
+
+    return guarded
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -67,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     storage = LocalStorage(settings.output_dir)
     applications = ApplicationStore(settings.output_dir / "applications.sqlite3")
     # Forced in code, not only by the plist's API_DOCS_ENABLED=false: the public port never has docs.
-    public = create_app(settings.model_copy(update={"api_docs_enabled": False}), storage, applications)
+    public = public_only(create_app(settings.model_copy(update={"api_docs_enabled": False}), storage, applications))
     routes = {}
     ports = [args.port]
     if args.docs_port is not None:
