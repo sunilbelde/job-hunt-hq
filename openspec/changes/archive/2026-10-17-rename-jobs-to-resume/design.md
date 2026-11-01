@@ -32,7 +32,7 @@ Current state:
 - No schema change to `applications.sqlite3`, and the row does not record where its resume lives.
 - No cleanup of the legacy `outputs/` folder or of resumes for deleted applications.
 - No change to Funnel or Tailscale setup, the install and uninstall scripts, or the access-log query redaction filter. The filter stays as general protection.
-- No new resume or template inputs. `SUNIL BELDE.pdf` is a module constant.
+- No new resume or template inputs. `JANE DOE.pdf` is a module constant.
 
 ## Decisions
 
@@ -73,7 +73,7 @@ The signature becomes `generate_output(application: StoredApplication) -> Genera
   5. Prefix `_` when `name.lower().startswith("applications.sqlite3")`, which covers the store file and its `-wal`, `-journal` and `-shm` siblings.
 
   It is a pure function with its own unit tests.
-- **`RESUME_FILE_NAME = "SUNIL BELDE.pdf"`**.
+- **`RESUME_FILE_NAME = "JANE DOE.pdf"`**.
 - **`LocalStorage(root)`** keeps the constructor's create-and-probe of `OUTPUT_DIR` with mode 700, but no longer creates `outputs/`.
 - **`LocalStorage.save_resume(company, application_id, content: bytes) -> Path`** works as follows:
   1. Build `root / company_folder(company) / str(application_id)`.

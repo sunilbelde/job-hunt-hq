@@ -125,7 +125,7 @@ Every experience bullet in a tailored resume SHALL cite one or more base resume 
 - **THEN** it is accepted
 
 #### Scenario: Bullet moved to another job
-- **WHEN** a bullet under Capital One cites a Dockskiff bullet
+- **WHEN** a bullet under Northwind Bank cites a Contoso Documents bullet
 - **THEN** the content is rejected
 
 #### Scenario: Invented bullet

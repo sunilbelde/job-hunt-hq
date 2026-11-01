@@ -2,11 +2,11 @@
 
 ## Why
 
-API responses return the absolute path where a PDF was saved on the Mac, for example `/Users/belde/…/job-hunt-hq/outputs/Scale AI/<id>/SUNIL BELDE.pdf`. That shows the owner's macOS username, the folder layout and which companies were applied to. `GET /application/{id}` on the docs listener needs no API key and returns this path in `report.saved_path`. The key-protected status endpoints return it on the public Funnel address too. Clients only need the file name.
+API responses return the absolute path where a PDF was saved on the Mac, for example `/Users/<you>/…/job-hunt-hq/outputs/Scale AI/<id>/JANE DOE.pdf`. That shows the owner's macOS username, the folder layout and which companies were applied to. `GET /application/{id}` on the docs listener needs no API key and returns this path in `report.saved_path`. The key-protected status endpoints return it on the public Funnel address too. Clients only need the file name.
 
 ## What Changes
 
-- `GET /resume/{application_id}/status` and `GET /cover-letter/{application_id}/status` return only the file name in `saved_path` (`SUNIL BELDE.pdf` or `SUNIL BELDE - Cover Letter.pdf`) when the job is `done`. It stays `null` while the job is running and after it fails. **BREAKING** for a client that opens `saved_path` as a path on disk. The field name, its type and the null rules stay the same, so a client that reads the field still works.
+- `GET /resume/{application_id}/status` and `GET /cover-letter/{application_id}/status` return only the file name in `saved_path` (`JANE DOE.pdf` or `JANE DOE - Cover Letter.pdf`) when the job is `done`. It stays `null` while the job is running and after it fails. **BREAKING** for a client that opens `saved_path` as a path on disk. The field name, its type and the null rules stay the same, so a client that reads the field still works.
 - `GET /application/{application_id}` returns only the file name in `report.saved_path`.
 - The OpenAPI descriptions of both `saved_path` fields say they hold the file name only and never a path.
 - No new field. `saved_path` already holds the file name, so a `file_name` field would only repeat it (see design.md).
@@ -22,8 +22,8 @@ API responses return the absolute path where a PDF was saved on the Mac, for exa
 
 ### Modified Capabilities
 - `generation-jobs`: the status endpoints return the file name in `saved_path`, never a path. The stored job record still holds the absolute path.
-- `job-api`: when a resume job is `done`, its `saved_path` is `SUNIL BELDE.pdf`, not an absolute path.
-- `cover-letter-api`: when a cover letter job is `done`, its `saved_path` is `SUNIL BELDE - Cover Letter.pdf`, not an absolute path.
+- `job-api`: when a resume job is `done`, its `saved_path` is `JANE DOE.pdf`, not an absolute path.
+- `cover-letter-api`: when a cover letter job is `done`, its `saved_path` is `JANE DOE - Cover Letter.pdf`, not an absolute path.
 - `resume-viewer`: in the application detail, `report.saved_path` is the file name only.
 - `api-docs`: the `saved_path` descriptions say the field holds the file name only.
 - `output-storage`: new requirement that no response body contains a host path (`OUTPUT_DIR`, the home directory, or a company or application folder). Stored records keep the absolute path.

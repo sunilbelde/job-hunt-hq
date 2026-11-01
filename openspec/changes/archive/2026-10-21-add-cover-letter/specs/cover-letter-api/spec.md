@@ -53,7 +53,7 @@ On success, `POST /cover-letter` SHALL respond 201 with exactly `{"ok": true, "a
 
 #### Scenario: Successful request
 - **WHEN** an authenticated client requests a cover letter for application `<id>` with company "Acme Corp" and usable posting text
-- **THEN** the system responds 201 with `ok` true, `application_id` `<id>`, `saved_path` equal to the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf`, and `text`, and no other keys
+- **THEN** the system responds 201 with `ok` true, `application_id` `<id>`, `saved_path` equal to the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE - Cover Letter.pdf`, and `text`, and no other keys
 - **AND** the file at `saved_path` is a one-page PDF of the same letter as `text`
 
 #### Scenario: Repeated requests

@@ -11,7 +11,7 @@
 
 The store already has one in-place migration, which adds the `status` and `updated_at` columns under `BEGIN IMMEDIATE` and re-checks the schema first. This change follows the same pattern.
 
-The live store on the Mac mini holds one row (ID 1, Acme Corp), and its resume is at `Acme Corp/1/SUNIL BELDE.pdf`. Only one service instance runs, under launchd.
+The live store on the Mac mini holds one row (ID 1, Acme Corp), and its resume is at `Acme Corp/1/JANE DOE.pdf`. Only one service instance runs, under launchd.
 
 ## Goals / Non-Goals
 

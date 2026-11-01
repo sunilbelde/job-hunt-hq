@@ -31,7 +31,7 @@ The committed `data/BASE.pdf` came from a different engine (CM fonts at 8.97 pt)
 - The service runs as a system launchd daemon under the owner's user, with no login session and therefore no login keychain.
 - Its `PATH` is `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:…`.
 - The Claude Code CLI is v2.1.303 at `~/.local/bin/claude`, outside that `PATH`.
-- The production checkout is `/Users/belde/dev-workspace/claude Projects/job-hunt-hq`, and `OUTPUT_DIR` defaults to `~/Library/Application Support/job-hunt-hq`. Both paths contain a space.
+- The production checkout is `/Users/<you>/dev-workspace/claude Projects/job-hunt-hq`, and `OUTPUT_DIR` defaults to `~/Library/Application Support/job-hunt-hq`. Both paths contain a space.
 - The owner starts on the Pro plan: `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` sits in the checkout's `.env`. `ANTHROPIC_API_KEY` is added only if Pro limits get in the way.
 
 **Claude Code behavior this design relies on** (code.claude.com docs: headless, skills, CLI reference, authentication, permissions, environment variables, tools; confirmed by the task 1 spike):
@@ -141,7 +141,7 @@ The posting is wrapped at spaces only, never inside a word, so a long JSON-style
 ```json
 {
   "skills": [{"label": "Programming Languages", "items": ["Python", "Java", "Pyspark", "SQL", "Bash"]}],
-  "jobs": [{"id": "j1", "heading": "Capital One, ML Engineer – GenAI/LLM Automation | Chicago, IL | Jul 2024 – Present",
+  "jobs": [{"id": "j1", "heading": "Northwind Bank, ML Engineer – GenAI/LLM Automation | Seattle, WA | Mar 2022 – Present",
             "bullets": [{"id": "j1.b4", "text": "Architected a **GenAI ETL platform** that translates … reducing engineering effort by over **70%** …"}]}],
   "text": "<all visible resume text, used for scoring and evidence>"
 }

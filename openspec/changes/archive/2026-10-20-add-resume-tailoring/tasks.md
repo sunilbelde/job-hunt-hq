@@ -136,7 +136,7 @@
 ## 8. Integration and rollout
 
 - [x] 8.1 Run the whole suite and validation: `.venv/bin/python -m pytest`, `sh scripts/test_smoke_test.sh`, `sh scripts/test_install_service.sh` and `openspec validate add-resume-tailoring --strict`. Verify that all pass with no `FAIL` output
-- [ ] 8.2 On the Mac mini, the token is already in `.env` from task 1, so run `scripts/install_service.sh`. Verify that its live credential check passes, that `scripts/service_status.sh` shows `tailoring: ready` and that `API_KEY=... scripts/smoke_test.sh https://sunils-mac-mini.tailf96439.ts.net` passes
+- [ ] 8.2 On the Mac mini, the token is already in `.env` from task 1, so run `scripts/install_service.sh`. Verify that its live credential check passes, that `scripts/service_status.sh` shows `tailoring: ready` and that `API_KEY=... scripts/smoke_test.sh https://<machine>.<tailnet>.ts.net` passes
 - [ ] 8.3 Record three real postings (one the base resume should match strongly, two weakly) and call `POST /resume` for each. Verify:
   - the expected `match.status` values and responses within 10 minutes
   - one-page PDFs whose content the owner confirms against `data/BASE.pdf` has nothing invented

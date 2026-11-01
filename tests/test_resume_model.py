@@ -28,7 +28,7 @@ def test_parses_the_real_base_resume(base):
     assert len(base.skills) == 7
     assert base.skills[1].label == "Machine Learning & GenAI"
     assert "LLMs (Llama, Mistral)" in base.skills[1].items
-    assert base.jobs[0].heading == "Capital One, ML Engineer – GenAI/LLM Automation | Chicago, IL | Jul 2024 – Present"
+    assert base.jobs[0].heading == "Northwind Bank, ML Engineer – GenAI/LLM Automation | Seattle, WA | Mar 2022 – Present"
     assert base.jobs[3].bullets[0].id == "j4.b1"
     assert "**75% source-field recall**" in base.jobs[0].bullets[2].text
 
@@ -95,10 +95,10 @@ def test_split_items_keeps_parentheses_together():
 
 def test_resume_text_has_fixed_parts_and_plain_bullets(base):
     text = resume_model.resume_text(base, base.content())
-    assert "University of Illinois Chicago" in text
-    assert "AWS Solutions Architect – Associate" in text
+    assert "Lakeside University" in text
+    assert "Example Cloud Architect – Associate" in text
     assert "75% source-field recall" in text and "**" not in text
-    assert "SUNIL BELDE" not in text  # the name and contact line are not scored
+    assert "JANE DOE" not in text  # the name and contact line are not scored
 
 
 def test_content_from_json_reads_tailored_content(base):

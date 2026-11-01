@@ -97,7 +97,7 @@ On startup, before serving requests, the system SHALL mark every job still `runn
 
 #### Scenario: Done
 - **WHEN** the resume job for `<id>` finished and saved the base resume unscored
-- **THEN** it gets 200 with `status` `done`, `saved_path` `SUNIL BELDE.pdf`, and `match` `{"status": "no_job_description", "threshold": 70, "base_score": null, "tailored_score": null, "added_terms": []}`
+- **THEN** it gets 200 with `status` `done`, `saved_path` `JANE DOE.pdf`, and `match` `{"status": "no_job_description", "threshold": 70, "base_score": null, "tailored_score": null, "added_terms": []}`
 
 #### Scenario: Failed
 - **WHEN** the resume job for `<id>` failed
@@ -112,7 +112,7 @@ On startup, before serving requests, the system SHALL mark every job still `runn
 
 #### Scenario: Done
 - **WHEN** the cover letter job for `<id>` has finished
-- **THEN** the status endpoint gives 200 with `status` `done`, `saved_path` `SUNIL BELDE - Cover Letter.pdf` and the letter's `text`
+- **THEN** the status endpoint gives 200 with `status` `done`, `saved_path` `JANE DOE - Cover Letter.pdf` and the letter's `text`
 
 #### Scenario: Failed
 - **WHEN** the cover letter job for `<id>` failed
@@ -167,7 +167,7 @@ The job record SHALL continue to store the absolute path of the saved PDF. Only 
 
 #### Scenario: Stored path unchanged by a status read
 - **WHEN** a resume job for `<id>` is `done` and a client reads `GET /resume/<id>/status`
-- **THEN** the response's `saved_path` is `SUNIL BELDE.pdf`, and the stored job record still holds the absolute path `<OUTPUT_DIR>/<company folder>/<id>/SUNIL BELDE.pdf`
+- **THEN** the response's `saved_path` is `JANE DOE.pdf`, and the stored job record still holds the absolute path `<OUTPUT_DIR>/<company folder>/<id>/JANE DOE.pdf`
 
 ### Requirement: Status endpoints on the local listener only
 Both status endpoints SHALL be served on the docs port, the loopback-only local listener, and SHALL NOT be served on the public port, where they are handled as unknown paths. They SHALL return only the fields listed above: no posting text, application fields other than the ID, scores breakdown, added-term evidence or full report.

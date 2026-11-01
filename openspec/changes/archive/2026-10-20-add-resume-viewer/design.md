@@ -49,7 +49,7 @@ Same inline key check (`api_key_valid` → 401 `{ok:false}`), `parse_application
 Route order matters: `GET /application/{application_id}/resume.pdf` and `GET /application/{application_id}` are separate paths, no conflict; `/applications` is a distinct literal path.
 
 ### 6. Generated PDF path: the stored `saved_path`, checked against `OUTPUT_DIR`
-Read `report.saved_path`; without a report fall back to `<OUTPUT_DIR>/<company_folder(company)>/<id>/SUNIL BELDE.pdf` (new `storage.resume_path(root, company, id)`, reused by `save_resume`). Resolve and require `is_relative_to(OUTPUT_DIR.resolve())` and a regular file, else 404 "Resume not found". Read via `run_in_threadpool`.
+Read `report.saved_path`; without a report fall back to `<OUTPUT_DIR>/<company_folder(company)>/<id>/JANE DOE.pdf` (new `storage.resume_path(root, company, id)`, reused by `save_resume`). Resolve and require `is_relative_to(OUTPUT_DIR.resolve())` and a regular file, else 404 "Resume not found". Read via `run_in_threadpool`.
 
 ### 7. Base PDF: rendered, cached by template fingerprint
 `render_pdf()` takes seconds (Tectonic), so cache the bytes in process keyed by the `(name, size, mtime_ns)` of the template files `render_pdf` copies. Cache miss renders in the threadpool; `RenderError` → 500 "Resume generation failed". Not `data/BASE.pdf`: it is a checked-in artifact that can lag `BASE.tex`, and the viewer must show exactly what `POST /resume` would save as the base.

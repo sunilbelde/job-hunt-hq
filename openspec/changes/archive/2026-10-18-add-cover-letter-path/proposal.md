@@ -6,9 +6,9 @@ Each application will soon get a cover letter as well as a resume, and clients s
 
 ## What Changes
 
-- `POST /resume` returns a new `cover_letter_path` field next to the existing `saved_path`: the absolute path of `SUNIL BELDE - Cover Letter.pdf` in the same application folder as the resume.
+- `POST /resume` returns a new `cover_letter_path` field next to the existing `saved_path`: the absolute path of `JANE DOE - Cover Letter.pdf` in the same application folder as the resume.
 - `saved_path` keeps its name and meaning, so existing clients (Muse, `scripts/smoke_test.sh`) keep working. The change is additive, not breaking.
-- The cover letter location is defined as `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE - Cover Letter.pdf`.
+- The cover letter location is defined as `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE - Cover Letter.pdf`.
 - **Placeholder:** no cover letter is generated or written yet. `cover_letter_path` is the path where it *will* be saved, and nothing exists there for now. A `TODO` in the code marks where cover letter generation and saving will go.
 - The OpenAPI response model, README and tests are updated for the new field.
 

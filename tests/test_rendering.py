@@ -88,4 +88,4 @@ def test_real_render_matches_baseline_content():
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     assert len(reader.pages) == 1
     text = re.sub(r"\s+", " ", reader.pages[0].extract_text())
-    assert "SUNIL BELDE" in text
+    assert "JANE DOE" in text

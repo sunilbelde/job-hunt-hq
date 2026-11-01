@@ -32,7 +32,7 @@ A letter SHALL have an opening paragraph, two or three body paragraphs and a clo
 Every number in a body paragraph SHALL appear in a source that paragraph cites. The opening and closing SHALL contain no number except one that is part of the stored company name or role.
 
 #### Scenario: Number from a cited fact
-- **WHEN** a body paragraph says "cut manual annotation effort by 60%" and cites the Dockskiff fact stating 60%
+- **WHEN** a body paragraph says "cut manual annotation effort by 60%" and cites the Contoso Documents fact stating 60%
 - **THEN** it is accepted
 
 #### Scenario: Number changed

@@ -53,7 +53,7 @@ When a cover letter request passes its checks, `POST /cover-letter` SHALL start 
 #### Scenario: Successful request
 - **WHEN** an authenticated client requests a cover letter for application `<id>` with company "Acme Corp" and usable posting text
 - **THEN** the system responds 202 with `ok` true, `application_id` `<id>`, `status` `running` and `started_at`, and no other keys
-- **AND** once the job is `done`, its `saved_path` is `SUNIL BELDE - Cover Letter.pdf`, and the file at `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf` is a one-page PDF of the same letter as its `text`
+- **AND** once the job is `done`, its `saved_path` is `JANE DOE - Cover Letter.pdf`, and the file at `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE - Cover Letter.pdf` is a one-page PDF of the same letter as its `text`
 
 #### Scenario: Repeated requests
 - **WHEN** a cover letter is requested twice for the same application, the second after the first job is `done`

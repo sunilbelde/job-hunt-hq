@@ -2,8 +2,8 @@
 
 ```json
 {"paragraphs": [
-  {"role": "opening", "text": "I am applying for the Applied AI Engineer role at Acme Corp. For the last two years at Capital One I have built agents that turn scattered enterprise knowledge into working data software."},
-  {"role": "body", "text": "At Capital One I developed a human-in-the-loop Conversion Mapping Engine using the ReAct pattern. ... the assistant reached 75% source-field recall across domains.", "sources": ["j1.b1", "j1.b3", "j1.f1"], "requirements": ["R1"]},
+  {"role": "opening", "text": "I am applying for the Applied AI Engineer role at Acme Corp. For the last two years at Northwind Bank I have built agents that turn scattered enterprise knowledge into working data software."},
+  {"role": "body", "text": "At Northwind Bank I developed a human-in-the-loop Schema Mapping Assistant using the ReAct pattern. ... the assistant reached 75% source-field recall across domains.", "sources": ["j1.b1", "j1.b3", "j1.f1"], "requirements": ["R1"]},
   {"role": "body", "text": "I also designed a GenAI ETL platform that turns plain-language mapping instructions into PySpark code that runs as AWS Glue jobs. ...", "sources": ["j1.b4", "j1.b5"], "requirements": ["R2", "R3"]},
   {"role": "closing", "text": "I would welcome the chance to talk about how this work could help your team. Thank you for your time and consideration."}
 ]}

@@ -37,7 +37,7 @@ See proposal.md (Why). The pieces this change touches:
 ### 1. Profile facts are numbered per job: `jN.fK`
 
 An Experience section in `data/PROFILE.md` holds level-3 headings, each naming an employer. A heading
-matches the job whose heading starts with that name, ignoring case: "### Capital One" matches "Capital
+matches the job whose heading starts with that name, ignoring case: "### Northwind Bank" matches "Capital
 One, ML Engineer – GenAI/LLM Automation | …". Its list items become `j1.f1`, `j1.f2`, …. `prepare` puts
 them into `out/base.json` as each job's `facts`, next to its `bullets`. They stay out of the resume
 `text`, because the base assessment quotes only what is on the page.
@@ -144,7 +144,7 @@ evidence quotes still have to be on the page; the gate already enforces that.
 
 ## Open Questions
 
-- The exact wording of the Capital One facts. The owner confirmed the substance (benchmark evaluations;
+- The exact wording of the Northwind Bank facts. The owner confirmed the substance (benchmark evaluations;
   comparing models, reasoning settings and prompt tuning; feedback loops); the tasks write a draft for the
   owner to approve.
 - Whether the owner also categorized mapping errors (failure modes), fine-tuned a model, or ran long

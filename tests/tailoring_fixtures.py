@@ -48,17 +48,17 @@ Skills beyond the resume. Only the list below counts.
 - Post-training
 """
 
-# PROFILE with an Experience section: two facts for Capital One (j1) and one for Dockskiff (j3).
+# PROFILE with an Experience section: two facts for Northwind Bank (j1) and one for Contoso Documents (j3).
 FACTS_PROFILE = PROFILE + """
 ## Experience
 
 Facts about each job, under the employer's name.
 
-### Capital One
+### Northwind Bank
 - Ran **Kafka** replay benchmarks comparing 3 model families on the mapping task.
 - Tuned prompts against the benchmark after each model change.
 
-### Dockskiff
+### Contoso Documents
 - Reviewed OCR failures with the labeling team.
 """
 

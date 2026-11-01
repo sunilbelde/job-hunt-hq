@@ -34,7 +34,7 @@ The report also hides why the judge rejected a keyword: every rejection reads "r
   each job, under the employer's name. A tailored bullet may cite a fact of its own job as a source, as it
   cites a base bullet, with the same rules for numbers and keywords. A keyword that a fact states needs no
   judge, but it may appear only in skills lines and in bullets citing that fact. The facts the owner
-  confirmed for Capital One are added: benchmark evaluations comparing models, reasoning settings and
+  confirmed for Northwind Bank are added: benchmark evaluations comparing models, reasoning settings and
   prompt tuning, and feedback loops.
 - **The judge's rejection reasons are kept** in the ruling, the stored report and the viewer, in place of
   the fixed text "rejected by the judge".

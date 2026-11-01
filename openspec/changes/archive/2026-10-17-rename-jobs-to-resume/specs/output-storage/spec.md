@@ -33,19 +33,19 @@ A resume file SHALL appear at its path only once completely written. Replacing a
 ## ADDED Requirements
 
 ### Requirement: Resume file path
-The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is written in base 10. Missing folders SHALL be created.
+The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is written in base 10. Missing folders SHALL be created.
 
 #### Scenario: First resume for an application
 - **WHEN** a resume is generated for application 7 whose company is "Acme Corp" and no folders exist yet
-- **THEN** the file `<OUTPUT_DIR>/Acme Corp/7/SUNIL BELDE.pdf` exists afterwards
+- **THEN** the file `<OUTPUT_DIR>/Acme Corp/7/JANE DOE.pdf` exists afterwards
 
 #### Scenario: Two applications at one company
 - **WHEN** resumes are generated for applications 7 and 9, both with company "Acme Corp"
-- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/7/SUNIL BELDE.pdf` and `<OUTPUT_DIR>/Acme Corp/9/SUNIL BELDE.pdf`
+- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/7/JANE DOE.pdf` and `<OUTPUT_DIR>/Acme Corp/9/JANE DOE.pdf`
 
 #### Scenario: Company renamed
 - **WHEN** application 7's company is changed from "Acme" to "Acme Inc" after a resume was generated, and a resume is generated again
-- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/7/SUNIL BELDE.pdf`
+- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/7/JANE DOE.pdf`
 - **AND** the file under `<OUTPUT_DIR>/Acme/7/` is left unchanged
 
 ### Requirement: Company folder naming

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Tests scripts/smoke_test.sh with a stubbed curl (no network).
 here=$(cd "$(dirname "$0")" && pwd)
+# The smoke test expects files named after the sample resume's \name{JANE DOE}.
+export JOB_HUNT_DATA_DIR="$here/../data/samples"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 
@@ -19,7 +21,7 @@ case "$*" in
   *"-X DELETE http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_DELETE:-404}" ;;
   *"http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_MOVED:-404}" ;;
   *"http://x/resume/"*"/status"*) echo "PUBLICSTATUS" >> "$STUB_LOG"
-    printf '{"ok":true,"status":"done","saved_path":"SUNIL BELDE.pdf","match":{"status":"no_job_description"}}\n%s' "${STUB_PUBLIC_STATUS:-404}" ;;
+    printf '{"ok":true,"status":"done","saved_path":"JANE DOE.pdf","match":{"status":"no_job_description"}}\n%s' "${STUB_PUBLIC_STATUS:-404}" ;;
   *"http://d/docs"*) printf '%s' "$STUB_DOCS_LISTENER" ;;
   *"http://d/viewer"*) printf '%s' "${STUB_VIEWER_LISTENER:-$STUB_DOCS_LISTENER}" ;;
   *"http://d/openapi.json"*) printf '%s\n%s' "$STUB_SCHEMA" "$STUB_DOCS_LISTENER" ;;
@@ -28,12 +30,12 @@ case "$*" in
   *"-X DELETE"*) echo "DELETE $*" >> "$STUB_LOG" ;;
   *"-X PATCH"*) echo "PATCH $*" >> "$STUB_LOG"; printf '%s' "${STUB_PATCH:-200}" ;;
   *"/cover-letter"*) echo "LETTER $*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
-    [ -n "${STUB_LETTER_FILE:-}" ] && printf '%%PDF' > "$(dirname "$STUB_SAVED")/SUNIL BELDE - Cover Letter.pdf"
+    [ -n "${STUB_LETTER_FILE:-}" ] && printf '%%PDF' > "$(dirname "$STUB_SAVED")/JANE DOE - Cover Letter.pdf"
     printf '{"ok":false,"message":"no posting text"}\n%s' "${STUB_LETTER:-422}" ;;
   *"/resume/"*"/status"*) echo "STATUS $*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
     job=${STUB_JOB:-done}; [ "$(grep -c '^STATUS' "$STUB_LOG")" -le "${STUB_RUNNING:-0}" ] && job=running
     printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13","status":"%s","saved_path":"%s","match":{"status":"%s"},"error":"Resume generation failed"}\n%s' \
-      "$job" "${STUB_NAME:-SUNIL BELDE.pdf}" "${STUB_MATCH:-no_job_description}" "${STUB_STATUS:-200}" ;;
+      "$job" "${STUB_NAME:-JANE DOE.pdf}" "${STUB_MATCH:-no_job_description}" "${STUB_STATUS:-200}" ;;
   *"/application"*) echo "CREATE $*" >> "$STUB_LOG"
     printf '{"ok":true,"application_id":"3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}\n%s' "$STUB_APP" ;;
   *"/resume"*) echo "$*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
@@ -44,7 +46,7 @@ STUB
 chmod +x "$tmp/curl"
 
 id=3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13
-saved="$tmp/out/Smoke Test Co/$id/SUNIL BELDE.pdf"
+saved="$tmp/out/Smoke Test Co/$id/JANE DOE.pdf"
 thirteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/cover-letter":{"post":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/application/{application_id}/cover-letter.pdf":{"get":{}},"/resume/base.pdf":{"get":{}},"/cover-letter/base.pdf":{"get":{}}}}'
 fifteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"post":{}},"/application/{application_id}":{"patch":{},"delete":{},"get":{}},"/resume":{"post":{}},"/resume/{application_id}/status":{"get":{}},"/cover-letter":{"post":{}},"/cover-letter/{application_id}/status":{"get":{}},"/applications":{"get":{}},"/application/{application_id}/resume.pdf":{"get":{}},"/application/{application_id}/cover-letter.pdf":{"get":{}},"/resume/base.pdf":{"get":{}},"/cover-letter/base.pdf":{"get":{}}}}'
 seventeen="$(printf '%s' "$fifteen" | sed 's/}}$/,"\/viewer\/application\/{application_id}":{"patch":{},"delete":{}}}}/')"

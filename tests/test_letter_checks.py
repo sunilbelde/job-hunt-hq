@@ -133,7 +133,7 @@ def test_body_without_its_sources_result_warns():
 
 def test_no_warning_when_the_sources_state_no_result():
     # j1.b1 and j1.b2 state no measured result, so nothing is missing.
-    text = ("At Capital One I developed a human-in-the-loop Conversion Mapping Engine using the ReAct pattern that "
+    text = ("At Northwind Bank I developed a human-in-the-loop Schema Mapping Assistant using the ReAct pattern that "
             "proposes, critiques and refines source-to-target mappings.")
     _, warnings = tailored(letter(p1={"text": text, "sources": ["j1.b1", "j1.b2"]}))
     assert "no_result" not in [w["code"] for w in warnings]

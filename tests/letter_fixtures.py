@@ -59,20 +59,20 @@ ANALYSIS = {
     ],
 }
 
-OPENING = ("I am applying for the Applied AI Engineer role at Acme Corp. For the last two years at Capital One I "
+OPENING = ("I am applying for the Applied AI Engineer role at Acme Corp. For the last two years at Northwind Bank I "
            "have built agents that turn scattered enterprise knowledge into working data software, and I would "
            "like to bring that experience to your customers.")
-BODY_AGENT = ("At Capital One I built a human-in-the-loop mapping engine on the ReAct pattern. It proposes "
+BODY_AGENT = ("At Northwind Bank I built a human-in-the-loop mapping engine on the ReAct pattern. It proposes "
               "source-to-target mappings for a file system migration, critiques them and refines them using "
-              "requirements documents and past conversion knowledge, and it calls enterprise tools such as Glean "
-              "and Ask-Data to look up data context. I did not stop at a demo: I ran benchmark evaluations that "
+              "requirements documents and past conversion knowledge, and it calls MCP tools such as a data catalog "
+              "and a SQL query service to look up data context. I did not stop at a demo: I ran benchmark evaluations that "
               "compared models, reasoning settings and prompt versions, and the assistant reached 75% source-field "
               "recall across domains.")
 BODY_PIPELINE = ("I also designed a GenAI ETL platform that turns plain-language mapping instructions into PySpark "
                  "code that runs as AWS Glue jobs. It combines Llama 3.3-70B, LangChain and retrieval with a "
                  "deterministic Python and NetworkX orchestration layer, automated code validation and retry loops. "
                  "It cut engineering effort by over 70% and shortened delivery from about 5 months to 4 weeks.")
-BODY_DOCS = ("Before that, at Dockskiff, I built document intelligence pipelines that combined NER, OCR and PyTorch "
+BODY_DOCS = ("Before that, at Contoso Documents, I built document intelligence pipelines that combined NER, OCR and PyTorch "
              "models to pull metadata out of contracts, and an auto-labeling pipeline with Prodigy that cut manual "
              "annotation effort by 60%. A Faster-RCNN segmentation step I added raised classification throughput by "
              "30%.")

@@ -16,7 +16,7 @@
 
 ## Decisions
 
-**Derive the path from the saved resume path.** The cover letter path is `resume_path.parent / COVER_LETTER_FILE_NAME`, with `COVER_LETTER_FILE_NAME = "SUNIL BELDE - Cover Letter.pdf"` defined in `app/storage.py` next to `RESUME_FILE_NAME`. A small helper there, `cover_letter_path(resume_path)`, returns it, and the handler calls it after `save_resume` succeeds.
+**Derive the path from the saved resume path.** The cover letter path is `resume_path.parent / COVER_LETTER_FILE_NAME`, with `COVER_LETTER_FILE_NAME = "JANE DOE - Cover Letter.pdf"` defined in `app/storage.py` next to `RESUME_FILE_NAME`. A small helper there, `cover_letter_path(resume_path)`, returns it, and the handler calls it after `save_resume` succeeds.
 - *Alternative:* add a `cover_letter_path(company, application_id)` method to the `Storage` protocol. That would repeat the folder rules and the escape check, and every storage (including `FakeStorage` in tests) would have to implement it. Deriving from the returned path guarantees "same folder as the resume" by construction.
 
 **Placeholder: return the computed path, write nothing.** The response always includes `cover_letter_path`, even though no file exists there yet. A `TODO` comment in `create_resume`, where the cover letter would be generated and saved, marks the future work. A one-line `TODO` next to `generate_output` points at the same place.

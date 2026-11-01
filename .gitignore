@@ -6,9 +6,10 @@ __pycache__/
 deploy/logging.json
 outputs/
 
-# Personal application profile (visa details): local only, never pushed
-data/Sunil Belde Profile.docx
-data/Sunil Belde Profile.md
+# The owner's resume, profile, cover letter and application answers: local only, never pushed.
+# data/samples/ holds made-up copies of the files the service needs; copy them to data/ to start.
+data/*
+!data/samples/
 
 # Personal job-application skill (local only)
 .claude/skills/job-application-form-filler/

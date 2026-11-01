@@ -35,7 +35,7 @@
 
 ## 6. Owner's profile and end-to-end check
 
-- [ ] 6.1 Add an "Experience" section to `data/PROFILE.md` with a "### Capital One" draft of the confirmed facts: benchmark evaluations of the agent; comparing different models, reasoning settings and prompt tuning; feedback loops. Update the file's intro text, and have the owner approve the wording before commit. Verify that `prepare` on the real files lists the facts as `j1.f1`… and that the full test suite passes (`pytest`).
+- [ ] 6.1 Add an "Experience" section to `data/PROFILE.md` with a "### Northwind Bank" draft of the confirmed facts: benchmark evaluations of the agent; comparing different models, reasoning settings and prompt tuning; feedback loops. Update the file's intro text, and have the owner approve the wording before commit. Verify that `prepare` on the real files lists the facts as `j1.f1`… and that the full test suite passes (`pytest`).
 - [ ] 6.2 Regenerate the OpenAI application's resume against the running service. Compare the new report with the old one: requirement coverage, `echoed_phrase` gone, judge reasons shown, no posting phrases like "long-horizon workflows" in bullets. Share the result with the owner.
 
 ## Workflow follow-up

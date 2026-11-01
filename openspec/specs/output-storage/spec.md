@@ -48,28 +48,39 @@ A resume file SHALL appear at its path only once completely written. Replacing a
 - **WHEN** writing a replacement resume fails partway
 - **THEN** the previously saved resume at that path is unchanged and no temporary file is left behind
 
+### Requirement: Saved files are named after the owner
+The resume and cover letter file names SHALL use the owner's name: the `\name{...}` of the base resume (`data/BASE.tex`) as written, read once at startup, with `/`, `\`, `:` and control characters replaced by `-` and leading and trailing spaces and dots removed. Without a readable `BASE.tex` or a non-empty name, the name SHALL be `Resume`. The scenarios in these specs use the sample resume's `\name{JANE DOE}`.
+
+#### Scenario: Name from the base resume
+- **WHEN** `data/BASE.tex` has `\name{JANE DOE}`
+- **THEN** resumes are saved as `JANE DOE.pdf` and cover letters as `JANE DOE - Cover Letter.pdf`
+
+#### Scenario: No name
+- **WHEN** `data/BASE.tex` is missing or has no `\name{...}` line
+- **THEN** resumes are saved as `Resume.pdf` and cover letters as `Resume - Cover Letter.pdf`
+
 ### Requirement: Resume file path
-The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is the application's UUID in lowercase. Missing folders SHALL be created.
+The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/<name>.pdf` (`<name>` as in the requirement above), where the company folder is derived from the application's stored `company` at generation time and `application_id` is the application's UUID in lowercase. Missing folders SHALL be created.
 
 #### Scenario: First resume for an application
 - **WHEN** a resume is generated for application `<id>` whose company is "Acme Corp" and no folders exist yet
-- **THEN** the file `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf` exists afterwards
+- **THEN** the file `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf` exists afterwards
 
 #### Scenario: Two applications at one company
 - **WHEN** resumes are generated for applications `<a>` and `<b>`, both with company "Acme Corp"
-- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/<a>/SUNIL BELDE.pdf` and `<OUTPUT_DIR>/Acme Corp/<b>/SUNIL BELDE.pdf`
+- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/<a>/JANE DOE.pdf` and `<OUTPUT_DIR>/Acme Corp/<b>/JANE DOE.pdf`
 
 #### Scenario: Company renamed
 - **WHEN** application `<id>`'s company is changed from "Acme" to "Acme Inc" after a resume was generated, and a resume is generated again
-- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/<id>/SUNIL BELDE.pdf`
+- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/<id>/JANE DOE.pdf`
 - **AND** the file under `<OUTPUT_DIR>/Acme/<id>/` is left unchanged
 
 ### Requirement: Cover letter file path
-The cover letter for an application SHALL be saved at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE - Cover Letter.pdf`, the folder that application's resume uses, with the company folder derived from the stored company exactly as for the resume. The path SHALL NOT depend on whether a resume exists.
+The cover letter for an application SHALL be saved at `<OUTPUT_DIR>/<company folder>/<application_id>/<name> - Cover Letter.pdf`, the folder that application's resume uses, with the company folder derived from the stored company exactly as for the resume. The path SHALL NOT depend on whether a resume exists.
 
 #### Scenario: Location next to the resume
 - **WHEN** a cover letter is generated for application `<id>` whose company is "Acme Corp"
-- **THEN** it is saved at `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf`, beside `SUNIL BELDE.pdf` when that exists
+- **THEN** it is saved at `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE - Cover Letter.pdf`, beside `JANE DOE.pdf` when that exists
 
 #### Scenario: Company folder naming applies
 - **WHEN** the company is "AT&T / Mobility: West"
@@ -128,8 +139,8 @@ The service SHALL NOT delete saved resume files or their folders on its own. The
 At startup, every application folder directly inside a company folder whose name is an old integer ID recorded by the integer ID migration SHALL be renamed to that application's UUID, keeping its contents. A folder whose integer has no recorded UUID, or whose UUID folder already exists in the same company folder, SHALL be left as it is and logged. Renaming SHALL NOT delete any file, and SHALL complete on a later start if interrupted.
 
 #### Scenario: Existing resume moved
-- **WHEN** application 1, company "Acme Corp", is migrated to `<id>` and `<OUTPUT_DIR>/Acme Corp/1/SUNIL BELDE.pdf` exists
-- **THEN** after startup the file is at `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf` and `<OUTPUT_DIR>/Acme Corp/1/` no longer exists
+- **WHEN** application 1, company "Acme Corp", is migrated to `<id>` and `<OUTPUT_DIR>/Acme Corp/1/JANE DOE.pdf` exists
+- **THEN** after startup the file is at `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf` and `<OUTPUT_DIR>/Acme Corp/1/` no longer exists
 
 #### Scenario: Folders under an earlier company name
 - **WHEN** resumes for application 1 exist under both `Acme/1/` and `Acme Inc/1/`

@@ -247,7 +247,7 @@ def test_the_judge_sees_only_the_resume_profile_and_keywords(tmp_path, temp_root
     text = judge["input"]
     assert "- Airflow (scheduled ETL DAGs)" in text and "Only the list below counts" not in text
     assert "## Keywords\n\n- Kafka\n- Airflow\n" in text
-    assert "Capital One" in text and "retrieval-augmented generation systems" not in text  # resume yes, posting no
+    assert "Northwind Bank" in text and "retrieval-augmented generation systems" not in text  # resume yes, posting no
     assert "required" not in text and "preferred" not in text  # the job's priorities cannot sway the ruling
     assert tailoring_run["cwd"] == analysis["cwd"] and "judge" in tailoring_run["cwd_entries"]
 

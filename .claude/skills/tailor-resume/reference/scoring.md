@@ -14,8 +14,8 @@
   ],
   "assessment": {
     "R1": {"status": "met", "evidence": ["ReAct agentic AI pattern to propose, critique, and refine"]},
-    "R2": {"status": "met", "evidence": ["ML Engineer – GenAI/LLM Automation | Chicago, IL | Jul 2024 – Present",
-                                         "Machine Learning Engineer | Hyderabad, India | Jul 2020 – Jul 2022"]},
+    "R2": {"status": "met", "evidence": ["ML Engineer – GenAI/LLM Automation | Seattle, WA | Mar 2022 – Present",
+                                         "Machine Learning Engineer | Portland, OR | Jul 2018 – Feb 2022"]},
     "R3": {"status": "missing", "evidence": []}
   }
 }
@@ -79,6 +79,6 @@ checks the quotes against the tailored text.
 
 ```json
 {"R1": {"status": "met", "evidence": ["Built a human-in-the-loop LLM agent using the ReAct agentic AI pattern"]},
- "R2": {"status": "met", "evidence": ["Machine Learning Engineer | Hyderabad, India | Jul 2020 – Jul 2022"]},
+ "R2": {"status": "met", "evidence": ["Machine Learning Engineer | Portland, OR | Jul 2018 – Feb 2022"]},
  "R3": {"status": "missing", "evidence": []}}
 ```

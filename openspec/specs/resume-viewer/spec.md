@@ -72,11 +72,11 @@ The viewer SHALL load and show the application list as soon as the page opens, w
 #### Scenario: With report
 - **WHEN** the owner requests an application whose resume was tailored
 - **THEN** the response holds the application's fields, including the posting text, and its report
-- **AND** the report's `saved_path` is `SUNIL BELDE.pdf`
+- **AND** the report's `saved_path` is `JANE DOE.pdf`
 
 #### Scenario: Report saved under a since-renamed company
 - **WHEN** the application's resume was generated while its company was "Acme", and the company was then renamed to "Acme Corp"
-- **THEN** the report's `saved_path` is still `SUNIL BELDE.pdf`, and `GET /application/{id}/resume.pdf` still returns the resume saved under the "Acme" folder
+- **THEN** the report's `saved_path` is still `JANE DOE.pdf`, and `GET /application/{id}/resume.pdf` still returns the resume saved under the "Acme" folder
 
 #### Scenario: No key needed
 - **WHEN** `GET /application/{id}` is sent for a stored application without `X-API-Key`, or with a wrong one

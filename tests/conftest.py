@@ -1,5 +1,10 @@
+import os
 import sys
 from pathlib import Path
+
+# Before any app import: the app reads its resume template from the committed samples, never the owner's
+# gitignored files in data/.
+os.environ["JOB_HUNT_DATA_DIR"] = str(Path(__file__).resolve().parent.parent / "data" / "samples")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,13 +54,13 @@ class FakeStorage:
         if self.fail:
             raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/Acme")
         self.saved.append((company, application_id, content))
-        return Path("/fake/out") / company / str(application_id) / "SUNIL BELDE.pdf"
+        return Path("/fake/out") / company / str(application_id) / "JANE DOE.pdf"
 
     def save_cover_letter(self, company, application_id, content):
         if self.fail:
             raise StorageError("write failed: OSError: [Errno 28] No space left on device: /secret/out/Acme")
         self.letters.append((company, application_id, content))
-        return Path("/fake/out") / company / str(application_id) / "SUNIL BELDE - Cover Letter.pdf"
+        return Path("/fake/out") / company / str(application_id) / "JANE DOE - Cover Letter.pdf"
 
 
 @pytest.fixture
@@ -105,7 +110,7 @@ def no_real_herdr(monkeypatch):
 
 
 FAKE_LETTER_PDF = b"%PDF-1.5 fake cover letter"
-FAKE_LETTER_TEXT = "Dear Acme Corp Hiring Team,\n\nA paragraph.\n\nSincerely,\nSunil Belde\n"
+FAKE_LETTER_TEXT = "Dear Acme Corp Hiring Team,\n\nA paragraph.\n\nSincerely,\nJane Doe\n"
 # A posting long enough for a cover letter (50 words or more).
 LONG_POSTING = " ".join(["We build retrieval systems for enterprise customers in Python."] * 8)
 

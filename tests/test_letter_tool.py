@@ -65,12 +65,12 @@ def test_build_tailored(tmp_path):
     text = (work / "out" / "letter.txt").read_text()
     assert letter_checks.pages(pdf) == 1
     assert text.startswith("Dear Acme Corp Hiring Team,\n\nI am applying for the Applied AI Engineer role")
-    assert text.endswith("Sincerely,\nSunil Belde\n")
+    assert text.endswith("Sincerely,\nJane Doe\n")
     # The PDF holds the same words as the text, after the header and the date.
     page = " ".join(letter_checks.pdf_text(pdf).split())
     for paragraph in text.split("\n\n"):
         assert " ".join(paragraph.split())[:60] in page
-    assert page.startswith("SUNIL BELDE") and "sunil.belde102@gmail.com" in page
+    assert page.startswith("JANE DOE") and "jane.doe@example.com" in page
 
 
 def test_build_base_mode_greets_the_hiring_manager(tmp_path):
@@ -148,7 +148,7 @@ def test_verify_ignores_the_runs_own_scripts_and_files(tmp_path):
     built(work)
     # The run rewrites its copy of the checks to pass everything, adds a fact, and swaps the posting.
     write_letter_out(work, "letter.json", letter(p3={"text": LETTER["paragraphs"][3]["text"].replace("60%", "65%")}))
-    (work / "template" / "PROFILE.md").write_text("## Experience\n\n### Dockskiff\n- Cut effort by 65%.\n")
+    (work / "template" / "PROFILE.md").write_text("## Experience\n\n### Contoso Documents\n- Cut effort by 65%.\n")
     (work / "posting.md").write_text("nothing")
     r = run_letter_tool(*gate_args(tmp_path, work))
     verdict = json.loads(r.stdout)
@@ -174,7 +174,7 @@ def test_verify_never_prints_letter_text(tmp_path):
     work = prepare_letter(tmp_path / "w")
     built(work)
     out = run_letter_tool(*gate_args(tmp_path, work)).stdout
-    assert "Capital One" not in out and "Acme" not in out
+    assert "Northwind Bank" not in out and "Acme" not in out
 
 
 # --- the base letter ---
@@ -193,7 +193,7 @@ def test_publish_base_writes_both_files(tmp_path):
     r = run_letter_tool("publish-base", "--work", str(work), "--data", str(data))
     assert r.returncode == 0, r.stdout + r.stderr
     md = (data / "COVER_LETTER.md").read_text()
-    assert md.startswith("Dear Hiring Manager,\n\n") and md.endswith("Sincerely,\nSunil Belde\n")
+    assert md.startswith("Dear Hiring Manager,\n\n") and md.endswith("Sincerely,\nJane Doe\n")
     page = " ".join(letter_checks.pdf_text((data / "COVER_LETTER.pdf").read_bytes()).split())
     assert BASE_LETTER["paragraphs"][0]["text"][:50] in page
 
@@ -238,7 +238,7 @@ def test_render_base_rejects_tex(tmp_path):
 
 
 def test_parse_base_letter():
-    greeting, paragraphs = letter_tool.parse_base_letter("Dear X,\n\nOne\ntwo.\n\n\nThree.\n\nSincerely,\nSunil Belde\n")
+    greeting, paragraphs = letter_tool.parse_base_letter("Dear X,\n\nOne\ntwo.\n\n\nThree.\n\nSincerely,\nJane Doe\n")
     assert (greeting, paragraphs) == ("Dear X,", ["One two.", "Three."])
 
 

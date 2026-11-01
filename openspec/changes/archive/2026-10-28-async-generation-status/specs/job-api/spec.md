@@ -8,7 +8,7 @@ When a resume request passes its checks, `POST /resume` SHALL start a background
 #### Scenario: Successful job
 - **WHEN** an authenticated client posts `{"application_id": "<id>"}` and application `<id>` exists with company "Acme Corp"
 - **THEN** the system responds 202 with `ok` true, `application_id` `<id>`, `status` `running` and `started_at`, and no other keys
-- **AND** once the job is `done`, its `saved_path` is the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf` and the file there is the generated PDF
+- **AND** once the job is `done`, its `saved_path` is the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf` and the file there is the generated PDF
 
 #### Scenario: Cover letter beside the resume
 - **WHEN** a resume is generated for any application

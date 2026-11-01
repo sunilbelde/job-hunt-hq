@@ -535,9 +535,9 @@ def reports(db_path):
 def test_report_stored_and_read_back(store):
     application_id, _ = store.record(row())
     assert store.get_report(application_id) is None
-    assert store.save_report(application_id, "2026-10-20T10:00:00Z", "/out/Acme/x/SUNIL BELDE.pdf", REPORT)
+    assert store.save_report(application_id, "2026-10-20T10:00:00Z", "/out/Acme/x/JANE DOE.pdf", REPORT)
     assert store.get_report(application_id) == {**REPORT, "generated_at": "2026-10-20T10:00:00Z",
-                                                "saved_path": "/out/Acme/x/SUNIL BELDE.pdf"}
+                                                "saved_path": "/out/Acme/x/JANE DOE.pdf"}
 
 
 def test_new_report_replaces_the_old_one(store, db_path):
@@ -570,9 +570,9 @@ def test_delete_report_only(store):
 
 def test_update_keeps_the_report(store):
     application_id, _ = store.record(row())
-    store.save_report(application_id, "2026-10-20T10:00:00Z", "/out/Acme/x/SUNIL BELDE.pdf", REPORT)
+    store.save_report(application_id, "2026-10-20T10:00:00Z", "/out/Acme/x/JANE DOE.pdf", REPORT)
     store.update(application_id, {"company": "Acme Inc"})
-    assert store.get_report(application_id)["saved_path"] == "/out/Acme/x/SUNIL BELDE.pdf"
+    assert store.get_report(application_id)["saved_path"] == "/out/Acme/x/JANE DOE.pdf"
 
 
 def test_old_store_gets_the_reports_table_with_rows_unchanged(old_store_path):
@@ -637,7 +637,7 @@ def test_list_carries_job_states_only(store):
     store.start_job(running, "cover_letter", "2026-10-28T10:00:01Z")
     store.finish_job(running, "cover_letter", "2026-10-28T10:00:01Z", "failed", error="Cover letter generation failed")
     store.start_job(finished, "resume", "2026-10-28T09:00:00Z")
-    store.finish_job(finished, "resume", "2026-10-28T09:00:00Z", "done", saved_path="/out/Acme/secret/SUNIL BELDE.pdf",
+    store.finish_job(finished, "resume", "2026-10-28T09:00:00Z", "done", saved_path="/out/Acme/secret/JANE DOE.pdf",
                      result={"match": MATCH})
     store.start_job(finished, "cover_letter", "2026-10-28T09:00:01Z")
     store.finish_job(finished, "cover_letter", "2026-10-28T09:00:01Z", "done", saved_path="/out/Acme/secret/letter.pdf",

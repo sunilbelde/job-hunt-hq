@@ -32,15 +32,15 @@ def with_facts(profile: str = FACTS_PROFILE):
 def test_profile_skills_exclude_the_experience_facts():
     profile = resume_terms.parse_profile(FACTS_PROFILE)
     assert profile.skills == ["Airflow (scheduled ETL DAGs)", "Post-training"]
-    assert [(employer, len(facts)) for employer, facts in profile.experience] == [("Capital One", 2), ("Dockskiff", 1)]
+    assert [(employer, len(facts)) for employer, facts in profile.experience] == [("Northwind Bank", 2), ("Contoso Documents", 1)]
     assert resume_terms.profile_entries(FACTS_PROFILE) == profile.skills
 
 
 def test_profile_items_outside_an_employer_heading_are_not_facts():
-    text = ("## Experience\n\n- Under no employer\n\n### Capital One\n- A fact\n#### Detail\n- Still Capital One\n"
+    text = ("## Experience\n\n- Under no employer\n\n### Northwind Bank\n- A fact\n#### Detail\n- Still Northwind Bank\n"
             "\n## Skills and abilities\n\n### Group\n- Testing\n")
     profile = resume_terms.parse_profile(text)
-    assert profile.experience == [("Capital One", ["A fact", "Still Capital One"])]
+    assert profile.experience == [("Northwind Bank", ["A fact", "Still Northwind Bank"])]
     assert profile.skills == ["Testing"]
 
 
@@ -59,7 +59,7 @@ def test_a_heading_must_name_a_job():
     with pytest.raises(resume_terms.ProfileError, match="'Globex'"):
         with_facts("## Experience\n\n### Globex\n- A fact\n")
     with pytest.raises(resume_terms.ProfileError, match="'Dock'"):
-        with_facts("## Experience\n\n### Dock\n- Only part of a word of Dockskiff\n")
+        with_facts("## Experience\n\n### Dock\n- Only part of a word of Contoso Documents\n")
 
 
 def test_the_real_profile_parses():

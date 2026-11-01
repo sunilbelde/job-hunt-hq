@@ -124,7 +124,7 @@ Every experience bullet in a tailored resume SHALL cite one or more sources of t
 - **THEN** it is accepted
 
 #### Scenario: Bullet moved to another job
-- **WHEN** a bullet under Capital One cites a Dockskiff bullet
+- **WHEN** a bullet under Northwind Bank cites a Contoso Documents bullet
 - **THEN** the content is rejected
 
 #### Scenario: Invented bullet
@@ -132,11 +132,11 @@ Every experience bullet in a tailored resume SHALL cite one or more sources of t
 - **THEN** the content is rejected
 
 #### Scenario: Bullet from a profile fact
-- **WHEN** a tailored bullet under Capital One cites only `j1.f1`, a profile fact listed under Capital One
+- **WHEN** a tailored bullet under Northwind Bank cites only `j1.f1`, a profile fact listed under Northwind Bank
 - **THEN** it is accepted
 
 #### Scenario: Fact of another job
-- **WHEN** a bullet under Dockskiff cites `j1.f1`
+- **WHEN** a bullet under Contoso Documents cites `j1.f1`
 - **THEN** the content is rejected
 
 ### Requirement: Numbers come from the cited bullets
@@ -223,7 +223,7 @@ The repository SHALL hold the owner's profile document, `data/PROFILE.md`. Its "
 - **THEN** the quote counts for nothing
 
 #### Scenario: Facts numbered by job
-- **WHEN** the Experience section has a "### Capital One" heading with two list items, and Capital One is the base resume's first job
+- **WHEN** the Experience section has a "### Northwind Bank" heading with two list items, and Northwind Bank is the base resume's first job
 - **THEN** the work folder's base resume lists them as facts `j1.f1` and `j1.f2` of job j1
 
 #### Scenario: Unknown employer

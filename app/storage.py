@@ -7,8 +7,9 @@ import unicodedata
 from pathlib import Path
 from typing import Protocol
 
-RESUME_FILE_NAME = "SUNIL BELDE.pdf"
-COVER_LETTER_FILE_NAME = "SUNIL BELDE - Cover Letter.pdf"
+from app.rendering import TEMPLATE_DIR
+
+DEFAULT_OWNER_NAME = "Resume"  # names the files when BASE.tex has no readable \name{...}
 TMP_PREFIX = ".tmp-"
 MAX_FOLDER_CHARS = 100
 UNKNOWN_COMPANY = "unknown-company"
@@ -19,6 +20,24 @@ PATH_BREAKING = frozenset("/\\:")
 LEGACY_FOLDER = re.compile(r"[1-9][0-9]*")
 
 logger = logging.getLogger("app.storage")
+
+
+def owner_name(template_dir: Path = TEMPLATE_DIR) -> str:
+    """The \\name{...} of the base resume, as written, which names the saved files. Path separators become
+    '-'; a missing or unreadable BASE.tex or an empty name gives DEFAULT_OWNER_NAME."""
+    try:
+        tex = (Path(template_dir) / "BASE.tex").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return DEFAULT_OWNER_NAME
+    match = re.search(r"^\\name\{([^{}]*)\}", tex, re.M)
+    name = "".join("-" if c in PATH_BREAKING or unicodedata.category(c) == "Cc" else c
+                   for c in (match.group(1) if match else ""))
+    return name.strip(" .") or DEFAULT_OWNER_NAME
+
+
+# Read once at startup: restart the service after changing the name in BASE.tex.
+RESUME_FILE_NAME = f"{owner_name()}.pdf"
+COVER_LETTER_FILE_NAME = f"{owner_name()} - Cover Letter.pdf"
 
 
 class StorageError(Exception):

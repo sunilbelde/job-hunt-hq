@@ -3,7 +3,7 @@
 ## Context
 
 - launchd runs `uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8080 --log-config deploy/logging.json` with `API_DOCS_ENABLED=false` pinned in the plist.
-- `tailscale serve status --json` on the Mac mini today shows one mapping, `sunils-mac-mini.tailf96439.ts.net:443 → http://127.0.0.1:8080`, with `AllowFunnel` set for `:443`. Funnel is enabled per `host:port` and only accepts ports 443, 8443 and 10000.
+- `tailscale serve status --json` on the Mac mini today shows one mapping, `<machine>.<tailnet>.ts.net:443 → http://127.0.0.1:8080`, with `AllowFunnel` set for `:443`. Funnel is enabled per `host:port` and only accepts ports 443, 8443 and 10000.
 - `create_app()` takes `settings`, `storage` and `applications`, so two app instances can share one store and one storage object. Docs routes exist only when `settings.api_docs_enabled` is true (FastAPI registers nothing otherwise).
 - In uvicorn 0.54, `Server.serve(sockets=[...])` accepts several pre-bound sockets. `scope["server"]` is the socket's local `(host, port)`. `ProxyHeadersMiddleware` rewrites only `client` and `scheme`, never `server`, so no request header can change it.
 - Current Swagger page: `swagger-ui-dist@5` (resolves to 5.33.3 today) from jsDelivr. `/health` is listed before `/healthz` because the `/health` decorator is applied first.
@@ -44,7 +44,7 @@ See proposal.md for the motivation and the options compared.
 ### 2. Tailnet publication on HTTPS 8444
 `tailscale serve --bg --https=8444 http://127.0.0.1:8081` adds a `:8444` web handler without `AllowFunnel`. It cannot be funnelled even by mistake, because Funnel rejects 8444. URLs:
 - Mac mini: `http://127.0.0.1:8081/docs`
-- Tailnet: `https://sunils-mac-mini.tailf96439.ts.net:8444/docs` (README uses `<machine>.<tailnet>.ts.net`)
+- Tailnet: `https://<machine>.<tailnet>.ts.net:8444/docs` (README uses `<machine>.<tailnet>.ts.net`)
 
 Same origin, so Try it out needs no CORS and FastAPI's relative `/openapi.json` URL works behind serve.
 
@@ -87,6 +87,6 @@ No middleware change. Both apps share the `app.requests` logger and its one hand
 
 1. Merge, then `scripts/install_service.sh` (the new plist runs the launcher with `--docs-port 8081`).
 2. `tailscale serve --bg --https=8444 http://127.0.0.1:8081`; `tailscale serve status` shows both mappings, and Funnel only on `:443`.
-3. `API_KEY=... scripts/smoke_test.sh https://sunils-mac-mini.tailf96439.ts.net` passes, including the docs listener check.
-4. Open `https://sunils-mac-mini.tailf96439.ts.net:8444/docs` from another tailnet device. From a device off the tailnet (phone on cellular with Tailscale off), confirm `https://…ts.net/docs` is 404 and `:8444` does not connect.
+3. `API_KEY=... scripts/smoke_test.sh https://<machine>.<tailnet>.ts.net` passes, including the docs listener check.
+4. Open `https://<machine>.<tailnet>.ts.net:8444/docs` from another tailnet device. From a device off the tailnet (phone on cellular with Tailscale off), confirm `https://…ts.net/docs` is 404 and `:8444` does not connect.
 5. Rollback: `tailscale serve --https=8444 off`, then reinstall with `DOCS_PORT=off` (or revert the commit and reinstall).

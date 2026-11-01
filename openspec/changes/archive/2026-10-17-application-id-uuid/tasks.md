@@ -29,7 +29,7 @@
 
 ## 2. Storage: UUID folders and the legacy rename
 
-- [x] 2.1 In `app/storage.py`, change `save_resume` (and the `Storage` protocol) to take `application_id: str`. Verify that `tests/test_storage.py` cases use a UUID and that the path is `<root>/Acme Corp/<uuid>/SUNIL BELDE.pdf`.
+- [x] 2.1 In `app/storage.py`, change `save_resume` (and the `Storage` protocol) to take `application_id: str`. Verify that `tests/test_storage.py` cases use a UUID and that the path is `<root>/Acme Corp/<uuid>/JANE DOE.pdf`.
 - [x] 2.2 Add `rename_legacy_folders(root, mapping)` to `app/storage.py` (design, "Folder renames"):
   - for each real company directory, rename integer-named subfolders that have a mapping to their UUID with `os.rename`
   - skip symlinks, unmapped integers and existing targets, logging any conflict or `OSError` to `app.storage` without raising
@@ -55,7 +55,7 @@
   - `POST /application` returns a UUID string
   - `PATCH`/`DELETE` work with that ID, and with it in upper case (the response comes back in lower case)
   - `abc`, `1`, `0`, `-1` and a random UUID get 404 and change nothing
-  - `POST /resume` with the UUID returns 201 and `saved_path` ending in `/<uuid>/SUNIL BELDE.pdf`
+  - `POST /resume` with the UUID returns 201 and `saved_path` ending in `/<uuid>/JANE DOE.pdf`
   - `{"application_id": 7}` gets 422, and `"7"` or `"not-a-uuid"` gets 404
   - the log lines carry the lowercase UUID, and never `not-a-uuid`
   - the auth-before-404 tests still pass

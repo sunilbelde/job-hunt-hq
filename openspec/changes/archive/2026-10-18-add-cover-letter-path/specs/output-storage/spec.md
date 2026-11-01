@@ -3,11 +3,11 @@
 ## ADDED Requirements
 
 ### Requirement: Cover letter file path
-The cover letter for an application SHALL be located at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE - Cover Letter.pdf`, in the same folder as that application's resume, with the company folder derived exactly as for the resume.
+The cover letter for an application SHALL be located at `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE - Cover Letter.pdf`, in the same folder as that application's resume, with the company folder derived exactly as for the resume.
 
 #### Scenario: Location next to the resume
 - **WHEN** a resume is generated for application `<id>` whose company is "Acme Corp"
-- **THEN** its cover letter path is `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf`
+- **THEN** its cover letter path is `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE - Cover Letter.pdf`
 
 #### Scenario: Company folder naming applies
 - **WHEN** the company is "AT&T / Mobility: West"

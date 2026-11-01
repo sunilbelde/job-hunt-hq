@@ -11,7 +11,7 @@
       {"text": "Built a human-in-the-loop LLM agent using the **ReAct agentic AI pattern** to propose, critique, and refine source-to-target mappings.", "sources": ["j1.b1"]}
     ]},
     {"id": "j2", "bullets": [
-      {"text": "Built end-to-end **NLP pipelines** using **HuggingFace Transformers** to analyze political trends from **10M+ tweets**.", "sources": ["j2.b1"]}
+      {"text": "Built end-to-end **NLP pipelines** using **HuggingFace Transformers** to study public health discussions in **10M+ posts**.", "sources": ["j2.b1"]}
     ]}
   ]
 }
@@ -77,4 +77,4 @@ section order and job order come from the base resume. They are not in this file
 - Not allowed: the posting asks for Kafka, the base resume never mentions it, and the judge rejected
   it. It appears nowhere, not even as "familiar with Kafka".
 - Not allowed: "cut engineering effort by 80%" when j1.b4 says "over **70%**".
-- Not allowed: putting the Kubernetes migration (j4.b4, Acheron) under Capital One.
+- Not allowed: putting the Kubernetes migration (j4.b4, Fabrikam Software) under Northwind Bank.

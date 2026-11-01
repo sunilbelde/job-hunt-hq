@@ -1,19 +1,19 @@
 ## MODIFIED Requirements
 
 ### Requirement: Resume file path
-The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is the application's UUID in lowercase. Missing folders SHALL be created.
+The system SHALL save each generated resume at `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE.pdf`, where the company folder is derived from the application's stored `company` at generation time and `application_id` is the application's UUID in lowercase. Missing folders SHALL be created.
 
 #### Scenario: First resume for an application
 - **WHEN** a resume is generated for application `<id>` whose company is "Acme Corp" and no folders exist yet
-- **THEN** the file `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf` exists afterwards
+- **THEN** the file `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf` exists afterwards
 
 #### Scenario: Two applications at one company
 - **WHEN** resumes are generated for applications `<a>` and `<b>`, both with company "Acme Corp"
-- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/<a>/SUNIL BELDE.pdf` and `<OUTPUT_DIR>/Acme Corp/<b>/SUNIL BELDE.pdf`
+- **THEN** the files are `<OUTPUT_DIR>/Acme Corp/<a>/JANE DOE.pdf` and `<OUTPUT_DIR>/Acme Corp/<b>/JANE DOE.pdf`
 
 #### Scenario: Company renamed
 - **WHEN** application `<id>`'s company is changed from "Acme" to "Acme Inc" after a resume was generated, and a resume is generated again
-- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/<id>/SUNIL BELDE.pdf`
+- **THEN** the new file is at `<OUTPUT_DIR>/Acme Inc/<id>/JANE DOE.pdf`
 - **AND** the file under `<OUTPUT_DIR>/Acme/<id>/` is left unchanged
 
 ### Requirement: Overwrite on regeneration
@@ -40,8 +40,8 @@ The service SHALL NOT delete saved resume files or their folders on its own. The
 At startup, every application folder directly inside a company folder whose name is an old integer ID recorded by the integer ID migration SHALL be renamed to that application's UUID, keeping its contents. A folder whose integer has no recorded UUID, or whose UUID folder already exists in the same company folder, SHALL be left as it is and logged. Renaming SHALL NOT delete any file, and SHALL complete on a later start if interrupted.
 
 #### Scenario: Existing resume moved
-- **WHEN** application 1, company "Acme Corp", is migrated to `<id>` and `<OUTPUT_DIR>/Acme Corp/1/SUNIL BELDE.pdf` exists
-- **THEN** after startup the file is at `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf` and `<OUTPUT_DIR>/Acme Corp/1/` no longer exists
+- **WHEN** application 1, company "Acme Corp", is migrated to `<id>` and `<OUTPUT_DIR>/Acme Corp/1/JANE DOE.pdf` exists
+- **THEN** after startup the file is at `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf` and `<OUTPUT_DIR>/Acme Corp/1/` no longer exists
 
 #### Scenario: Folders under an earlier company name
 - **WHEN** resumes for application 1 exist under both `Acme/1/` and `Acme Inc/1/`

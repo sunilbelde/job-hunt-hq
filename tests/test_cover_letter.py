@@ -78,7 +78,7 @@ def test_letter_is_checked_and_rendered(tmp_path, temp_root):
     claude, result = run_with(tmp_path)
     assert [call["role"] for call in fake_claude.calls(claude)] == ["letter"]
     assert result.text.startswith("Dear Acme Corp Hiring Team,\n\nI am applying for the Applied AI Engineer role")
-    assert result.text.endswith("Sincerely,\nSunil Belde\n")
+    assert result.text.endswith("Sincerely,\nJane Doe\n")
     assert letter_checks.pages(result.pdf) == 1
     assert LETTER["paragraphs"][1]["text"][:40] in " ".join(letter_checks.pdf_text(result.pdf).split())
     assert (result.run.turns, result.run.cost_usd) == (6, 0.12)

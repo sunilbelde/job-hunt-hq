@@ -17,7 +17,7 @@ Application IDs are SQLite's auto-increment integers (1, 2, 3, …). The service
   - A string that isn't a UUID, or a UUID that names no row, gets 404.
 - UUIDs are matched case-insensitively and always returned in lowercase.
 - IDs no longer count up, so there's no ordering guarantee between them. They're still unique, never change once assigned, and are never handed out again.
-- Resume files are saved at `<OUTPUT_DIR>/<company folder>/<uuid>/SUNIL BELDE.pdf`.
+- Resume files are saved at `<OUTPUT_DIR>/<company folder>/<uuid>/JANE DOE.pdf`.
 - **One-time migration at startup.** An existing store with integer IDs is converted in one transaction, so it either completes or leaves the store exactly as it was:
   - The store file is first copied to a private backup next to it.
   - Every row gets a new UUID, and every other field stays the same.

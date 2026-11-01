@@ -29,8 +29,8 @@
 ## 5. Rollout on the Mac mini (integration)
 
 - [ ] 5.1 Run `scripts/install_service.sh`, then `tailscale serve --bg --https=8444 http://127.0.0.1:8081`; verify `tailscale serve status --json` shows `:8444 → 127.0.0.1:8081` and `AllowFunnel` only for `:443`, and that `scripts/service_status.sh` reports health and docs ok
-- [ ] 5.2 Run `API_KEY=... scripts/smoke_test.sh https://sunils-mac-mini.tailf96439.ts.net`; verify it passes, including the docs listener check
-- [ ] 5.3 Open `https://sunils-mac-mini.tailf96439.ts.net:8444/docs` from another tailnet device and send a `GET /healthz` with Try it out; from a device off the tailnet, verify `https://sunils-mac-mini.tailf96439.ts.net/docs` is 404 and `:8444` does not connect
+- [ ] 5.2 Run `API_KEY=... scripts/smoke_test.sh https://<machine>.<tailnet>.ts.net`; verify it passes, including the docs listener check
+- [ ] 5.3 Open `https://<machine>.<tailnet>.ts.net:8444/docs` from another tailnet device and send a `GET /healthz` with Try it out; from a device off the tailnet, verify `https://<machine>.<tailnet>.ts.net/docs` is 404 and `:8444` does not connect
 
 ## Workflow follow-up
 

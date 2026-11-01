@@ -7,7 +7,7 @@
 ## What Changes
 
 - **BREAKING** Replace `POST /jobs` with `POST /resume`. The body is exactly `{"application_id": <integer>}`, and other fields are ignored. The service reads the stored application row and generates from it. `/jobs` is removed outright with no alias, so it answers 404 like any unknown path.
-- **BREAKING** Save the PDF at `<OUTPUT_DIR>/<company folder>/<application_id>/SUNIL BELDE.pdf`. The company folder is the stored `company`, made safe for use as a folder name. Generating again for the same application replaces the file in place.
+- **BREAKING** Save the PDF at `<OUTPUT_DIR>/<company folder>/<application_id>/JANE DOE.pdf`. The company folder is the stored `company`, made safe for use as a folder name. Generating again for the same application replaces the file in place.
 - **BREAKING** The success response is 201 with exactly `{"ok": true, "application_id": <integer>, "saved_path": "<absolute path>"}`. `job_id`, `url`, `expires_at` and `key` are dropped.
 - **BREAKING** Every error from `POST /resume`, 401 included, uses the `{"ok": false, "message": ...}` shape of the `/application` endpoints, and that includes 500 and 502.
 - A missing `application_id`, or one that is not a JSON integer, gets 422 naming `application_id`. An integer that names no stored row (never assigned, deleted, or zero or below) gets 404 `{"ok": false, "message": "Application not found"}`. Nothing is rendered or written in either case. When the application store cannot be read, the response is 503.
@@ -67,7 +67,7 @@ These are decisions I assumed. Each can be reversed before implementation.
    - Prefix `_` to names starting with `applications.sqlite3` (any case).
 6. **Company renamed after a resume was generated.** Assumed: the next generation writes under the new company folder, and the old file stays where it is.
 7. **Application deleted.** Assumed: its resume folder stays on disk. `DELETE /application/{id}` does not remove files.
-8. **File name.** Assumed: `SUNIL BELDE.pdf` is fixed in code, not a setting.
+8. **File name.** Assumed: `JANE DOE.pdf` is fixed in code, not a setting.
 9. **Overwrite status code.** Assumed: regenerating returns 201 like the first generation, not 200.
 10. **Legacy `outputs/` folder.** Assumed: left in place for manual deletion, with no automatic cleanup.
 11. **Error shape and code for 5xx.** Assumed: 500 for render failures and 502 for failures writing the file, both with `{"ok": false, "message"}` and generic messages. 502 is kept for the local disk to match the existing convention.

@@ -264,7 +264,7 @@ The smoke test SHALL generate its resume for an application with no posting text
 - **THEN** the service answers 422, no Claude run starts, and no cover letter file appears in the application's folder
 
 ### Requirement: Smoke test finds the PDF from its file name
-The smoke test SHALL require `saved_path` to be exactly `SUNIL BELDE.pdf`, with no `/`. It SHALL check that the file at `<OUTPUT_DIR>/Smoke Test Co/<application_id>/<saved_path>` is a PDF, taking `OUTPUT_DIR` from the environment and defaulting to the service's default.
+The smoke test SHALL require `saved_path` to be exactly `<name>.pdf`, with no `/`, reading `<name>` from the `\name{...}` of `data/BASE.tex` the way the service does (`JOB_HUNT_DATA_DIR` overrides the folder). It SHALL check that the file at `<OUTPUT_DIR>/Smoke Test Co/<application_id>/<saved_path>` is a PDF, taking `OUTPUT_DIR` from the environment and defaulting to the service's default.
 
 #### Scenario: Status returns a path
 - **WHEN** the status endpoint's `saved_path` contains `/`

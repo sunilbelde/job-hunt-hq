@@ -12,7 +12,7 @@ On success, `POST /resume` SHALL respond 201 with exactly `{"ok": true, "applica
 
 #### Scenario: Successful job
 - **WHEN** an authenticated client posts `{"application_id": "<id>"}` and application `<id>` exists with company "Acme Corp"
-- **THEN** the system responds 201 with `ok` true, `application_id` `<id>`, `saved_path` equal to the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf`, `cover_letter_path` equal to the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE - Cover Letter.pdf` and a `match` object, and no other keys
+- **THEN** the system responds 201 with `ok` true, `application_id` `<id>`, `saved_path` equal to the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf`, `cover_letter_path` equal to the absolute path of `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE - Cover Letter.pdf` and a `match` object, and no other keys
 - **AND** the file at `saved_path` is the generated PDF
 
 #### Scenario: Cover letter beside the resume

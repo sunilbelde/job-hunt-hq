@@ -23,7 +23,7 @@ These tasks follow the default answers to the proposal's Open Questions. If an a
 - [x] 3.1 Rewrite `app/storage.py` (design §5): add `company_folder`, `RESUME_FILE_NAME`, `LocalStorage(root)` with the create-and-probe step but no `outputs/`, and `save_resume(company, application_id, content) -> Path` with folders at 700, a temporary file at 600, then fsync and `os.replace`. Reduce the `Storage` protocol to `save_resume`. Delete `LinkSigner`, keys, `content_type_for`, `path_for` and `cleanup`.
 - [x] 3.2 Rewrite `tests/test_storage.py`:
   - each `company_folder` case from the output-storage spec: spaces and case kept, separators, `../../etc`, `..`, empty or whitespace-only, the `applications.sqlite3` prefix in any case, and the 100-character cut
-  - `save_resume` writes `<root>/Acme Corp/7/SUNIL BELDE.pdf` and returns its absolute path
+  - `save_resume` writes `<root>/Acme Corp/7/JANE DOE.pdf` and returns its absolute path
   - two applications at one company get separate folders
   - regenerating replaces the content and leaves exactly one file and no `.tmp-*`
   - a simulated write failure leaves the previous file intact, removes the temporary file and raises `StorageError`
@@ -52,7 +52,7 @@ These tasks follow the default answers to the proposal's Open Questions. If an a
   - 401 with the `ok`/`message` shape for a missing or wrong key, a wrong key with a non-JSON body, and a wrong key with an unknown ID
   - 422 for non-JSON, non-object, `{}` and non-integer IDs, with no value echoed
   - 404 "Application not found" for unknown or deleted IDs, `0`, `-1` and `2**63`, with no folder created
-  - 201 with exactly the three keys, where `saved_path` is absolute, equals `<OUTPUT_DIR>/Acme Corp/<id>/SUNIL BELDE.pdf` and the file exists
+  - 201 with exactly the three keys, where `saved_path` is absolute, equals `<OUTPUT_DIR>/Acme Corp/<id>/JANE DOE.pdf` and the file exists
   - a repeat request returns the same path with the file replaced
   - extra body fields are ignored, and the folder uses the stored company
   - a `PATCH`ed `role` reaches `generate_output`
