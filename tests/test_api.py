@@ -1403,3 +1403,31 @@ def test_no_response_contains_a_host_path(settings, tmp_path, monkeypatch):
         for path in host_paths:
             assert path not in r.text, (r.request.method, r.url, r.status_code)
     assert {r.status_code for r in responses} >= {200, 401, 404, 422}
+
+
+# --- how an application was added ---
+
+def test_added_via_defaults_to_manual_and_keeps_link(client, settings):
+    post_application(client, VALID_APPLICATION)
+    post_application(client, {**link_variant("https://example.com/jobs/2"), "added_via": "link"})
+    assert sorted(row["added_via"] for row in stored_rows(settings)) == ["link", "manual"]
+
+
+@pytest.mark.parametrize("value", ["linkedin", "Link", "", None, 1])
+def test_bad_added_via_rejected_without_echo(client, settings, value):
+    r = post_application(client, {**VALID_APPLICATION, "added_via": value})
+    assert "added_via" in assert_error(r, 422) and "linkedin" not in r.text
+    assert stored_rows(settings) == []
+
+
+def test_duplicate_keeps_the_origin(client, settings):
+    post_application(client, VALID_APPLICATION)
+    assert post_application(client, {**VALID_APPLICATION, "added_via": "link"}).status_code == 200
+    assert stored_rows(settings)[0]["added_via"] == "manual"
+
+
+def test_added_via_cannot_be_updated(client, settings):
+    application_id = post_application(client, VALID_APPLICATION).json()["application_id"]
+    r = client.patch(f"/application/{application_id}", json={"added_via": "link"}, headers={"X-API-Key": API_KEY})
+    assert "added_via" in assert_error(r, 422)
+    assert stored_rows(settings)[0]["added_via"] == "manual"

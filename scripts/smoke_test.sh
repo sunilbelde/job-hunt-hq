@@ -74,9 +74,10 @@ for path in /docs /openapi.json /viewer; do
 done
 
 # Nor anything but GET /health and the three POSTs: the rest is served on the local listener only.
-# The keyed PATCH and DELETE use the all-zero ID, so even a service that wrongly serves them changes nothing.
+# The keyed PATCH and DELETE use the all-zero ID and the viewer's POST an empty body, so even a service that
+# wrongly serves them changes nothing.
 for probe in "GET /healthz" "GET /resume/$zero/status" "GET /cover-letter/$zero/status" \
-             "PATCH /application/$zero" "DELETE /application/$zero"; do
+             "PATCH /application/$zero" "DELETE /application/$zero" "POST /viewer/apply-from-link"; do
   method=${probe% *}; path=${probe#* }
   status=$(curl -sS -o /dev/null -w '%{http_code}' -X "$method" "$base$path" -H "X-API-Key: $API_KEY" \
     -H 'Content-Type: application/json' -d '{}')
@@ -86,7 +87,7 @@ for probe in "GET /healthz" "GET /resume/$zero/status" "GET /cover-letter/$zero/
   fi
 done
 
-# The local docs listener serves the reference, the viewer and a schema with the twenty operations.
+# The local docs listener serves the reference, the viewer and a schema with the twenty-one operations.
 for path in /docs /viewer; do
   status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
   if [ "$status" != "200" ]; then
@@ -99,8 +100,8 @@ status=$(printf '%s\n' "$resp" | tail -n 1)
 count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
 methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
 print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
-if [ "$status" != "200" ] || [ "$count" != "20" ]; then
-  echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 20" >&2
+if [ "$status" != "200" ] || [ "$count" != "21" ]; then
+  echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 21" >&2
   exit 1
 fi
 

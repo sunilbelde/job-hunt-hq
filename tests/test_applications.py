@@ -395,7 +395,7 @@ def test_get_returns_stored_row_without_key(store):
     assert got["location"] is None and got["status"] == "verified" and got["updated_at"] is None
     assert got["created_at"]
     assert "job_link_key" not in got
-    assert set(got) == {"id", "job_link", *FIELDS, "status", "created_at", "updated_at"}
+    assert set(got) == {"id", "job_link", *FIELDS, "status", "added_via", "created_at", "updated_at"}
 
 
 def test_get_missing_or_deleted_is_none(store):
@@ -454,6 +454,11 @@ def raw_rows(db_path):
         return [dict(r) for r in conn.execute("SELECT * FROM applications")]
 
 
+def with_origin(rows):
+    """The rows as the migration leaves them: the origin column is added before the ID rebuild is tried."""
+    return [{**r, "added_via": "manual"} for r in rows]
+
+
 def test_integer_ids_migrated_keeping_fields(int_store_path):
     before = {r["id"]: r for r in raw_rows(int_store_path)}
     store = ApplicationStore(int_store_path)
@@ -462,7 +467,7 @@ def test_integer_ids_migrated_keeping_fields(int_store_path):
     assert all(UUID4.match(v) for v in ids.values())
     for old_id, new_id in ids.items():
         after = stored(int_store_path, new_id)
-        assert after == {**before[old_id], "id": new_id}
+        assert after == {**before[old_id], "id": new_id, "added_via": "manual"}
 
 
 def test_migrated_store_keeps_working(int_store_path):
@@ -488,7 +493,7 @@ def test_backup_private_and_holds_integer_rows(int_store_path):
     ApplicationStore(int_store_path)
     [backup] = backups(int_store_path)
     assert stat.S_IMODE(backup.stat().st_mode) == 0o600
-    assert raw_rows(backup) == before
+    assert raw_rows(backup) == with_origin(before)
 
 
 def test_pre_status_store_gets_status_and_uuids(old_store_path):
@@ -516,7 +521,7 @@ def test_failed_migration_leaves_integer_store(int_store_path, monkeypatch):
     monkeypatch.setattr("app.applications.uuid.uuid4", lambda: same)  # second mapping row breaks UNIQUE
     with pytest.raises(StorageError, match="OUTPUT_DIR"):
         ApplicationStore(int_store_path)
-    assert raw_rows(int_store_path) == before
+    assert raw_rows(int_store_path) == with_origin(before)
     monkeypatch.undo()
     assert set(ApplicationStore(int_store_path).legacy_ids()) == {1, 2}
 
@@ -597,7 +602,8 @@ def test_list_orders_by_generation_then_recording(store, db_path):
     assert listed[0]["report"] == {"generated_at": "2026-10-20T10:00:00Z", "status": "tailored", "threshold": 70,
                                    "base_score": 57, "tailored_score": 81}
     assert listed[2]["report"] is None
-    assert set(listed[2]) == {"id", "company", "role", "status", "created_at", "updated_at", "report", "jobs"}
+    assert set(listed[2]) == {"id", "company", "role", "status", "added_via", "created_at", "updated_at", "report",
+                              "jobs"}
     assert listed[2]["jobs"] == {"resume": None, "cover_letter": None}
     assert "secret posting" not in repr(listed)
 
@@ -781,3 +787,53 @@ def test_job_failures_raise_store_error(store, db_path):
                  lambda: store.get_job(application_id, "resume")):
         with pytest.raises(ApplicationStoreError):
             call()
+
+
+# --- how an application was added ---
+
+def origin(path, application_id):
+    return stored(path, application_id)["added_via"]
+
+
+def test_new_row_is_manual_unless_told_otherwise(store, db_path):
+    manual, _ = store.record(row())
+    by_link, _ = store.record({**row(), "job_link": GH + "/other", "added_via": "link"})
+    assert origin(db_path, manual) == "manual" and origin(db_path, by_link) == "link"
+
+
+def test_origin_survives_updates_and_duplicates(store, db_path):
+    application_id, _ = store.record(row())
+    store.update(application_id, {"status": "applied", "salary": "$1"})
+    store.record({**row(), "added_via": "link"})
+    assert origin(db_path, application_id) == "manual"
+
+
+def test_origin_listed_and_read_back(store):
+    application_id, _ = store.record({**row(), "added_via": "link"})
+    assert store.get(application_id)["added_via"] == "link"
+    assert store.list_with_reports()[0]["added_via"] == "link"
+
+
+def test_store_from_before_the_origin_gains_it_as_manual(store, db_path):
+    application_id, _ = store.record(row())
+    before = stored(db_path, application_id)
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("ALTER TABLE applications DROP COLUMN added_via")
+    ApplicationStore(db_path)
+    assert stored(db_path, application_id) == {**before, "added_via": "manual"}
+
+
+def test_restart_after_the_origin_migration_changes_nothing(store, db_path):
+    application_id, _ = store.record({**row(), "added_via": "link"})
+    ApplicationStore(db_path)
+    assert origin(db_path, application_id) == "link"
+
+
+def test_store_from_before_statuses_reads_as_manual(old_store_path):
+    ids = ApplicationStore(old_store_path).legacy_ids()
+    assert ids and all(origin(old_store_path, application_id) == "manual" for application_id in ids.values())
+
+
+def test_store_with_integer_ids_reads_as_manual(int_store_path):
+    ids = ApplicationStore(int_store_path).legacy_ids()
+    assert ids and all(origin(int_store_path, application_id) == "manual" for application_id in ids.values())

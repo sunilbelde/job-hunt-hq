@@ -1,10 +1,11 @@
 import json
+import shlex
 from pathlib import Path
 
 import pytest
 
 from app import form_filler
-from app.form_filler import FormFillLauncher, HerdrUnavailable, fill_command, tab_label
+from app.form_filler import FormFillLauncher, HerdrUnavailable, fill_command, link_command, link_hash, link_label, tab_label
 
 ID = "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"
 REPO = Path("/repo with space")
@@ -130,3 +131,42 @@ def test_real_runner_failures(tmp_path):
     with pytest.raises(HerdrUnavailable) as raised:
         REAL_RUN_HERDR(str(failing))(["tab", "create"])
     assert str(raised.value) == "herdr tab create exited 3"
+
+
+# --- the link box ---
+
+LINK = "https://jobs.ashbyhq.com/acme/1"
+
+
+def test_link_opens_a_labelled_tab_running_the_skill():
+    fake = FakeHerdr()
+    started = launcher(fake).start_link(LINK)
+    assert started.tab_label == f"ByLink-jobs.ashbyhq.com-{link_hash(LINK)}" and not started.already_open
+    assert fake.calls[-1] == ["pane", "run", "wK:p2", f"/Users/me/.local/bin/claude --chrome '/apply-from-link {LINK}'"]
+
+
+def test_decorated_link_finds_the_open_tab():
+    fake = FakeHerdr(tabs=[{"tab_id": "wK:t9", "label": link_label(LINK)}])
+    started = launcher(fake).start_link(LINK + "/?utm_source=x#apply")
+    assert started.already_open and started.tab_id == "wK:t9"
+    assert not any(call[:2] in (["tab", "create"], ["pane", "run"]) for call in fake.calls)
+
+
+def test_different_postings_get_different_tabs():
+    assert link_hash(LINK) != link_hash(LINK + "2")
+
+
+def test_link_with_a_missing_workspace_uses_the_first_tab():
+    fake = FakeHerdr(workspaces=[])
+    assert launcher(fake).start_link(LINK).tab_label == link_label(LINK)
+    assert ["tab", "rename", "wN:t1", link_label(LINK)] in fake.calls
+
+
+@pytest.mark.parametrize("link", [
+    "https://a.example/x;rm${IFS}-rf",
+    "https://a.example/$(touch${IFS}pwned)",
+    "https://a.example/`id`",
+    "https://a.example/it's&&id|cat>x",
+])
+def test_shell_syntax_stays_inside_one_argument(link):
+    assert shlex.split(link_command("/bin/claude", link)) == ["/bin/claude", "--chrome", f"/apply-from-link {link}"]

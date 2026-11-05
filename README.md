@@ -17,7 +17,7 @@ On the installed service only `GET /health`, `POST /application`, `POST /resume`
 | `PATCH /application/{application_id}` | `X-API-Key` | Changes the fields sent, e.g. `{"status": "applied"}`. `200 {"ok": true, "application_id", "status"}`. 401 bad key, 404 unknown ID, 422 bad body, 503 store failure |
 | `DELETE /application/{application_id}` | `X-API-Key` | Permanently removes the row. `200 {"ok": true, "application_id"}`. 401 bad key, 404 unknown or already-deleted ID, 503 store failure |
 
-Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: the public listener's four-endpoint allowlist and the local listener), `app/viewer.py` (the resume viewer page, the cached base resume and the base cover letter it serves), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (picks the base or tailored resume), `app/tailoring.py` (runs the tailor-resume skill and its judge headlessly, and the final gate), `.claude/skills/tailor-resume/` (the skill and its scripts), `.claude/skills/judge-resume-terms/` (the judge), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets and your profile), `deploy/` (launchd and logging templates, check for a leftover Tailscale mapping to the local listener), `scripts/` (install, uninstall, status, smoke test).
+Code layout: `app/main.py` (HTTP), `app/serve.py` (launcher for the installed service: the public listener's four-endpoint allowlist and the local listener), `app/viewer.py` (the resume viewer page, the cached base resume and the base cover letter it serves), `app/models.py` (`ResumeRequest`, `StoredApplication`, `ApplicationRow`, `ApplicationUpdate`, and the response shapes shown in the API docs), `app/applications.py` (application store and link dedupe), `app/generation.py` (picks the base or tailored resume), `app/tailoring.py` (runs the tailor-resume skill and its judge headlessly, and the final gate), `.claude/skills/tailor-resume/` (the skill and its scripts), `.claude/skills/judge-resume-terms/` (the judge), `.claude/skills/apply-from-link/` (the job link workflow, run in a Claude Code session), `app/form_filler.py` (opens the Herdr tabs for Fill form and the link box), `app/rendering.py` (TeX to PDF), `app/storage.py` (resume file layout and atomic writes), `app/settings.py` (config), `app/log_filters.py` (keeps query strings out of access logs), `data/` (resume template assets and your profile), `deploy/` (launchd and logging templates, check for a leftover Tailscale mapping to the local listener), `scripts/` (install, uninstall, status, smoke test).
 
 ### Request body (`POST /resume`)
 
@@ -38,6 +38,7 @@ Strings only, extra fields ignored, and a 422 message names fields but never val
 | `verification_method` | yes: `official_apply_match` or `employer_site` |
 | `official_apply_url` | yes (may be `""`) |
 | `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `company_careers_url`, `official_employer_domain`, `full_job_description` | no |
+| `added_via` | no: `link` when the apply-from-link workflow records the posting, otherwise `manual` (the default). Fixed once recorded |
 
 Only two combinations are verified, and anything else is a 422:
 
@@ -64,7 +65,7 @@ Values are exact and case-sensitive, and any status can change to any other. Re-
 **Updating.** `PATCH /application/{application_id}` writes only the fields in the body:
 - `status`, `company` and `role` must be non-empty strings
 - `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `company_careers_url`, `official_employer_domain` and `full_job_description` take a string, or `null` to clear them
-- `job_link`, `posting_source_type`, `verification_method` and `official_apply_url` can't be changed. A body that contains any of them is a 422, even if the value matches
+- `job_link`, `posting_source_type`, `verification_method`, `official_apply_url` and `added_via` can't be changed. A body that contains any of them is a 422, even if the value matches
 - unknown fields are ignored, and a body with nothing to update is a 422
 
 An unknown ID returns 404, checked before the body, and a bad key returns 401 before either.
@@ -187,7 +188,7 @@ Each resume is saved at `OUTPUT_DIR/<company folder>/<application id>/<name>.pdf
 
 ## Your data (local only)
 
-The repository is public, so your own files never go into it. Everything in `data/` is gitignored except `data/samples/`, which holds made-up copies of the files the service needs, for a fictional Jane Doe:
+Your own files never go into the repository. Everything in `data/` is gitignored except `data/samples/`, which holds made-up copies of the files the service needs, for a fictional Jane Doe:
 
 | File | What it is |
 |---|---|
@@ -218,8 +219,8 @@ Copy `.env.example` to `.env` (git-ignored), fill it in and run `chmod 600 .env`
 | `TAILORING_TIMEOUT_SECONDS` | no | Default `420`, from `60` to `480`, for all the Claude runs of one resume together. A run still going when it is used up is stopped, and the request fails |
 | `TAILORING_MAX_BUDGET_USD` | no | Default `3`, the estimated spend cap for all the Claude runs of one resume together. When it is reached the request fails. The estimate is checked between turns, so a run can go slightly over |
 | `CLAUDE_BIN` | no | Default `claude`. The installed service gets the path the install script found |
-| `HERDR_BIN` | no | Default `herdr`, the Herdr CLI the viewer's **Fill form** button calls. The installed service gets the path the install script found |
-| `FILL_WORKSPACE` | no | Default `Claude-Jobs-Automation`, the Herdr workspace **Fill form** opens its tabs in |
+| `HERDR_BIN` | no | Default `herdr`, the Herdr CLI the viewer's **Fill form** button and link box call. The installed service gets the path the install script found |
+| `FILL_WORKSPACE` | no | Default `Claude-Jobs-Automation`, the Herdr workspace **Fill form** and the link box open their tabs in |
 | `API_DOCS_ENABLED` | no | Default `false`. `true` serves the API reference at `/docs`, `/redoc` and `/openapi.json`, and the [resume viewer](#resume-viewer), on a development server. The installed service ignores it: its public port never serves docs, and its local port always does |
 
 ## Development
@@ -287,13 +288,15 @@ The public address never serves these pages. Requests sent from there change you
 
 The page opens straight to the list, with no API key: its endpoints need none, so anything that can reach the local listener (programs running on the Mac mini) can read every application, posting and resume, change a status, delete an application or start a Claude run. The left column lists every application, most recently generated first. Each entry is one card showing the company, the role, the status, the match badge, the base → generated score (the generated score green at or above the threshold, red below) and the day it was recorded. While a resume or cover letter is being generated for it, the card shows **Resume…** or **Letter…**. Cards have no controls: clicking one selects it.
 
+Above the filters, the link box takes a job link and **Apply from link** starts the workflow described under [Apply from a link](#apply-from-a-link). The list keeps refreshing for 15 minutes after that, so the application appears once the session records it. Each list entry has a tag for how the posting was added: **ByLink** for this workflow and **Manual** for everything else, including applications recorded before the tag existed and postings other API clients recorded.
+
 Above the list, a search box matches company or role (ignoring case), **All statuses** narrows to one status, and **Recorded** takes a from and a to day. The dates are the days the applications were recorded in the database (in your browser's time zone, both days included), not the posting dates. Either date can be left empty. While any filter is set, the header shows how many applications match out of the total and **Clear** resets them all. Filters reset when the page reloads.
 
 The selected application's action bar, pinned above its details, holds everything you can do to it:
 
 - **Status** is a dropdown of the six statuses: choosing one saves it at once;
 - **Generate resume** / **Regenerate resume** and **Generate cover letter** / **Regenerate cover letter** start the same background run as `POST /resume` and `POST /cover-letter`, with the same one-run-at-a-time rule, so a click while a run is going (from here or from the API) starts nothing new. Regenerating asks first; the new file replaces the old one only when the run succeeds. A cover letter needs posting text, and the bar shows the service's message when there is none. While a run is going the button says **Generating…** and the page re-reads the list every 5 seconds; when it finishes, the bar says so and the new PDF, scores, additions and gaps are shown in place (keeping the resume or cover letter view you are on), or it shows why the run failed;
-- **Fill form** opens a new tab in the Herdr workspace `Claude-Jobs-Automation` (created if missing), labelled `<Company>-<Role>-<application id>`, and runs `claude --chrome "/job-application-form-filler <id>"` in the repo there. It is an ordinary interactive Claude Code session on the Mac mini: you approve its permissions and answer its questions in that tab, and it never submits unless you ask it to there. Clicking again while that tab is open says so and starts nothing. The button only helps when you are at the Mac mini, since the session drives the mini's Chrome. Without the job-application-form-filler skill (it lives in your gitignored `.claude/skills/`), the session has nothing to run;
+- **Fill form** opens a new tab in the Herdr workspace `Claude-Jobs-Automation` (created if missing), labelled `<Company>-<Role>-<application id>`, and runs `claude --chrome "/job-application-form-filler <id>"` in the repo there. It is an ordinary interactive Claude Code session on the Mac mini: you approve its permissions and answer its questions in that tab, and it never submits unless you ask it to there. Clicking again while that tab is open says so and starts nothing. The button only helps when you are at the Mac mini, since the session drives the mini's Chrome. The session runs the `job-application-form-filler` skill in `.claude/skills/`, which reads your answers from your gitignored profile document;
 - **Delete** asks you to confirm, naming the company and role, then removes the application and its report (its PDFs stay in the output folder).
 
 Below the action bar, the selected application shows:
@@ -306,7 +309,7 @@ Below the action bar, the selected application shows:
 - the base resume and the generated resume side by side, rendered by the browser's own PDF viewer (stacked, base first, on a narrow screen);
 - a **Resume / Cover letter** switch above them: **Cover letter** shows the base letter (`data/COVER_LETTER.pdf`) beside the letter `POST /cover-letter` saved for the application, the same way. The letters load only when you switch to them, and the generated pane says so when no letter was written for the application. Choosing another application goes back to the resumes.
 
-The page loads nothing from other origins and runs only its own script. Its data comes from six `GET` endpoints, documented under the `viewer` tag in `/docs`: `/applications`, `/application/{id}`, `/application/{id}/resume.pdf`, `/application/{id}/cover-letter.pdf`, `/resume/base.pdf` and `/cover-letter/base.pdf`. `/applications` also gives each application's latest resume and cover letter job state (`running`, `done` or `failed`, never the result). It writes through five more under the same tag, also without a key: `PATCH /viewer/application/{id}` with `{"status": "applied"}` changes only the status, `DELETE /viewer/application/{id}` deletes the application but keeps its files, `POST /viewer/application/{id}/fill` opens the Fill form tab (503 `Herdr unavailable` when Herdr is not running), and `POST /viewer/application/{id}/resume` and `POST /viewer/application/{id}/cover-letter` start the same jobs as the keyed `POST /resume` and `POST /cover-letter` and answer the same 202. All five answer 403 to a request the browser marks as coming from another site, so other websites can't trigger them. The keyed `PATCH` and `DELETE /application/{id}`, `POST /resume` and `POST /cover-letter` are unchanged and still need the key. A saved letter is looked for under the application's current company and then beside its resume, so one written before a company rename is still found. The scores come from a report `POST /resume` stores with each successful generation. The report keeps where the PDF was saved, but `/application/{id}` shows only its file name. Resumes generated before reports existed show "no report" next to their saved PDF; generating the resume again creates one.
+The page loads nothing from other origins and runs only its own script. Its data comes from six `GET` endpoints, documented under the `viewer` tag in `/docs`: `/applications`, `/application/{id}`, `/application/{id}/resume.pdf`, `/application/{id}/cover-letter.pdf`, `/resume/base.pdf` and `/cover-letter/base.pdf`. `/applications` also gives each application's latest resume and cover letter job state (`running`, `done` or `failed`, never the result), and `?job_link=<link>` narrows it to the one application with that dedupe key. It writes through six more under the same tag, also without a key: `PATCH /viewer/application/{id}` with `{"status": "applied"}` changes only the status, `DELETE /viewer/application/{id}` deletes the application but keeps its files, `POST /viewer/application/{id}/fill` opens the Fill form tab (503 `Herdr unavailable` when Herdr is not running), `POST /viewer/apply-from-link` with `{"link": "<url>"}` opens the link box's tab (same 503, and 422 for anything but an `http` or `https` link of at most 2048 characters with no spaces or user information), and `POST /viewer/application/{id}/resume` and `POST /viewer/application/{id}/cover-letter` start the same jobs as the keyed `POST /resume` and `POST /cover-letter` and answer the same 202. All six answer 403 to a request the browser marks as coming from another site, so other websites can't trigger them. The keyed `PATCH` and `DELETE /application/{id}`, `POST /resume` and `POST /cover-letter` are unchanged and still need the key. A saved letter is looked for under the application's current company and then beside its resume, so one written before a company rename is still found. The scores come from a report `POST /resume` stores with each successful generation. The report keeps where the PDF was saved, but `/application/{id}` shows only its file name. Resumes generated before reports existed show "no report" next to their saved PDF; generating the resume again creates one.
 
 Tests (no network needed):
 
@@ -315,6 +318,21 @@ Tests (no network needed):
 sh scripts/test_smoke_test.sh       # smoke script, stubbed curl
 sh scripts/test_install_service.sh  # install/uninstall/status scripts, stubbed sudo/launchctl
 ```
+
+### Apply from a link
+
+The link box in the viewer takes a job link and goes further than **Fill form**, which needs a recorded application with its resume. It opens a Herdr tab in the same workspace, labelled `ByLink-<host>-<hash>`, and runs `claude --chrome "/apply-from-link <link>"` in the repo. You can also run `/apply-from-link <url>` yourself in Claude Code on the Mac mini. If a tab for the same posting is already open, nothing new starts.
+
+The session is interactive, like Fill form's, and works through these steps:
+
+1. **Checks whether the posting is stored.** A stored `verified` application skips ahead to its missing documents. Any other status stops the run.
+2. **Finds the official posting.** A LinkedIn or aggregator link is resolved through the employer's job board (Ashby, Greenhouse and Lever have public APIs) or careers page, since LinkedIn hides Apply links from the logged-out Chrome window. If nothing matches on both company and role, it asks you for the link.
+3. **Applies the hard filters.** It drops recruiter and staffing posts, contract-only or unpaid roles, explicit refusals of sponsorship, postings with no full description, and pay ranges that top out below your floor. The floor comes from the Hard filters section of your profile document. Silence on pay or sponsorship passes. A dropped posting is not recorded, and the reason appears only in the tab.
+4. **Records the application** with `added_via` `link`, and renames the tab to `<Company>-<Role>-<application id>`, so Fill form finds the session and the form filler can close it.
+5. **Generates the resume**, and a cover letter only if the form has a cover letter field.
+6. **Hands off to `job-application-form-filler`**. Nothing is submitted unless you approve it there.
+
+Tailored Attach may not appear on custom careers pages such as `cursor.com`. If enabling it for the site doesn't help, the session names the files to attach by hand.
 
 ## Running on the Mac mini
 
@@ -414,7 +432,7 @@ On the Mac (the smoke test reads the saved PDF from disk, so it must run there).
 API_KEY=... [OUTPUT_DIR=...] scripts/smoke_test.sh http://127.0.0.1:8080
 ```
 
-First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and for `GET /healthz`, both status endpoints and a keyed `PATCH` and `DELETE /application`, all with the all-zero ID so nothing real can change. It also checks that the local listener (`DOCS_URL`, default `http://127.0.0.1:8081`; required) serves `/docs`, `/viewer` and a schema with the twenty operations. Then it records a synthetic application and starts its resume on the given address, polls `GET /resume/{id}/status` on the local listener until the job is done (failing if it fails or takes over a minute), checks that `saved_path` is the bare file name and that the file in the application's folder under `OUTPUT_DIR` is a PDF, and removes the application (through the local listener) and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first, through the local listener), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
+First it checks that the given address answers 404 for `/docs`, `/openapi.json` and `/viewer`, and for `GET /healthz`, both status endpoints and a keyed `PATCH` and `DELETE /application`, all with the all-zero ID so nothing real can change, and for `POST /viewer/apply-from-link` with an empty body. It also checks that the local listener (`DOCS_URL`, default `http://127.0.0.1:8081`; required) serves `/docs`, `/viewer` and a schema with the twenty-one operations. Then it records a synthetic application and starts its resume on the given address, polls `GET /resume/{id}/status` on the local listener until the job is done (failing if it fails or takes over a minute), checks that `saved_path` is the bare file name and that the file in the application's folder under `OUTPUT_DIR` is a PDF, and removes the application (through the local listener) and its folder again if it created them. The application has no posting text (a leftover one from an older smoke test is cleared first, through the local listener), so the service saves the base resume without a Claude run, and the test fails unless `match.status` is `no_job_description`. It then asks for a cover letter, which must be refused with 422 for the same reason, with no file written. From another device, check that `https://<machine>.<tailnet>.ts.net/health` answers.
 
 Then reboot the Mac without logging in and check that `https://<machine>.<tailnet>.ts.net/health` answers again.
 

@@ -12,12 +12,14 @@ fail=0
 # DELETE, /resume, its status reads and /cover-letter calls are logged to STUB_LOG. STUB_LETTER_FILE makes /cover-letter
 # write a file. The resume job reads `running` for the first STUB_RUNNING polls, then STUB_JOB (default done).
 # On the public address the moved endpoints answer 404 unless STUB_PUBLIC_HEALTHZ, STUB_PUBLIC_MOVED (the all-zero
-# ID probes), STUB_PUBLIC_DELETE (the all-zero DELETE) or STUB_PUBLIC_STATUS (a real ID's status) say otherwise;
+# ID probes), STUB_PUBLIC_DELETE (the all-zero DELETE), STUB_PUBLIC_LINK (the viewer's link POST) or
+# STUB_PUBLIC_STATUS (a real ID's status) say otherwise;
 # those probes are logged as a bare PROBE line.
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
   *"http://x/healthz"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_HEALTHZ:-404}" ;;
+  *"http://x/viewer/apply-from-link"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_LINK:-404}" ;;
   *"-X DELETE http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_DELETE:-404}" ;;
   *"http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_MOVED:-404}" ;;
   *"http://x/resume/"*"/status"*) echo "PUBLICSTATUS" >> "$STUB_LOG"
@@ -52,6 +54,7 @@ fifteen='{"paths":{"/healthz":{"get":{}},"/health":{"get":{}},"/application":{"p
 seventeen="$(printf '%s' "$fifteen" | sed 's/}}$/,"\/viewer\/application\/{application_id}":{"patch":{},"delete":{}}}}/')"
 eighteen="$(printf '%s' "$seventeen" | sed 's/}}$/,"\/viewer\/application\/{application_id}\/fill":{"post":{}}}}/')"
 twenty="$(printf '%s' "$eighteen" | sed 's/}}$/,"\/viewer\/application\/{application_id}\/resume":{"post":{}},"\/viewer\/application\/{application_id}\/cover-letter":{"post":{}}}}/')"
+twentyone="$(printf '%s' "$twenty" | sed 's/}}$/,"\/viewer\/apply-from-link":{"post":{}}}}/')"
 
 # run <app status> <resume status> [file content | "none"]
 # Call with prefixed variables inside ( ): sh keeps VAR=x assignments made before a function call.
@@ -61,7 +64,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$twenty} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$twentyone} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     POLL_SECONDS=0 JOB_TIMEOUT=${JOB_TIMEOUT:-3} sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -93,13 +96,15 @@ run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_SCHEMA="$fifteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "fifteen operations (before the viewer writes) fail" || bad "fifteen operations"
 (STUB_SCHEMA="$seventeen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "seventeen operations (before the fill endpoint) fail" || bad "seventeen operations"
 (STUB_SCHEMA="$eighteen" run 201 202); [ $? -ne 0 ] && ! created_any && ok "eighteen operations (before the viewer generation endpoints) fail" || bad "eighteen operations"
+(STUB_SCHEMA="$twenty" run 201 202); [ $? -ne 0 ] && ! created_any && ok "twenty operations (before the apply-from-link endpoint) fail" || bad "twenty operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 202); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 202); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off run 201 202); [ $? -eq 2 ] && [ ! -s "$tmp/log" ] && ok "DOCS_URL=off is refused before any request" || bad "docs off"
-run 201 202 && [ "$(grep -c '^PROBE' "$tmp/log")" -eq 5 ] && ok "the public address is probed for the five moved endpoints" || bad "probes"
+run 201 202 && [ "$(grep -c '^PROBE' "$tmp/log")" -eq 6 ] && ok "the public address is probed for the six local-only endpoints" || bad "probes"
 (STUB_PUBLIC_HEALTHZ=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public /healthz fails before creating anything" || bad "public healthz"
 (STUB_PUBLIC_MOVED=401 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public status endpoint (401) fails before creating anything" || bad "public status probe"
 (STUB_PUBLIC_DELETE=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public DELETE /application fails before creating anything" || bad "public delete"
+(STUB_PUBLIC_LINK=422 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public apply-from-link POST fails before creating anything" || bad "public link"
 (STUB_PUBLIC_STATUS=200 STUB_STATUS=404 run 201 202); [ $? -ne 0 ] && deleted && ! grep -q PUBLICSTATUS "$tmp/log" && ok "status served only on the public address fails" || bad "status only public"
 run 201 202 && ! patched && ! grep -q "full_job_description" "$tmp/log" && ok "fresh application has no posting text" || bad "fresh posting text"
 run 200 202 && patched && patched_before_resume && ok "leftover application's posting text cleared before the resume" || bad "leftover cleared"

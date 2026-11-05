@@ -62,7 +62,7 @@ def error_text(data):
 
 def test_client_example_accepted():
     row = ApplicationRow.model_validate(VALID_APPLICATION)
-    assert row.model_dump() == VALID_APPLICATION
+    assert row.model_dump() == {**VALID_APPLICATION, "added_via": "manual"}
 
 
 def test_required_only_accepted():
