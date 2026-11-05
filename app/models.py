@@ -1,9 +1,12 @@
+import unicodedata
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
 
 
 ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
+AddedVia = Literal["link", "manual"]
 MatchStatus = Literal["no_job_description", "base_meets_threshold", "tailored"]
 
 # Example bodies shown in the API docs; tests send each one to check it is accepted.
@@ -22,10 +25,11 @@ APPLICATION_EXAMPLE = {
     "official_employer_domain": "acme.com",
 }
 UPDATE_EXAMPLE = {"status": "applied"}
+APPLY_LINK_EXAMPLE = {"link": "https://jobs.ashbyhq.com/acme/3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
 RESUME_EXAMPLE = {"application_id": "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
 
-# Fixed once recorded: job_link is the dedupe key and the rest are its verification record.
-IMMUTABLE_FIELDS = ("job_link", "posting_source_type", "verification_method", "official_apply_url")
+# Fixed once recorded: job_link is the dedupe key, and the rest are its verification record and origin.
+IMMUTABLE_FIELDS = ("job_link", "posting_source_type", "verification_method", "official_apply_url", "added_via")
 
 
 class ApplicationRow(BaseModel):
@@ -39,6 +43,11 @@ class ApplicationRow(BaseModel):
     posting_source_type: Literal["recruiting_platform", "employer_site"]
     verification_method: Literal["official_apply_match", "employer_site"]
     official_apply_url: StrictStr
+    added_via: AddedVia = Field(
+        default="manual",
+        description="How the posting came in: `link` when the apply-from-link workflow recorded it, `manual` "
+        "otherwise. Fixed once recorded, and not changed by a duplicate.",
+    )
     location: StrictStr | None = None
     work_type: StrictStr | None = None
     salary: StrictStr | None = None
@@ -120,6 +129,33 @@ class ViewerStatusUpdate(BaseModel):
     status: ApplicationStatus
 
 
+def is_web_link(value: str) -> bool:
+    """An http(s) URL with a host, no credentials and nothing that could split it into more than one word."""
+    if any(c.isspace() or unicodedata.category(c)[0] == "C" for c in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname
+    except ValueError:
+        return False
+    return parts.scheme.lower() in ("http", "https") and bool(host) and "@" not in parts.netloc
+
+
+class ApplyFromLinkRequest(BaseModel):
+    """The viewer's link box. This value reaches a command line, so nothing but a web link gets through."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [APPLY_LINK_EXAMPLE]})
+
+    link: StrictStr = Field(max_length=2048, description="An `http` or `https` job link, at most 2048 characters.")
+
+    @field_validator("link")
+    @classmethod
+    def _web_link(cls, value: str) -> str:
+        if not is_web_link(value):
+            raise ValueError("must be an http or https URL with a host, no user information and no whitespace")
+        return value
+
+
 class ResumeRequest(BaseModel):
     """The POST /resume body: an application ID, as a JSON string. Everything else comes from the store."""
 
@@ -149,6 +185,7 @@ class StoredApplication(BaseModel):
     verification_method: str
     official_apply_url: str
     status: str
+    added_via: AddedVia = "manual"
     location: str | None = None
     work_type: str | None = None
     salary: str | None = None
@@ -191,6 +228,13 @@ class FillFormStarted(BaseModel):
     tab_label: str = Field(description="The tab's label: `<Company>-<Role>-<application_id>`.")
     already_open: bool = Field(description="True when a tab for this application was already open in the "
                                            "workspace; nothing new was started.")
+
+
+class ApplyFromLinkStarted(BaseModel):
+    ok: Literal[True] = True
+    tab_id: str = Field(description="The Herdr tab running the session.")
+    tab_label: str = Field(description="`ByLink-<host>-<hash>`, until the session renames it with the application ID.")
+    already_open: bool = Field(description="True when a tab for this posting was already open and nothing was started.")
 
 
 class ResumeMatch(BaseModel):
@@ -336,6 +380,7 @@ class ApplicationListItem(BaseModel):
     company: str
     role: str
     status: ApplicationStatus
+    added_via: AddedVia
     created_at: str
     updated_at: str | None
     report: ReportSummary | None = Field(description="The latest generation's summary, or null if none is stored.")

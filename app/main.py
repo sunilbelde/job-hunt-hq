@@ -9,7 +9,7 @@ import time
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Path, Request, Security
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Security
 from fastapi.concurrency import run_in_threadpool
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -29,6 +29,8 @@ from app.models import (
     ApplicationRow,
     ApplicationUpdate,
     ApplicationUpdated,
+    ApplyFromLinkRequest,
+    ApplyFromLinkStarted,
     CoverLetterJobStatus,
     CoverLetterRequest,
     ErrorResponse,
@@ -76,7 +78,8 @@ api_key_header = APIKeyHeader(
 )
 
 # Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
-BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate)
+BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate,
+               ApplyFromLinkRequest)
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
@@ -98,7 +101,8 @@ TAGS = [
                                              "for one, in the background, and poll the job's status."},
     {"name": "viewer", "description": "Read applications, their generation reports, resume and cover letter PDFs, "
                                       "and change an application's status, delete it, open a form-filling session "
-                                      "or generate its resume and cover letter, for the resume viewer at `/viewer`. "
+                                      "or generate its resume and cover letter, or open a session that applies "
+                                      "from a job link, for the resume viewer at `/viewer`. "
                                       "No API key; served only where these docs are."},
 ]
 
@@ -120,6 +124,7 @@ ERROR_DESCRIPTIONS = {
     "422_viewer_letter": "The application has no usable posting text (missing, under 50 words, or over 60,000 "
                          "characters). Add it with `PATCH /application/{application_id}` first.",
     503: "Application store unavailable.",
+    "503_link": "Herdr could not be reached or refused the request (`Herdr unavailable`).",
     "503_herdr": "Application store unavailable, or Herdr could not be reached or refused the request (`Herdr unavailable`).",
 }
 
@@ -247,7 +252,8 @@ def request_event(path: str) -> str | None:
     if path == "/cover-letter" or path.startswith("/cover-letter/"):
         return "cover_letter_request"
     # The viewer's writes log like the keyed ones; the /viewer page itself logs nothing.
-    if path in ("/application", "/applications") or path.startswith(("/application/", "/viewer/application/")):
+    if path in ("/application", "/applications", "/viewer/apply-from-link") or path.startswith(
+            ("/application/", "/viewer/application/")):
         return "application_request"
     return None
 
@@ -825,16 +831,21 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         summary="List applications",
         description=(
             "Every recorded application with its ID, company, role, status and recording times, most recently "
-            "generated first and then most recently recorded. `report` summarises the latest generation (when, "
+            "generated first and then most recently recorded. `added_via` says how each was added: `link` by the "
+            "apply-from-link workflow, `manual` otherwise. `report` summarises the latest generation (when, "
             "how the resume was chosen, the scores), or is null when none is stored. `jobs` gives each kind's latest "
             "job state (`running`, `done` or `failed`, with its times and fixed error) and never its result. No "
-            "posting text."
+            "posting text.\n\n"
+            "With `job_link`, returns only the application whose link has the same dedupe key (see "
+            "`POST /application`), so at most one; a posting not stored gives an empty list."
         ),
         responses={200: {"model": ApplicationList, "description": "The applications."}, **errors(503)},
     )
-    async def list_applications():
+    async def list_applications(
+        job_link: str | None = Query(default=None, description="Return only the application with this posting."),
+    ):
         try:
-            listed = await run_in_threadpool(applications.list_with_reports)
+            listed = await run_in_threadpool(applications.list_with_reports, job_link)
         except ApplicationStoreError as exc:
             return store_unavailable(exc)
         return {"ok": True, "applications": listed}
@@ -885,8 +896,8 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         "local listener on the Mac. A request a browser marks as coming from another site gets 403."
     )
 
-    async def read_status(request: Request) -> tuple[str | None, str | None]:
-        """The status to write, or a 422 message naming what is wrong with the body."""
+    async def read_viewer_body(request: Request) -> tuple[dict | None, str | None]:
+        """The body of a viewer write that takes one, or a 422 message naming what is wrong with it."""
         if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
             return None, "Request body must be sent as application/json"
         try:
@@ -895,6 +906,13 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             return None, "Request body must be valid JSON"
         if not isinstance(payload, dict):
             return None, "Request body must be a JSON object"
+        return payload, None
+
+    async def read_status(request: Request) -> tuple[str | None, str | None]:
+        """The status to write, or a 422 message naming what is wrong with the body."""
+        payload, problem = await read_viewer_body(request)
+        if problem is not None:
+            return None, problem
         try:
             return ViewerStatusUpdate.model_validate(payload).status, None
         except ValidationError as exc:
@@ -959,6 +977,16 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             return application_not_found()
         return {"ok": True, "application_id": target}
 
+    async def read_link(request: Request) -> tuple[str | None, str | None]:
+        """The link to apply from, or a 422 message naming what is wrong with the body."""
+        payload, problem = await read_viewer_body(request)
+        if problem is not None:
+            return None, problem
+        try:
+            return ApplyFromLinkRequest.model_validate(payload).link, None
+        except ValidationError as exc:
+            return None, validation_message(exc)
+
     @app.post(
         "/viewer/application/{application_id}/fill",
         tags=["viewer"],
@@ -995,6 +1023,40 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             logger.error(json.dumps({"event": "herdr_error", "application_id": target, "error": str(exc)}))
             return application_error(503, "Herdr unavailable")
         return {"ok": True, "application_id": target, "tab_id": started.tab_id, "tab_label": started.tab_label,
+                "already_open": started.already_open}
+
+    @app.post(
+        "/viewer/apply-from-link",
+        tags=["viewer"],
+        summary="Open an apply-from-link session for a job link",
+        description=(
+            "Opens a tab in the Herdr workspace `Claude-Jobs-Automation` (`FILL_WORKSPACE`; created if missing), "
+            "labelled `ByLink-<host>-<hash>`, and runs `claude --chrome \"/apply-from-link <link>\"` in the repo "
+            "there. The session checks whether the posting is stored, finds the official posting, applies the hard "
+            "filters, records the application, generates its documents and hands off to the form filler. It is "
+            "interactive: it asks for permissions and answers in that tab, and never submits unless asked there. "
+            "This endpoint stores nothing itself, and a posting the session drops is reported only in its tab. If a "
+            "tab for the same posting (the same dedupe key) is already open, nothing is started and `already_open` "
+            "is true. " + viewer_writes
+        ),
+        responses={
+            200: {"model": ApplyFromLinkStarted, "description": "The tab was opened, or one was already open."},
+            **errors(403, 422, "503_link"),
+        },
+        openapi_extra=json_body(ApplyFromLinkRequest, "The job link."),
+    )
+    async def viewer_apply_from_link(request: Request):
+        if not same_origin(request):
+            return application_error(403, "Cross-site request refused")
+        link, problem = await read_link(request)
+        if problem is not None:
+            return application_error(422, problem)
+        try:
+            started = await run_in_threadpool(form_filler.start_link, link)
+        except HerdrUnavailable as exc:
+            logger.error(json.dumps({"event": "herdr_error", "error": str(exc)}))
+            return application_error(503, "Herdr unavailable")
+        return {"ok": True, "tab_id": started.tab_id, "tab_label": started.tab_label,
                 "already_open": started.already_open}
 
     async def viewer_generate(request: Request, application_id: str, kind: str):

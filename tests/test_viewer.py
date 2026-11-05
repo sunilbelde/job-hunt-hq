@@ -137,7 +137,7 @@ def test_list_orders_by_generation_and_summarises_reports(viewer, settings, monk
 def test_list_store_unavailable(settings, storage, monkeypatch):
     client = TestClient(create_app(settings.model_copy(update={"api_docs_enabled": True}), storage))
 
-    def broken(self):
+    def broken(self, job_link=None):
         raise ApplicationStoreError("OperationalError: unable to open database file")
 
     monkeypatch.setattr(ApplicationStore, "list_with_reports", broken)
@@ -430,7 +430,7 @@ def delete(client, application_id, headers=SAME_ORIGIN):
 
 @pytest.mark.parametrize("path, expected", [
     ("/viewer/application/abc", "application_request"), ("/viewer", None), ("/viewer/", None),
-    ("/application/abc", "application_request"),
+    ("/application/abc", "application_request"), ("/viewer/apply-from-link", "application_request"),
 ])
 def test_viewer_writes_logged_as_application_requests(path, expected):
     from app.main import request_event
@@ -765,7 +765,7 @@ def test_page_generates_and_regenerates(viewer):
 def test_page_polls_while_a_job_runs(viewer):
     html = viewer.get("/viewer").text
     assert "const POLL_MS = 5000;" in html
-    assert 'if (pollTimer === null && anyRunning()) pollTimer = setTimeout(poll, POLL_MS);' in html
+    assert 'if (pollTimer === null && (anyRunning() || Date.now() < linkWatchUntil)) pollTimer = setTimeout(poll, POLL_MS);' in html
     poll = html[html.index("async function poll() {"):html.index("function finished(")]
     assert 'api("/applications")' in poll and "epoch !== listEpoch" in poll and "finished(item, kind, now)" in poll
     done = html[html.index("function finished("):html.index("// --- the action bar ---")]
@@ -812,6 +812,12 @@ class FakeLauncher:
         if self.error:
             raise self.error
         return FillStarted("wK:t9", f"{company}-{role}-{application_id}", "wK", self.already_open)
+
+    def start_link(self, link):
+        self.calls.append(link)
+        if self.error:
+            raise self.error
+        return FillStarted("wK:t9", "ByLink-jobs.ashbyhq.com-abc", "wK", self.already_open)
 
 
 def fill_client(settings, launcher):
@@ -1069,3 +1075,141 @@ def test_list_jobs_carry_no_results(viewer, monkeypatch):
     assert set(jobs["resume"]) == set(jobs["cover_letter"]) == {"status", "started_at", "finished_at", "error"}
     for text in (RESUME_FILE_NAME, COVER_LETTER_FILE_NAME, "Dear Acme", "saved_path", '"match"', '"text"'):
         assert text not in r.text, text
+
+
+# --- how an application was added, and the stored link lookup ---
+
+def test_list_and_detail_carry_the_origin(viewer):
+    by_link, manual = record(viewer, 1, added_via="link"), record(viewer, 2)
+    listed = {item["id"]: item["added_via"] for item in viewer.get("/applications").json()["applications"]}
+    assert listed == {by_link: "link", manual: "manual"}
+    assert viewer.get(f"/application/{by_link}").json()["application"]["added_via"] == "link"
+
+
+def test_list_filtered_by_link(viewer):
+    wanted, _ = record(viewer, 1), record(viewer, 2)
+    for link in (f"{GH_LINK}1", f"{GH_LINK}1/?utm_source=x#apply"):
+        (item,) = viewer.get("/applications", params={"job_link": link}).json()["applications"]
+        assert item["id"] == wanted
+    assert len(viewer.get("/applications").json()["applications"]) == 2
+
+
+@pytest.mark.parametrize("link", ["https://example.com/not-stored", ""])
+def test_link_filter_without_a_match_is_an_empty_list(viewer, link):
+    record(viewer)
+    r = viewer.get("/applications", params={"job_link": link})
+    assert r.status_code == 200 and r.json() == {"ok": True, "applications": []}
+
+
+def test_link_lookup_not_logged(viewer, caplog):
+    with caplog.at_level(logging.INFO, logger="app"):
+        viewer.get("/applications", params={"job_link": "https://example.com/secret-looking"})
+    assert caplog.records and "secret-looking" not in caplog.text
+
+
+# --- apply from a link ---
+
+ASHBY = "https://jobs.ashbyhq.com/acme/1"
+
+
+def apply_from_link(client, body=None, headers=SAME_ORIGIN):
+    return client.post("/viewer/apply-from-link", json={"link": ASHBY} if body is None else body, headers=headers)
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}, SAME_ORIGIN])
+def test_apply_from_link_opens_a_tab_without_a_key(settings, headers):
+    launcher = FakeLauncher()
+    r = apply_from_link(fill_client(settings, launcher), headers=headers)
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "tab_id": "wK:t9", "tab_label": "ByLink-jobs.ashbyhq.com-abc", "already_open": False}
+    assert launcher.calls == [ASHBY]
+
+
+def test_apply_from_link_stores_nothing(settings):
+    client = fill_client(settings, FakeLauncher())
+    apply_from_link(client)
+    assert client.get("/applications").json()["applications"] == []
+
+
+def test_apply_from_link_already_open(settings):
+    assert apply_from_link(fill_client(settings, FakeLauncher(already_open=True))).json()["already_open"] is True
+
+
+@pytest.mark.parametrize("link", [
+    "file:///etc/passwd", "javascript:alert(1)", "not a url", "ftp://example.com/job", "https://", "https:///path",
+    "https://example.com/a b", "https://example.com/a\nb", "https://example.com/a\tb", "https://example.com/\x7f",
+    "https://example.com/a\u00a0b", "https://user:pw@example.com/job", "https://[bad/job", " https://example.com/job",
+    "https://example.com/" + "a" * 2048, "", None, 1, ["https://example.com/job"],
+])
+def test_apply_from_link_refuses_anything_but_a_web_link(settings, link):
+    launcher = FakeLauncher()
+    r = apply_from_link(fill_client(settings, launcher), {"link": link})
+    assert r.status_code == 422 and r.json()["ok"] is False
+    assert "link" in r.json()["message"] and launcher.calls == []
+    if isinstance(link, str) and link:
+        assert link not in r.text
+
+
+@pytest.mark.parametrize("body, content_type", [
+    ("not json", "application/json"), ("[]", "application/json"), ("null", "application/json"),
+    ('{"other": 1}', "application/json"), ('{"link": "https://example.com/job"}', "text/plain"),
+])
+def test_apply_from_link_bad_body(settings, body, content_type):
+    launcher = FakeLauncher()
+    r = fill_client(settings, launcher).post("/viewer/apply-from-link", content=body,
+                                             headers={**SAME_ORIGIN, "Content-Type": content_type})
+    assert r.status_code == 422 and launcher.calls == []
+
+
+def test_longest_allowed_link_accepted(settings):
+    launcher = FakeLauncher()
+    link = "https://example.com/" + "a" * (2048 - len("https://example.com/"))
+    assert apply_from_link(fill_client(settings, launcher), {"link": link}).status_code == 200
+
+
+def test_apply_from_link_herdr_unavailable(settings, caplog):
+    client = fill_client(settings, FakeLauncher(error=HerdrUnavailable("herdr tab create exited 1")))
+    with caplog.at_level(logging.INFO, logger="app"):
+        assert_error(apply_from_link(client), 503, "Herdr unavailable")
+    assert "herdr_error" in caplog.text and ASHBY not in caplog.text
+
+
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "cross-site"}, {"Origin": "https://evil.example"}])
+def test_apply_from_link_refuses_cross_site_before_the_body(settings, headers):
+    launcher = FakeLauncher()
+    client = fill_client(settings, launcher)
+    r = client.post("/viewer/apply-from-link", content="not json", headers={**headers, "Content-Type": "application/json"})
+    assert_error(r, 403, "Cross-site request refused")
+    assert launcher.calls == []
+
+
+@pytest.mark.parametrize("headers", [{}, HEADERS])
+def test_apply_from_link_not_served_without_docs(settings, storage, headers):
+    launcher = FakeLauncher()
+    public = TestClient(create_app(settings, storage, form_filler=launcher))
+    r = apply_from_link(public, headers={**headers, **SAME_ORIGIN})
+    assert (r.status_code, r.json()) == (404, public.get("/no-such-path").json())
+    assert launcher.calls == []
+
+
+def test_apply_from_link_logged_without_the_link(settings, caplog):
+    client = fill_client(settings, FakeLauncher())
+    with caplog.at_level(logging.INFO, logger="app"):
+        apply_from_link(client)
+    (line,) = request_lines(caplog)
+    assert line["event"] == "application_request" and line["method"] == "POST" and line["status"] == 200
+    assert ASHBY not in caplog.text
+
+
+def test_page_has_the_link_box_and_origin_tag(viewer):
+    html = viewer.get("/viewer").text
+    assert 'id="link-input"' in html and ">Apply from link</button>" in html
+    assert '"/viewer/apply-from-link", false, { method: "POST", body: { link } }' in html
+    assert '"Opened Herdr tab "' in html and '"Already open in Herdr tab "' in html and '"Not opened: "' in html
+    assert 'link: "ByLink", manual: "Manual"' in html and "ADDED_VIA[item.added_via]" in html
+
+
+def test_page_keeps_reading_the_list_after_a_link_starts(viewer):
+    html = viewer.get("/viewer").text
+    assert "LINK_WATCH_MS = 15 * 60 * 1000" in html
+    assert "anyRunning() || Date.now() < linkWatchUntil" in html

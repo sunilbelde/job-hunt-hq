@@ -33,6 +33,7 @@ VIEWER_WRITES = [
     ("post", "/viewer/application/{application_id}/fill"),
     ("post", "/viewer/application/{application_id}/resume"),
     ("post", "/viewer/application/{application_id}/cover-letter"),
+    ("post", "/viewer/apply-from-link"),
 ]
 HEALTH = [("get", "/health"), ("get", "/healthz")]
 RESPONSES = {
@@ -56,6 +57,7 @@ RESPONSES = {
     ("post", "/viewer/application/{application_id}/fill"): {"200", "403", "404", "503"},
     ("post", "/viewer/application/{application_id}/resume"): {"202", "403", "404", "503"},
     ("post", "/viewer/application/{application_id}/cover-letter"): {"202", "403", "404", "422", "503"},
+    ("post", "/viewer/apply-from-link"): {"200", "403", "422", "503"},
 }
 PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/application/{application_id}/cover-letter.pdf"),
                   ("get", "/resume/base.pdf"), ("get", "/cover-letter/base.pdf")]
@@ -104,8 +106,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_twenty_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 20
+def test_documents_exactly_the_twenty_one_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 21
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -206,6 +208,38 @@ def test_viewer_writes_described(schema, key):
 
 def test_viewer_delete_says_files_are_kept(schema):
     assert "files are kept" in operations(schema)[("delete", "/viewer/application/{application_id}")]["description"]
+
+
+def test_viewer_apply_from_link_described(schema):
+    op = operations(schema)[("post", "/viewer/apply-from-link")]
+    assert "Claude-Jobs-Automation" in op["description"] and "ByLink-<host>-<hash>" in op["description"]
+    assert "/apply-from-link <link>" in op["description"]
+    assert "never submits" in op["description"] and "already_open" in op["description"]
+    assert "Herdr unavailable" in op["responses"]["503"]["description"]
+    assert "Application store" not in op["responses"]["503"]["description"]
+
+
+def test_viewer_apply_from_link_body(schema):
+    body = component(schema, operations(schema)[("post", "/viewer/apply-from-link")])
+    assert body["required"] == ["link"] and body["properties"]["link"]["type"] == "string"
+    assert "2048" in body["properties"]["link"]["description"] and "http" in body["properties"]["link"]["description"]
+
+
+def test_application_origin_documented(schema):
+    ops = operations(schema)
+    field = component(schema, ops[("post", "/application")])["properties"]["added_via"]
+    assert field["enum"] == ["link", "manual"] and field["default"] == "manual"
+    assert "added_via" not in component(schema, ops[("post", "/application")])["required"]
+    assert "added_via" not in component(schema, ops[("patch", "/application/{application_id}")])["properties"]
+    assert "added_via" in schema["components"]["schemas"]["ApplicationListItem"]["properties"]
+    assert "added_via" in schema["components"]["schemas"]["ApplicationRecord"]["properties"]
+
+
+def test_link_filter_documented(schema):
+    op = operations(schema)[("get", "/applications")]
+    (param,) = op["parameters"]
+    assert param["name"] == "job_link" and param["in"] == "query" and param["required"] is False
+    assert "same dedupe key" in op["description"] and "empty list" in op["description"]
 
 
 def test_viewer_fill_described(schema):
@@ -348,7 +382,7 @@ def test_resume_description_states_duration_and_choices(schema):
 def test_path_ids_stay_plain_strings(schema):
     # A typed UUID would let FastAPI answer a malformed ID with its own 422 instead of 404.
     for key in [("patch", "/application/{application_id}"), ("delete", "/application/{application_id}"),
-                *VIEWER_WRITES]:
+                *[key for key in VIEWER_WRITES if "{application_id}" in key[1]]]:
         (param,) = operations(schema)[key]["parameters"]
         assert param["schema"]["type"] == "string" and "format" not in param["schema"]
 

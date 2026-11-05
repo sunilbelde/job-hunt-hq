@@ -106,6 +106,14 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 #load-error .error { color: var(--bad); margin: 0; }
 #app { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 45px); }
 #side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+#link-box { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border-bottom: 1px solid var(--line); }
+#link-box input { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: inherit; }
+#link-box button { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: inherit; cursor: pointer; }
+#link-box button:disabled { opacity: 0.6; cursor: default; }
+#link-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#link-note.failed { color: var(--bad); }
 #filters { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
 #filters input, #filters select, .actions select { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line);
   border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; }
@@ -139,6 +147,8 @@ button.link:hover { text-decoration: underline; }
 .pill.s-interviewing { color: var(--warn); }
 .pill.s-offer { color: var(--good); }
 .pill.s-rejected { color: var(--bad); }
+.pill.origin { color: var(--muted); border-style: dashed; }
+.pill.origin.o-link { color: var(--accent); }
 .running { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); }
 .dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
@@ -228,6 +238,11 @@ button.danger:disabled { opacity: .6; cursor: default; }
 
 <div id="app" class="hidden">
   <aside id="side">
+    <form id="link-box" aria-label="Apply from a job link">
+      <input id="link-input" type="text" inputmode="url" autocomplete="off" placeholder="Job link" aria-label="Job link">
+      <button id="link-go" type="submit">Apply from link</button>
+      <p id="link-note" class="hidden" role="status"></p>
+    </form>
     <div id="filters" role="search" aria-label="Filter applications">
       <input id="filter-search" type="search" placeholder="Search company or role" aria-label="Search company or role" autocomplete="off">
       <div class="filter-row">
@@ -272,6 +287,9 @@ button.danger:disabled { opacity: .6; cursor: default; }
     cover_letter: { label: "cover letter", title: "Cover letter", short: "Letter", path: "cover-letter" },
   };
   const POLL_MS = 5000;        // how often the list is re-read while a job runs
+  const LINK_WATCH_MS = 15 * 60 * 1000;  // how long after a link is started the list keeps being re-read
+  const ADDED_VIA = { link: "ByLink", manual: "Manual" };
+  let linkWatchUntil = 0;      // until then a link session may still record its application
   const starting = new Set();  // "<id>:<kind>" with a generation request in flight
   const known = {};            // application ID → { resume, cover_letter }: generated PDFs this page has loaded
   let bar = null;              // the selected application's action bar
@@ -419,6 +437,8 @@ button.danger:disabled { opacity: .6; cursor: default; }
       el("span", { class: "role" }, item.role),
       el("span", { class: "meta" },
         el("span", { class: "pill s-" + item.status }, item.status),
+        el("span", { class: "pill origin o-" + item.added_via, title: "How this posting was added" },
+          ADDED_VIA[item.added_via]),
         statusBadge(item.report),
         runningNote(item),
         el("span", { class: "date", title: "Recorded " + when(item.created_at) }, shortDay(item.created_at)),
@@ -460,9 +480,9 @@ button.danger:disabled { opacity: .6; cursor: default; }
     return applications.some((item) => KINDS.some((kind) => isRunning(item.jobs && item.jobs[kind])));
   }
 
-  // One timer at a time, and only while some job runs.
+  // One timer at a time, and only while some job runs or a link session may still record its application.
   function schedulePoll() {
-    if (pollTimer === null && anyRunning()) pollTimer = setTimeout(poll, POLL_MS);
+    if (pollTimer === null && (anyRunning() || Date.now() < linkWatchUntil)) pollTimer = setTimeout(poll, POLL_MS);
   }
 
   async function poll() {
@@ -623,6 +643,33 @@ button.danger:disabled { opacity: .6; cursor: default; }
     } finally {
       busy.delete(app.id);
       renderActions();
+    }
+  }
+
+  function linkNote(text, failed) {
+    $("link-note").textContent = text;
+    $("link-note").classList.toggle("failed", failed);
+    $("link-note").classList.remove("hidden");
+  }
+
+  // Opens a Herdr tab running Claude Code with the apply-from-link skill. The session records the application,
+  // so the list is re-read for a while afterwards; a posting the session drops is reported only in its tab.
+  async function applyFromLink(event) {
+    event.preventDefault();
+    const link = $("link-input").value.trim();
+    if (!link || $("link-go").disabled) return;
+    $("link-go").disabled = true;
+    linkNote("Opening…", false);
+    try {
+      const body = await api("/viewer/apply-from-link", false, { method: "POST", body: { link } });
+      linkNote((body.already_open ? "Already open in Herdr tab " : "Opened Herdr tab ") + body.tab_label, false);
+      $("link-input").value = "";
+      linkWatchUntil = Date.now() + LINK_WATCH_MS;
+      schedulePoll();
+    } catch (error) {
+      linkNote("Not opened: " + error.message, true);
+    } finally {
+      $("link-go").disabled = false;
     }
   }
 
@@ -961,6 +1008,7 @@ button.danger:disabled { opacity: .6; cursor: default; }
   }
 
   $("retry").addEventListener("click", start);
+  $("link-box").addEventListener("submit", applyFromLink);
 
   $("list").addEventListener("click", (event) => {
     if (event.target.closest("button.clear-filters")) return clearFilters();

@@ -27,9 +27,11 @@ UPDATABLE_FIELDS = frozenset({
     "why_it_fits", "company_careers_url", "official_employer_domain", "full_job_description",
 })
 DEFAULT_STATUS = "verified"
+# How a row got here, fixed once recorded: anything not recorded by the apply-from-link workflow is manual.
+DEFAULT_ADDED_VIA = "manual"
 
 # Every column but the ID, in table order: what the integer-ID migration copies across.
-COPIED_COLUMNS = ("job_link_key", "job_link", *FIELDS, "created_at", "status", "updated_at")
+COPIED_COLUMNS = ("job_link_key", "job_link", *FIELDS, "created_at", "status", "updated_at", "added_via")
 
 
 def _schema(table: str) -> str:
@@ -41,7 +43,8 @@ CREATE TABLE IF NOT EXISTS {table} (
     {", ".join(f"{name} TEXT" for name in FIELDS)},
     created_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT '{DEFAULT_STATUS}',
-    updated_at TEXT
+    updated_at TEXT,
+    added_via TEXT NOT NULL DEFAULT '{DEFAULT_ADDED_VIA}'
 )
 """
 
@@ -89,16 +92,17 @@ NO_JOB = "no_job"
 
 # What the application list carries from each report: scores and status, never posting text.
 REPORT_SUMMARY = ("status", "threshold", "base_score", "tailored_score")
-LIST_COLUMNS = ("id", "company", "role", "status", "created_at", "updated_at")
+LIST_COLUMNS = ("id", "company", "role", "status", "added_via", "created_at", "updated_at")
 # What the application list carries from each job: its state, never its result or saved path.
 JOB_SUMMARY = ("status", "started_at", "finished_at", "error")
 
-# Stores created before statuses existed get the columns added in place; SQLite fills existing
-# rows with the default, so they all read as verified.
-MIGRATION = (
-    f"ALTER TABLE applications ADD COLUMN status TEXT NOT NULL DEFAULT '{DEFAULT_STATUS}'",
-    "ALTER TABLE applications ADD COLUMN updated_at TEXT",
-)
+# Stores created before these columns existed get them added in place; SQLite fills existing rows
+# with the default, so they all read as verified and manual.
+MIGRATION = {
+    "status": f"ALTER TABLE applications ADD COLUMN status TEXT NOT NULL DEFAULT '{DEFAULT_STATUS}'",
+    "updated_at": "ALTER TABLE applications ADD COLUMN updated_at TEXT",
+    "added_via": f"ALTER TABLE applications ADD COLUMN added_via TEXT NOT NULL DEFAULT '{DEFAULT_ADDED_VIA}'",
+}
 
 
 class ApplicationStoreError(Exception):
@@ -109,8 +113,9 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _has_status(conn: sqlite3.Connection) -> bool:
-    return any(column[1] == "status" for column in conn.execute("PRAGMA table_info(applications)"))
+def _missing_columns(conn: sqlite3.Connection) -> list[str]:
+    present = {column[1] for column in conn.execute("PRAGMA table_info(applications)")}
+    return [name for name in MIGRATION if name not in present]
 
 
 def _has_integer_ids(conn: sqlite3.Connection) -> bool:
@@ -180,14 +185,13 @@ class ApplicationStore:
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
-        if _has_status(conn):
+        if not _missing_columns(conn):
             return
         conn.execute("BEGIN IMMEDIATE")
         try:
             # Re-check under the write lock: another instance may have migrated meanwhile.
-            if not _has_status(conn):
-                for statement in MIGRATION:
-                    conn.execute(statement)
+            for name in _missing_columns(conn):
+                conn.execute(MIGRATION[name])
             conn.commit()
         except BaseException:
             conn.rollback()
@@ -250,8 +254,9 @@ class ApplicationStore:
         job_link = fields["job_link"]
         key = dedupe_key(job_link)
         created_at = utc_now()
-        columns = ("id", "job_link_key", "job_link", *FIELDS, "created_at")
-        values = (str(uuid.uuid4()), key, job_link, *(fields.get(name) for name in FIELDS), created_at)
+        columns = ("id", "job_link_key", "job_link", *FIELDS, "created_at", "added_via")
+        values = (str(uuid.uuid4()), key, job_link, *(fields.get(name) for name in FIELDS), created_at,
+                  fields.get("added_via", DEFAULT_ADDED_VIA))
         try:
             with closing(self._connect()) as conn, conn:
                 cursor = conn.execute(
@@ -307,7 +312,7 @@ class ApplicationStore:
 
     def get(self, application_id: str) -> dict | None:
         """The stored row as a dict (without its dedupe key), or None if absent."""
-        columns = ("id", "job_link", *FIELDS, "status", "created_at", "updated_at")
+        columns = ("id", "job_link", *FIELDS, "status", "added_via", "created_at", "updated_at")
         try:
             with closing(self._connect()) as conn:
                 row = conn.execute(
@@ -356,9 +361,11 @@ class ApplicationStore:
         generated_at, saved_path, report = row
         return {**json.loads(report), "generated_at": generated_at, "saved_path": saved_path}
 
-    def list_with_reports(self) -> list[dict]:
+    def list_with_reports(self, job_link: str | None = None) -> list[dict]:
         """Every application without its posting text, most recently generated first, then most recently
-        recorded; each with a summary of its report, or report None, and each kind's job state, or None."""
+        recorded; each with a summary of its report, or report None, and each kind's job state, or None.
+        With job_link, only the application whose link has the same dedupe key."""
+        where, parameters = ("WHERE a.job_link_key = ? ", (dedupe_key(job_link),)) if job_link is not None else ("", ())
         columns = ", ".join(f"a.{name}" for name in LIST_COLUMNS)
         try:
             with closing(self._connect()) as conn:
@@ -368,7 +375,8 @@ class ApplicationStore:
                     "LEFT JOIN resume_reports r ON r.application_id = a.id "
                     "LEFT JOIN generation_jobs jr ON jr.application_id = a.id AND jr.kind = 'resume' "
                     "LEFT JOIN generation_jobs jc ON jc.application_id = a.id AND jc.kind = 'cover_letter' "
-                    "ORDER BY r.generated_at IS NULL, r.generated_at DESC, a.created_at DESC"
+                    f"{where}ORDER BY r.generated_at IS NULL, r.generated_at DESC, a.created_at DESC",
+                    parameters,
                 ).fetchall()
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
