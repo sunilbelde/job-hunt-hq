@@ -156,6 +156,17 @@ def test_fields_stored_as_sent(store, db_path):
     assert saved["created_at"].endswith("Z")
 
 
+def test_easy_apply_row_round_trips_and_lists_its_source(store):
+    link = "https://www.linkedin.com/jobs/view/4012345678/"
+    application_id, _ = store.record(row(link, posting_source_type="linkedin_easy_apply",
+                                         verification_method="owner_confirmed", official_apply_url="", added_via="link"))
+    saved = store.get(application_id)
+    assert (saved["posting_source_type"], saved["verification_method"]) == ("linkedin_easy_apply", "owner_confirmed")
+    assert saved["official_apply_url"] == "" and saved["added_via"] == "link"
+    (listed,) = store.list_with_reports()
+    assert listed["posting_source_type"] == "linkedin_easy_apply"
+
+
 def test_file_private(store, db_path):
     assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
 
@@ -602,8 +613,8 @@ def test_list_orders_by_generation_then_recording(store, db_path):
     assert listed[0]["report"] == {"generated_at": "2026-10-20T10:00:00Z", "status": "tailored", "threshold": 70,
                                    "base_score": 57, "tailored_score": 81}
     assert listed[2]["report"] is None
-    assert set(listed[2]) == {"id", "company", "role", "status", "added_via", "created_at", "updated_at", "report",
-                              "jobs"}
+    assert set(listed[2]) == {"id", "company", "role", "status", "added_via", "posting_source_type", "created_at",
+                              "updated_at", "report", "jobs"}
     assert listed[2]["jobs"] == {"resume": None, "cover_letter": None}
     assert "secret posting" not in repr(listed)
 

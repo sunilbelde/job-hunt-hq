@@ -177,8 +177,10 @@ def test_application_body_schema(schema):
     assert set(body["required"]) == {
         "company", "role", "job_link", "posting_source_type", "verification_method", "official_apply_url",
     }
-    assert body["properties"]["posting_source_type"]["enum"] == ["recruiting_platform", "employer_site"]
-    assert body["properties"]["verification_method"]["enum"] == ["official_apply_match", "employer_site"]
+    assert body["properties"]["posting_source_type"]["enum"] == ["recruiting_platform", "employer_site",
+                                                                "linkedin_easy_apply"]
+    assert body["properties"]["verification_method"]["enum"] == ["official_apply_match", "employer_site",
+                                                                "owner_confirmed"]
 
 
 def test_update_body_schema(schema):
@@ -233,6 +235,17 @@ def test_application_origin_documented(schema):
     assert "added_via" not in component(schema, ops[("patch", "/application/{application_id}")])["properties"]
     assert "added_via" in schema["components"]["schemas"]["ApplicationListItem"]["properties"]
     assert "added_via" in schema["components"]["schemas"]["ApplicationRecord"]["properties"]
+
+
+def test_easy_apply_documented(schema):
+    ops = operations(schema)
+    described = " ".join(ops[("post", "/application")]["description"].split())
+    assert ("`linkedin_easy_apply`, for a LinkedIn Easy Apply posting with no official posting, requires "
+            "`verification_method` `owner_confirmed` and an empty `official_apply_url`") in described
+    assert "posting_source_type" in schema["components"]["schemas"]["ApplicationListItem"]["properties"]
+    assert "posting_source_type" in schema["components"]["schemas"]["ApplicationListItem"]["required"]
+    updatable = component(schema, ops[("patch", "/application/{application_id}")])["properties"]
+    assert not {"posting_source_type", "verification_method"} & set(updatable)
 
 
 def test_link_filter_documented(schema):

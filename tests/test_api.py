@@ -111,6 +111,40 @@ def test_application_field_rules_422(client, settings, change, field):
     assert stored_rows(settings) == []
 
 
+EASY_APPLY = {
+    "job_link": "https://www.linkedin.com/jobs/view/4012345678/", "posting_source_type": "linkedin_easy_apply",
+    "verification_method": "owner_confirmed", "official_apply_url": "",
+}
+
+
+def test_easy_apply_accepted(client, settings):
+    r = post_application(client, {**VALID_APPLICATION, **EASY_APPLY})
+    assert r.status_code == 201
+    assert len(stored_rows(settings)) == 1
+
+
+@pytest.mark.parametrize("change,field", [
+    ({"official_apply_url": EASY_APPLY["job_link"]}, "official_apply_url"),
+    ({"verification_method": "official_apply_match"}, "verification_method"),
+    ({"verification_method": "employer_site"}, "verification_method"),
+    ({"posting_source_type": "recruiting_platform"}, "verification_method"),
+    ({"posting_source_type": "employer_site"}, "verification_method"),
+    ({"verification_method": "Owner_Confirmed"}, "verification_method"),
+])
+def test_easy_apply_pairing_422(client, settings, change, field):
+    message = assert_error(post_application(client, {**VALID_APPLICATION, **EASY_APPLY, **change}), 422)
+    assert field in message
+    assert stored_rows(settings) == []
+
+
+@pytest.mark.parametrize("field", ["posting_source_type", "verification_method"])
+def test_easy_apply_fields_cannot_be_patched(client, settings, field):
+    application_id = post_application(client, {**VALID_APPLICATION, **EASY_APPLY}).json()["application_id"]
+    r = client.patch(f"/application/{application_id}", json={field: "recruiting_platform"},
+                     headers={"X-API-Key": API_KEY})
+    assert field in assert_error(r, 422)
+
+
 def test_application_missing_job_link_422(client):
     body = {k: v for k, v in VALID_APPLICATION.items() if k != "job_link"}
     assert "job_link" in assert_error(post_application(client, body), 422)
