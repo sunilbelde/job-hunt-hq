@@ -92,7 +92,7 @@ NO_JOB = "no_job"
 
 # What the application list carries from each report: scores and status, never posting text.
 REPORT_SUMMARY = ("status", "threshold", "base_score", "tailored_score")
-LIST_COLUMNS = ("id", "company", "role", "status", "added_via", "created_at", "updated_at")
+LIST_COLUMNS = ("id", "company", "role", "status", "added_via", "posting_source_type", "created_at", "updated_at")
 # What the application list carries from each job: its state, never its result or saved path.
 JOB_SUMMARY = ("status", "started_at", "finished_at", "error")
 

@@ -149,6 +149,7 @@ button.link:hover { text-decoration: underline; }
 .pill.s-rejected { color: var(--bad); }
 .pill.origin { color: var(--muted); border-style: dashed; }
 .pill.origin.o-link { color: var(--accent); }
+.pill.easy-apply { color: var(--accent); }
 .running { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); }
 .dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
@@ -289,6 +290,7 @@ button.danger:disabled { opacity: .6; cursor: default; }
   const POLL_MS = 5000;        // how often the list is re-read while a job runs
   const LINK_WATCH_MS = 15 * 60 * 1000;  // how long after a link is started the list keeps being re-read
   const ADDED_VIA = { link: "ByLink", manual: "Manual" };
+  const EASY_APPLY = "linkedin_easy_apply";  // no form to fill: the owner applies on LinkedIn
   let linkWatchUntil = 0;      // until then a link session may still record its application
   const starting = new Set();  // "<id>:<kind>" with a generation request in flight
   const known = {};            // application ID → { resume, cover_letter }: generated PDFs this page has loaded
@@ -439,6 +441,9 @@ button.danger:disabled { opacity: .6; cursor: default; }
         el("span", { class: "pill s-" + item.status }, item.status),
         el("span", { class: "pill origin o-" + item.added_via, title: "How this posting was added" },
           ADDED_VIA[item.added_via]),
+        item.posting_source_type === EASY_APPLY
+          ? el("span", { class: "pill easy-apply", title: "No official posting: apply on LinkedIn yourself" }, "Easy Apply")
+          : null,
         statusBadge(item.report),
         runningNote(item),
         el("span", { class: "date", title: "Recorded " + when(item.created_at) }, shortDay(item.created_at)),
@@ -543,6 +548,7 @@ button.danger:disabled { opacity: .6; cursor: default; }
     const fill = el("button", { type: "button", class: "action",
       title: "Open a Claude Code tab in Herdr that fills this application's form" }, "Fill form");
     fill.addEventListener("click", () => fillForm(app));
+    fill.classList.toggle("hidden", app.posting_source_type === EASY_APPLY);
     const del = el("button", { type: "button", class: "danger" }, "Delete");
     del.addEventListener("click", () => deleteApplication(app));
     const note = el("p", { class: "action-note", role: "status", "aria-live": "polite" });

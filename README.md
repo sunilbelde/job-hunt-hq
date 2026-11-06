@@ -34,16 +34,17 @@ Strings only, extra fields ignored, and a 422 message names fields but never val
 | Field | Required |
 |---|---|
 | `company`, `role`, `job_link` | yes (non-empty) |
-| `posting_source_type` | yes: `recruiting_platform` or `employer_site` |
-| `verification_method` | yes: `official_apply_match` or `employer_site` |
+| `posting_source_type` | yes: `recruiting_platform`, `employer_site` or `linkedin_easy_apply` |
+| `verification_method` | yes: `official_apply_match`, `employer_site` or `owner_confirmed` |
 | `official_apply_url` | yes (may be `""`) |
 | `location`, `work_type`, `salary`, `date_posted`, `sponsorship`, `why_it_fits`, `company_careers_url`, `official_employer_domain`, `full_job_description` | no |
 | `added_via` | no: `link` when the apply-from-link workflow records the posting, otherwise `manual` (the default). Fixed once recorded |
 
-Only two combinations are verified, and anything else is a 422:
+Only three combinations are accepted, and anything else is a 422:
 
 - `recruiting_platform` + `official_apply_match`, with `official_apply_url` equal to `job_link` byte-for-byte
 - `employer_site` + `employer_site`, with `official_apply_url` set to `""`
+- `linkedin_easy_apply` + `owner_confirmed`, with `official_apply_url` set to `""`, for a LinkedIn Easy Apply posting with no official posting. The owner vouches for it rather than a link check
 
 **Dedupe.** A posting counts as already stored when its `job_link` matches after normalization:
 - the scheme and host are lowercased
@@ -331,6 +332,8 @@ The session is interactive, like Fill form's, and works through these steps:
 4. **Records the application** with `added_via` `link`, and renames the tab to `<Company>-<Role>-<application id>`, so Fill form finds the session and the form filler can close it.
 5. **Generates the resume**, and a cover letter only if the form has a cover letter field.
 6. **Hands off to `job-application-form-filler`**. Nothing is submitted unless you approve it there.
+
+**LinkedIn Easy Apply.** When a LinkedIn posting has no official posting, the question at step 2 also offers **It's LinkedIn Easy Apply**. Chrome is logged out of LinkedIn, so your answer is the only signal. Easy Apply stands in for the "official careers page only" filter, and every other filter still applies. The row is recorded as `linkedin_easy_apply` under the LinkedIn link, and the viewer shows an **Easy Apply** tag with no Fill form button. The run stops after the resume, with no cover letter and no form filler, and names the file. You apply on LinkedIn, then answer the Submitted question: on Yes it marks the application applied and closes its Chrome and Herdr tabs. On No nothing changes, and running the link again comes back to that question.
 
 Tailored Attach may not appear on custom careers pages such as `cursor.com`. If enabling it for the site doesn't help, the session names the files to attach by hand.
 

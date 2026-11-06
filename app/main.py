@@ -439,6 +439,8 @@ def create_app(
             "- `recruiting_platform` requires `verification_method` `official_apply_match` and "
             "`official_apply_url` equal to `job_link`.\n"
             "- `employer_site` requires `verification_method` `employer_site` and an empty `official_apply_url`.\n"
+            "- `linkedin_easy_apply`, for a LinkedIn Easy Apply posting with no official posting, requires "
+            "`verification_method` `owner_confirmed` and an empty `official_apply_url`.\n"
             "- Unknown fields are ignored."
         ),
         status_code=201,
@@ -832,9 +834,10 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         description=(
             "Every recorded application with its ID, company, role, status and recording times, most recently "
             "generated first and then most recently recorded. `added_via` says how each was added: `link` by the "
-            "apply-from-link workflow, `manual` otherwise. `report` summarises the latest generation (when, "
-            "how the resume was chosen, the scores), or is null when none is stored. `jobs` gives each kind's latest "
-            "job state (`running`, `done` or `failed`, with its times and fixed error) and never its result. No "
+            "apply-from-link workflow, `manual` otherwise. `posting_source_type` says where the posting lives: "
+            "`linkedin_easy_apply` means there is no official posting and the owner applies on LinkedIn. "
+            "`report` summarises the latest generation (when, how the resume was chosen, the scores), or is null "
+            "when none is stored. `jobs` gives each kind's latest job state (`running`, `done` or `failed`, with its times and fixed error) and never its result. No "
             "posting text.\n\n"
             "With `job_link`, returns only the application whose link has the same dedupe key (see "
             "`POST /application`), so at most one; a posting not stored gives an empty list."

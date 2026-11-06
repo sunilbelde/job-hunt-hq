@@ -1,6 +1,6 @@
 ---
 name: apply-from-link
-description: Take a job link to a filled application form. Checks whether the posting is stored, resolves LinkedIn and aggregator links to the employer's official posting, applies the hard filters, records the application, generates the resume and any cover letter the form needs, then hands off to job-application-form-filler. Started from the viewer's link box or as /apply-from-link <url>.
+description: Take a job link to a filled application form. Checks whether the posting is stored, resolves LinkedIn and aggregator links to the employer's official posting, applies the hard filters, records the application, generates the resume and any cover letter the form needs, then hands off to job-application-form-filler. A LinkedIn Easy Apply posting, which the owner declares, stops after the resume, then the owner applies and confirms, and the run marks it applied and closes its tabs. Started from the viewer's link box or as /apply-from-link <url>.
 disable-model-invocation: true
 argument-hint: "<job link>"
 ---
@@ -30,6 +30,10 @@ The backend is `http://127.0.0.1:8081`. Reads need no key. The profile document 
 
 ## Step 1: Is it already stored?
 
+If the link is on `linkedin.com`, on any host and with any path, and carries a job ID, use
+`https://www.linkedin.com/jobs/view/<job id>/` as the link from here on. The ID is the number that ends a
+`/jobs/view/` path, or the value of `currentJobId`. Otherwise use the link as given. This keeps one row per posting.
+
 ```bash
 curl -s --get --data-urlencode 'job_link=<link>' http://127.0.0.1:8081/applications
 ```
@@ -39,7 +43,7 @@ curl -s --get --data-urlencode 'job_link=<link>' http://127.0.0.1:8081/applicati
 
 ## Step 2: A stored application
 
-Read its `status` with `GET /application/<id>`.
+Read its `status` and `posting_source_type` with `GET /application/<id>`.
 
 - Anything other than `verified`: say which status it has and stop. It is already in progress or finished.
 - `verified`: skip Steps 3 to 5, because the owner already accepted this posting. Say it is stored, then go to
@@ -67,7 +71,10 @@ posting whose company and role both match:
 These sources can change or fail. Treat a failure as "not found here" and go on to the next one.
 
 A similar title is not a match. If nothing matches, ask the owner: **I have the official link**, **I'll sign in,
-try again** or **Drop it**. On a supplied link, go back to Step 1 with it. On Drop it, stop and record nothing.
+try again** or **Drop it**, and for a LinkedIn link also **It's LinkedIn Easy Apply**. Only the owner can say that:
+never infer it from the page. On a supplied link, go back to Step 1 with it. On Drop it, stop and record nothing. On
+Easy Apply, go to Step 4 with the LinkedIn posting. That is the only way a posting with no official link gets past
+this step.
 
 Once you have an official link that differs from the one you started with, run Step 1 again on it. If it is
 stored, go to Step 2.
@@ -75,7 +82,10 @@ stored, go to Step 2.
 ## Step 4: Apply the hard filters
 
 Read the "Hard filters" section of the profile document. If you cannot read it, say so and stop, recording nothing.
-The pay floor and other thresholds come from there, and the section outranks this list wherever they differ.
+The pay floor and other thresholds come from there, and the section outranks this list wherever they differ, with
+one exception. When the owner chose Easy Apply, skip that section's official careers page filter: choosing it accepts
+that there is no official posting. Every other filter still applies to the LinkedIn posting, so expand its full text
+first.
 
 Drop the posting when it:
 
@@ -114,6 +124,7 @@ The verification fields depend on where the official posting lives:
 | --- | --- | --- | --- |
 | On one of the applicant tracking systems in Step 3 | `recruiting_platform` | `official_apply_match` | exactly `job_link` |
 | On the employer's own site | `employer_site` | `employer_site` | `""` |
+| None: the owner chose Easy Apply, and `job_link` is the LinkedIn link from Step 1 | `linkedin_easy_apply` | `owner_confirmed` | `""` |
 
 Expect 201, or 200 for a posting already stored. Report any other answer as written and stop.
 
@@ -138,7 +149,10 @@ On 200, keep it. Otherwise `POST /resume` with `{"application_id": "<id>"}` and 
 `GET /resume/<id>/status` (with the key) reads `done`. It takes up to about 10 minutes, so wait with one background
 loop rather than repeated calls. On `failed`, report the `error` and stop. The application stays recorded.
 
-**The cover letter.** Only the form can show whether one is needed. Open `official_apply_url`, or `job_link` when
+**The cover letter.** Skip this for a `linkedin_easy_apply` application: there is no form to open, so the workflow
+generates no letter.
+
+Only the form can show whether one is needed. Open `official_apply_url`, or `job_link` when
 that is empty, in a new tab, and go on to the application form if there is an Apply link. Check that the company and
 role match, and if they do not, stop and report it. Look for a cover letter field, required or optional, including a
 text box that asks for one. Type nothing. **Close the tab**, because the form filler opens its own.
@@ -157,7 +171,12 @@ Before the handoff, say:
 - the application ID, and whether it is new or was already stored;
 - which documents are ready.
 
+For a `linkedin_easy_apply` application, also say that Easy Apply stands in for an official posting, that no cover
+letter was generated, and the resume's file name and folder, `outputs/<company>/<id>/`, so the owner can attach it.
+
 ## Step 8: Hand off
+
+For a `linkedin_easy_apply` application, do not hand off: go to Step 9.
 
 Run `/job-application-form-filler <id>` in this session, with the ID and nothing else. Pass no submit instruction:
 that skill's own rules for filling, review and submitting apply from here. If it is not installed, say so, give the
@@ -171,3 +190,36 @@ While it runs, two things stay with you:
   filling. Never use the file picker yourself.
 - **A cover letter field appears on a later page.** Generate the letter as in Step 6 and click the attach button
   again. If it does not attach, name the file so the owner can attach it by hand.
+
+## Step 9: Easy Apply: the owner applies
+
+The owner applies on LinkedIn. Never open Easy Apply or send anything there. Keep the tab this run opened on the
+posting, and ask once with AskUserQuestion:
+
+**Submitted** (header "Submitted"): "Have you submitted the <Company> application?" Options: "Yes, I submitted it" /
+"No, not submitted".
+
+The owner's answer is enough: the Chrome window is logged out of LinkedIn, so do not try to confirm it there.
+
+- **No:** change nothing and leave the tabs open. Say the status is still `verified`, and that running
+  `/apply-from-link` on the link again comes back to this question.
+- **Yes:** wrap up, in order. Stop at the first step that fails, report it and leave the tabs open.
+  1. **Mark it applied**, and expect `{"ok":true,"application_id":"<id>","status":"applied"}`. Report any other
+     answer as written.
+
+     ```bash
+     curl -s -X PATCH -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+       -d '{"status":"applied"}' http://127.0.0.1:8081/application/<id>
+     ```
+
+  2. **Close the Chrome tab** this run opened, using the tab close tool. If it opened none, skip this. Close no other
+     tab.
+  3. **Final report** in one short message: company, role, ID, the status response, and that the tabs are being
+     closed.
+  4. **Close this Herdr tab**, last of all. Check with `[ "${HERDR_ENV:-}" = 1 ] && herdr tab get "$HERDR_TAB_ID"`.
+     Only if that tab's `label` ends with this application's ID, run this as the final command of the run. Otherwise
+     leave it open and say so.
+
+     ```bash
+     herdr tab close "$HERDR_TAB_ID"
+     ```

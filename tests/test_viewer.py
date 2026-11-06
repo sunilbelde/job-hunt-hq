@@ -1086,6 +1086,14 @@ def test_list_and_detail_carry_the_origin(viewer):
     assert viewer.get(f"/application/{by_link}").json()["application"]["added_via"] == "link"
 
 
+def test_list_carries_the_source_type(viewer):
+    easy = record(viewer, 1, posting_source_type="linkedin_easy_apply", verification_method="owner_confirmed",
+                  official_apply_url="")
+    other = record(viewer, 2)
+    listed = {item["id"]: item["posting_source_type"] for item in viewer.get("/applications").json()["applications"]}
+    assert listed == {easy: "linkedin_easy_apply", other: "recruiting_platform"}
+
+
 def test_list_filtered_by_link(viewer):
     wanted, _ = record(viewer, 1), record(viewer, 2)
     for link in (f"{GH_LINK}1", f"{GH_LINK}1/?utm_source=x#apply"):
@@ -1207,6 +1215,13 @@ def test_page_has_the_link_box_and_origin_tag(viewer):
     assert '"/viewer/apply-from-link", false, { method: "POST", body: { link } }' in html
     assert '"Opened Herdr tab "' in html and '"Already open in Herdr tab "' in html and '"Not opened: "' in html
     assert 'link: "ByLink", manual: "Manual"' in html and "ADDED_VIA[item.added_via]" in html
+
+
+def test_page_tags_easy_apply_and_offers_no_fill_form(viewer):
+    html = viewer.get("/viewer").text
+    assert 'const EASY_APPLY = "linkedin_easy_apply"' in html
+    assert 'item.posting_source_type === EASY_APPLY' in html and '"Easy Apply")' in html
+    assert 'fill.classList.toggle("hidden", app.posting_source_type === EASY_APPLY)' in html
 
 
 def test_page_keeps_reading_the_list_after_a_link_starts(viewer):

@@ -44,7 +44,7 @@ The viewer SHALL load and show the application list as soon as the page opens, w
 - **THEN** the request carries no `X-API-Key` header and its URL contains no key
 
 ### Requirement: Application list
-`GET /applications` SHALL return every stored application, most recently generated first and then most recently recorded, each with its ID, company, role, status, recorded time, `added_via`, `jobs` and, when it has a report, the generation time, match status, base score and generated score. `jobs` SHALL hold `resume` and `cover_letter`, each null when that kind has no job, else exactly `status`, `started_at`, `finished_at` and `error`. It SHALL NOT include posting text, nor any job's saved path, match or letter text. It SHALL NOT require the API key, and SHALL ignore an `X-API-Key` header if one is sent.
+`GET /applications` SHALL return every stored application, most recently generated first and then most recently recorded, each with its ID, company, role, status, recorded time, `added_via`, `posting_source_type`, `jobs` and, when it has a report, the generation time, match status, base score and generated score. `jobs` SHALL hold `resume` and `cover_letter`, each null when that kind has no job, else exactly `status`, `started_at`, `finished_at` and `error`. It SHALL NOT include posting text, nor any job's saved path, match or letter text. It SHALL NOT require the API key, and SHALL ignore an `X-API-Key` header if one is sent.
 
 #### Scenario: Listed with report summary
 - **WHEN** the store holds an application with a stored report and one without
@@ -69,6 +69,10 @@ The viewer SHALL load and show the application list as soon as the page opens, w
 #### Scenario: Origin listed
 - **WHEN** the store holds an application recorded by link and one with no recorded origin
 - **THEN** the first carries `added_via` `link` and the second `manual`
+
+#### Scenario: Source type listed
+- **WHEN** the store holds an Easy Apply application and an employer site application
+- **THEN** the first carries `posting_source_type` `linkedin_easy_apply` and the second `employer_site`
 
 #### Scenario: Filtered by link
 - **WHEN** `GET /applications?job_link=<link>` is sent and a stored application's `job_link` has the same dedupe key
@@ -598,7 +602,7 @@ Where the viewer is served, `POST /viewer/application/{application_id}/fill` SHA
 - **THEN** the response is 403 `Cross-site request refused`, or 404 as for an unknown path, and Herdr is not called
 
 ### Requirement: Fill form from the viewer
-The selected application's action bar SHALL offer a **Fill form** button that posts to the fill endpoint for that application. While the request is pending the button SHALL be disabled. On success the action bar SHALL show "Opened Herdr tab <label>", or "Already open in Herdr tab <label>"; on failure, "Not opened: <message>". List entries SHALL carry no Fill form button.
+The selected application's action bar SHALL offer a **Fill form** button that posts to the fill endpoint for that application, unless its `posting_source_type` is `linkedin_easy_apply`, where no form exists to fill and the button SHALL NOT be offered. While the request is pending the button SHALL be disabled. On success the action bar SHALL show "Opened Herdr tab <label>", or "Already open in Herdr tab <label>"; on failure, "Not opened: <message>". List entries SHALL carry no Fill form button.
 
 #### Scenario: Opened
 - **WHEN** the owner clicks Fill form in the action bar
@@ -607,6 +611,10 @@ The selected application's action bar SHALL offer a **Fill form** button that po
 #### Scenario: Herdr not running
 - **WHEN** the endpoint answers 503 `Herdr unavailable`
 - **THEN** the action bar shows "Not opened: Herdr unavailable"
+
+#### Scenario: Easy Apply application selected
+- **WHEN** the selected application has `posting_source_type` `linkedin_easy_apply`
+- **THEN** its action bar shows no Fill form button, and still shows the status, resume, cover letter and Delete controls
 
 ### Requirement: Viewer requests stay on its own origin
 Every request the viewer page makes, for lists, details, PDFs, status changes, deletes, form-filling sessions and resume and cover letter generation, SHALL go to the origin the page was loaded from, using relative paths, so that opened at `http://127.0.0.1:<docs port>/viewer` it uses only loopback endpoints. The page SHALL not describe itself as reachable from the tailnet.
@@ -846,3 +854,14 @@ Each list entry SHALL show a tag for how the application was added: **ByLink** f
 #### Scenario: Existing application
 - **WHEN** an application was recorded before this field existed
 - **THEN** its entry shows the tag Manual
+
+### Requirement: Easy Apply tag on list entries
+A list entry whose `posting_source_type` is `linkedin_easy_apply` SHALL show an **Easy Apply** tag beside its origin tag. Other entries SHALL show no such tag. The tag SHALL be display only.
+
+#### Scenario: Easy Apply application
+- **WHEN** an application has `added_via` `link` and `posting_source_type` `linkedin_easy_apply`
+- **THEN** its entry shows the tags ByLink and Easy Apply
+
+#### Scenario: Other application
+- **WHEN** an application has `posting_source_type` `recruiting_platform` or `employer_site`
+- **THEN** its entry shows no Easy Apply tag

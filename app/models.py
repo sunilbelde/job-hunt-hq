@@ -40,8 +40,8 @@ class ApplicationRow(BaseModel):
     company: StrictStr = Field(min_length=1)
     role: StrictStr = Field(min_length=1)
     job_link: StrictStr = Field(min_length=1)
-    posting_source_type: Literal["recruiting_platform", "employer_site"]
-    verification_method: Literal["official_apply_match", "employer_site"]
+    posting_source_type: Literal["recruiting_platform", "employer_site", "linkedin_easy_apply"]
+    verification_method: Literal["official_apply_match", "employer_site", "owner_confirmed"]
     official_apply_url: StrictStr
     added_via: AddedVia = Field(
         default="manual",
@@ -71,6 +71,15 @@ class ApplicationRow(BaseModel):
                 raise ValueError(
                     "official_apply_url must equal job_link when "
                     "verification_method is official_apply_match"
+                )
+        elif self.posting_source_type == "linkedin_easy_apply":
+            if self.verification_method != "owner_confirmed":
+                raise ValueError(
+                    "verification_method must be owner_confirmed when posting_source_type is linkedin_easy_apply"
+                )
+            if self.official_apply_url != "":
+                raise ValueError(
+                    "official_apply_url must be empty when posting_source_type is linkedin_easy_apply"
                 )
         else:
             if self.verification_method != "employer_site":
@@ -381,6 +390,10 @@ class ApplicationListItem(BaseModel):
     role: str
     status: ApplicationStatus
     added_via: AddedVia
+    posting_source_type: str = Field(
+        description="Where the posting lives. `linkedin_easy_apply` means there is no official posting and the "
+        "owner applies on LinkedIn."
+    )
     created_at: str
     updated_at: str | None
     report: ReportSummary | None = Field(description="The latest generation's summary, or null if none is stored.")
