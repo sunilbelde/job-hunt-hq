@@ -101,6 +101,11 @@ employer, ask the owner whether to keep or drop it.
 
 **To drop:** record nothing, name the filter and quote the evidence, then stop.
 
+**Easy Apply does not bypass the other filters.** Choosing it skips only the official careers page filter. When
+the owner chose Easy Apply and another filter fails, do not drop yet. Name the filter, quote the evidence and ask
+**Keep it** or **Drop it**. Keep it means the owner overrides that filter: carry on to Step 5 and say so in Step 7.
+Choosing Easy Apply is not itself that answer. Drop it follows the rule above.
+
 ## Step 5: Record the application
 
 Write the JSON body to a `mktemp` file, since the posting text is long, and post it:
