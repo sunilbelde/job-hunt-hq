@@ -55,6 +55,9 @@ Paths are relative to the root of the job-hunt-hq repo, where this session runs.
 - The profile document wins over everything else for form answers. Match questions to its rows by meaning, not
   wording.
 - A term in the report's `rejected_terms` was judged unsupported: never claim it in any answer.
+- Read the contact email shown in the header of the tailored resume, and of the cover letter if there is one, and
+  compare each with the profile document's `Email` row. Keep any mismatch, or any document whose email can't be read,
+  for the red flags in Step 6.
 - If the backend is unreachable or has no such ID, say so, continue from the profile document only, and expect
   the file attach to fail.
 - If the profile document cannot be read, stop and say so: do not fill from memory.
@@ -104,7 +107,7 @@ details after sponsorship), so re-scan after each section.
 
 | Question type | Answer |
 | --- | --- |
-| Contact, name, links, location | Profile document. A "preferred" and a "legal" name field both get the full name there. |
+| Contact, name, links, location | Profile document. A "preferred" and a "legal" name field both get the full name there. Every email field gets the profile document's `Email` row, even when an attached document shows another address. |
 | Work authorization, sponsorship | The profile document's visa status section and Reusable Answers table. |
 | Visa type lists | The option the profile document's visa status section names, and no other. |
 | Self-ratings, yes/no screening questions | The profile document's Reusable Answers table, matched by meaning. |
@@ -228,6 +231,9 @@ Briefly:
    - the form is not on the company's own careers site or its ATS,
    - no full job description,
    - contract-only or unpaid,
+   - an attached resume or cover letter shows a contact email other than the profile document's: name the
+     document and suggest generating it again from the viewer before submitting (say so instead if no email could
+     be read from it),
    - a cover letter field with no generated cover letter.
 8. Submitted or not:
    - submitted: the confirmation text the page showed, and the status update's response;
