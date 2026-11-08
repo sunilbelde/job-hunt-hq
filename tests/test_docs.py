@@ -12,6 +12,7 @@ HEADERS = {"X-API-Key": API_KEY}
 DOCS_PATHS = ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"]
 PROTECTED = [
     ("post", "/application"),
+    ("post", "/application/email-status"),
     ("patch", "/application/{application_id}"),
     ("delete", "/application/{application_id}"),
     ("post", "/resume"),
@@ -40,6 +41,7 @@ RESPONSES = {
     ("get", "/health"): {"200"},
     ("get", "/healthz"): {"200"},
     ("post", "/application"): {"200", "201", "401", "422", "503"},
+    ("post", "/application/email-status"): {"200", "401", "404", "409", "422", "503"},
     ("patch", "/application/{application_id}"): {"200", "401", "404", "422", "503"},
     ("delete", "/application/{application_id}"): {"200", "401", "404", "503"},
     ("post", "/resume"): {"202", "401", "404", "422", "503"},
@@ -106,8 +108,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_twenty_one_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 21
+def test_documents_exactly_the_twenty_two_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 22
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -426,6 +428,16 @@ def test_documented_examples_are_accepted(schema, docs_client):
     r = docs_client.patch(f"/viewer/application/{application_id}",
                           json=example(("patch", "/viewer/application/{application_id}")))
     assert r.status_code == 200, r.json()
+    # The email example names its own company and role: record a posting it matches.
+    sent = example(("post", "/application/email-status"))
+    link = "https://jobs.ashbyhq.com/ramp/0d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    r = docs_client.post("/application", json={**example(("post", "/application")), "company": sent["company"],
+                                               "role": sent["role"], "job_link": link, "official_apply_url": link},
+                         headers=HEADERS)
+    assert r.status_code == 201, r.json()
+    matching = r.json()["application_id"]
+    r = docs_client.post("/application/email-status", json=sent, headers=HEADERS)
+    assert r.status_code == 200 and r.json()["application_id"] == matching, r.json()
 
 
 # --- responses ---
@@ -437,11 +449,16 @@ def test_documented_statuses(schema):
 
 def test_errors_use_ok_message_shape(schema):
     assert set(schema["components"]["schemas"]["ErrorResponse"]["properties"]) == {"ok", "message"}
+    # The email status endpoint's no-match and ambiguous responses extend the shape with a reason.
+    extended = {(("post", "/application/email-status"), "404"): "EmailStatusNoMatch",
+                (("post", "/application/email-status"), "409"): "EmailStatusAmbiguous"}
     for key, op in operations(schema).items():
         for status, response in op["responses"].items():
             if status[0] in "45":
                 ref = response["content"]["application/json"]["schema"]["$ref"]
-                assert ref == "#/components/schemas/ErrorResponse", (key, status)
+                name = extended.get((key, status), "ErrorResponse")
+                assert ref == f"#/components/schemas/{name}", (key, status)
+                assert {"ok", "message"} <= set(schema["components"]["schemas"][name]["properties"]), (key, status)
 
 
 def test_no_fastapi_validation_error_shape(schema):
@@ -502,7 +519,8 @@ def test_oauth2_redirect_served_when_enabled(docs_client):
     assert docs_client.get("/docs/oauth2-redirect").status_code == 200
 
 
-PUBLIC_OPERATIONS = ("GET /health", "POST /application", "POST /resume", "POST /cover-letter")
+PUBLIC_OPERATIONS = ("GET /health", "POST /application", "POST /application/email-status", "POST /resume",
+                     "POST /cover-letter")
 
 
 def test_description_names_the_public_operations(schema):
@@ -524,3 +542,34 @@ def test_no_description_mentions_the_tailnet(schema):
     assert "tailnet" not in schema["info"]["description"].lower()
     for key, op in operations(schema).items():
         assert "tailnet" not in op["description"].lower(), key
+
+
+# --- email status endpoint ---
+
+def test_email_status_body_documented(schema):
+    op = operations(schema)[("post", "/application/email-status")]
+    assert op["tags"] == ["applications"]
+    body = component(schema, op)
+    assert set(body["required"]) == {"company", "role", "status"}
+    assert {"company", "role", "status", "job_link", "received_at", "note"} == set(body["properties"])
+    assert body["properties"]["status"]["enum"] == ["Applied", "Rejected", "Response"]
+
+
+def test_email_status_mapping_described(schema):
+    description = " ".join(operations(schema)[("post", "/application/email-status")]["description"].split())
+    for phrase in ("`Rejected` sets `rejected`", "`Response` sets `interviewing`", "`Applied` changes nothing",
+                   "never move backwards", "leave every application unchanged", "public address"):
+        assert phrase in description, phrase
+
+
+def test_email_status_responses_documented(schema):
+    op = operations(schema)[("post", "/application/email-status")]
+    schemas = schema["components"]["schemas"]
+
+    def model(status):
+        return schemas[op["responses"][status]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[1]]
+
+    assert set(model("200")["properties"]) == {"ok", "application_id", "company", "role", "previous_status",
+                                               "status", "changed"}
+    assert set(model("404")["properties"]) == {"ok", "message", "reason"}
+    assert set(model("409")["properties"]) == {"ok", "message", "reason", "match_count"}

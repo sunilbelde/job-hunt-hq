@@ -41,11 +41,11 @@ When API docs are disabled, which is the default, the system SHALL NOT serve `/d
 - **THEN** `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume` and `POST /cover-letter` behave exactly as they do with docs enabled
 
 ### Requirement: Documented endpoint coverage
-The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}`, `POST /viewer/application/{application_id}/fill`, `POST /viewer/application/{application_id}/resume`, `POST /viewer/application/{application_id}/cover-letter` and `POST /viewer/apply-from-link`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
+The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `POST /application/email-status`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}`, `POST /viewer/application/{application_id}/fill`, `POST /viewer/application/{application_id}/resume`, `POST /viewer/application/{application_id}/cover-letter` and `POST /viewer/apply-from-link`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
 
 #### Scenario: All endpoints listed
 - **WHEN** the OpenAPI document is fetched
-- **THEN** it contains exactly those twenty-one operations, each with a non-empty summary, description and tag
+- **THEN** it contains exactly those twenty-two operations, each with a non-empty summary, description and tag
 
 #### Scenario: Health alias
 - **WHEN** the OpenAPI document is fetched
@@ -118,7 +118,7 @@ The OpenAPI document SHALL declare `X-API-Key` as an API-key security scheme sen
 
 #### Scenario: Security scheme declared
 - **WHEN** the OpenAPI document is fetched
-- **THEN** it declares an `apiKey` scheme in `header` named `X-API-Key`, required by the three application write operations, `POST /resume` and `POST /cover-letter`, and not by `GET /health`, `GET /healthz` or the six viewer read operations
+- **THEN** it declares an `apiKey` scheme in `header` named `X-API-Key`, required by the three application write operations, `POST /application/email-status`, `POST /resume` and `POST /cover-letter`, and not by `GET /health`, `GET /healthz` or the six viewer read operations
 
 #### Scenario: Key not a per-request field
 - **WHEN** the OpenAPI document is fetched
@@ -232,11 +232,11 @@ The OpenAPI document SHALL tag `POST /viewer/application/{application_id}/fill` 
 - **THEN** the fill operation is tagged `viewer`, has no security requirement and no request body, and its description says it is served only where the viewer is, refuses cross-site requests, and names `Claude-Jobs-Automation`, `<Company>-<Role>-<application_id>` and `/job-application-form-filler <application_id>`
 
 ### Requirement: Reference says where endpoints are served
-The OpenAPI document's descriptions SHALL say that only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public address, and that every other operation is served only on the Mac's local listener. No description SHALL say an operation is served on the tailnet or that the status endpoints are served on the public address.
+The OpenAPI document's descriptions SHALL say that only `GET /health`, `POST /application`, `POST /application/email-status`, `POST /resume` and `POST /cover-letter` are served on the public address, and that every other operation is served only on the Mac's local listener. No description SHALL say an operation is served on the tailnet or that the status endpoints are served on the public address.
 
 #### Scenario: Service description
 - **WHEN** the OpenAPI document is fetched
-- **THEN** the top-level description names the four public operations and says the rest are local-only
+- **THEN** the top-level description names the five public operations and says the rest are local-only
 
 #### Scenario: Status endpoints described as local
 - **WHEN** the OpenAPI document is fetched
@@ -307,3 +307,21 @@ The OpenAPI document SHALL list `linkedin_easy_apply` among the allowed `posting
 #### Scenario: Update body
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the `PATCH /application/{application_id}` body does not list `posting_source_type` or `verification_method`
+
+### Requirement: Email status endpoint documented
+The OpenAPI document SHALL tag `POST /application/email-status` `applications` and give it a JSON request body schema listing `company`, `role`, `status` (with its three allowed values), `job_link`, `received_at` and `note`, with an example body the endpoint accepts. Its description SHALL state the status mapping, that `Applied` never writes, that statuses never move backwards, and that a zero or ambiguous match changes nothing.
+
+#### Scenario: Body documented
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the `POST /application/email-status` request body requires `company`, `role` and `status`, lists `Applied`, `Rejected` and `Response` for `status`, and its example is accepted by the endpoint
+
+#### Scenario: Mapping described
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the operation's description says `Rejected` sets `rejected`, `Response` sets `interviewing`, `Applied` changes nothing, statuses never move backwards, and 404 and 409 leave every application unchanged
+
+### Requirement: Email status responses documented
+The OpenAPI document SHALL list responses 200, 401, 404, 409, 422 and 503 for `POST /application/email-status`. The 404 and 409 response schemas SHALL extend the `{ok, message}` error shape with `reason`, and the 409 schema SHALL also carry `match_count`.
+
+#### Scenario: Responses documented
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the operation lists 200, 401, 404, 409, 422 and 503, the 200 schema has `application_id`, `company`, `role`, `previous_status`, `status` and `changed`, and the 404 and 409 schemas carry `ok`, `message` and `reason`

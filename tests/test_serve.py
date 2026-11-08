@@ -95,9 +95,18 @@ def test_api_same_on_both_ports(apps):
 
 # --- the public allowlist ---
 
-def test_public_routes_are_the_four_funnel_endpoints():
-    assert PUBLIC_ROUTES == {("GET", "/health"), ("POST", "/application"), ("POST", "/resume"),
-                             ("POST", "/cover-letter")}
+def test_public_routes_are_the_five_funnel_endpoints():
+    assert PUBLIC_ROUTES == {("GET", "/health"), ("POST", "/application"), ("POST", "/application/email-status"),
+                             ("POST", "/resume"), ("POST", "/cover-letter")}
+
+
+def test_email_status_updates_through_the_public_port(apps):
+    recorded = client_on(apps, PUBLIC).post("/application", json=VALID_APPLICATION, headers=HEADERS)
+    email = {"company": VALID_APPLICATION["company"], "role": VALID_APPLICATION["role"], "status": "Rejected"}
+    r = client_on(apps, PUBLIC).post("/application/email-status", json=email, headers=HEADERS)
+    assert r.status_code == 200 and r.json()["application_id"] == recorded.json()["application_id"]
+    assert r.json()["status"] == "rejected"
+    assert client_on(apps, PUBLIC).post("/application/email-status", json=email).status_code == 401
 
 
 @pytest.mark.parametrize(("method", "path"), sorted(PUBLIC_ROUTES))
@@ -131,6 +140,7 @@ def test_every_other_operation_is_404_on_the_public_port(finished):
     before = client_on(app, DOCS).get(f"/application/{application_id}").json()
     blocked = [op for op in docs_operations(app) if op not in PUBLIC_ROUTES] + [("GET", "/healthz")]
     assert ("GET", "/resume/{application_id}/status") in blocked and ("DELETE", "/application/{application_id}") in blocked
+    assert ("GET", "/applications") in blocked and ("PATCH", "/application/{application_id}") in blocked
     public = client_on(app, PUBLIC)
     for method, template in blocked:
         path = template.replace("{application_id}", application_id)
@@ -144,7 +154,11 @@ def test_every_other_operation_is_404_on_the_public_port(finished):
 
 
 @pytest.mark.parametrize(("method", "path"), [("GET", "/resume"), ("PUT", "/application"), ("GET", "/health/"),
-                                              ("HEAD", "/health"), ("OPTIONS", "/resume")])
+                                              ("HEAD", "/health"), ("OPTIONS", "/resume"),
+                                              ("GET", "/application/email-status"),
+                                              ("PATCH", "/application/email-status"),
+                                              ("DELETE", "/application/email-status"),
+                                              ("POST", "/application/email-status/")])
 def test_other_methods_on_public_paths_are_404_not_405(apps, method, path):
     assert client_on(apps, PUBLIC).request(method, path).status_code == 404
 
@@ -253,7 +267,7 @@ def test_launcher_serves_both_ports(tmp_path):
         for path in ("/docs", "/openapi.json"):
             assert httpx.get(base + path).status_code == 404
             assert httpx.get(docs_base + path).status_code == 200
-        # Only the four Funnel endpoints are on the public port; the rest are served on the local one.
+        # Only the five Funnel endpoints are on the public port; the rest are served on the local one.
         for path in ("/healthz", f"/resume/{ZERO}/status"):
             assert httpx.get(base + path, headers=HEADERS).status_code == 404
         assert httpx.get(docs_base + "/healthz").status_code == 200
