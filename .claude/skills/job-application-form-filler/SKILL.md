@@ -290,14 +290,14 @@ Do these in order, and stop at the first one that fails (report it and leave bot
    tab close tool). Close no other tab.
 4. **Final report** in one short message: company, role, ID, the confirmation text, the status response, what
    was added to the profile document, and that the tabs are being closed.
-5. **Close this Herdr tab**, last of all, only when everything above succeeded and this session was opened by
-   the viewer's Fill form button. Check with Bash:
+5. **Close this Herdr tab**, last of all, only when everything above succeeded and this session is claimed for
+   this application, whether Fill form opened it or the apply-from-link workflow renamed it. Check with Bash:
 
    ```bash
    [ "${HERDR_ENV:-}" = 1 ] && herdr tab get "$HERDR_TAB_ID"
    ```
 
-   Close it only if that tab's `label` ends with this application's ID (Fill form labels tabs
+   Close it only if that tab's `label` ends with this application's ID (both workflows label tabs
    `<Company>-<Role>-<id>`); otherwise leave it open and say so. Then run, as the final command of the run:
 
    ```bash
