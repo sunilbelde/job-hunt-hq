@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Lets an outside email classifier, such as the owner's n8n workflow, move a recorded application's status after a job email arrives. The classifier gives a company, a role and an email outcome rather than an application ID, and the service updates only an application it can identify without guessing.
+Lets an email classifier, such as the owner's Hermes workflow running locally on the Mac and calling the local listener, move a recorded application's status after a job email arrives. The classifier gives a company, a role and an email outcome rather than an application ID, and the service updates only an application it can identify without guessing.
 
 ## Requirements
 

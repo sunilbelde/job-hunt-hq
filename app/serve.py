@@ -1,4 +1,4 @@
-"""Runs the installed service: the five endpoints Funnel publishes on one loopback port and, optionally,
+"""Runs the installed service: the four endpoints Funnel publishes on one loopback port and, optionally,
 the full API, its reference pages and the resume viewer on a second loopback port reached only from the Mac.
 
 Usage: python -m app.serve --port 8080 [--docs-port 8081] [--host 127.0.0.1] [--log-config <path>]
@@ -36,10 +36,11 @@ def by_local_port(public, routes: dict[int, object]):
 
 # The only requests the public listener (the one Funnel publishes) passes on. Exact matches: no path
 # parameters, no trailing slash, no other method, so nothing else on that port reveals that it exists.
+# POST /application/email-status is not here: its caller, the Hermes email workflow, runs on this Mac and
+# uses the local listener.
 PUBLIC_ROUTES = frozenset({
     ("GET", "/health"),
     ("POST", "/application"),
-    ("POST", "/application/email-status"),  # the owner's n8n workflow, which reads job emails off this Mac
     ("POST", "/resume"),
     ("POST", "/cover-letter"),
 })

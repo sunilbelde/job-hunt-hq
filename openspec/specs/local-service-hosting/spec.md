@@ -73,7 +73,7 @@ The install script SHALL refuse to install when `.env` is missing, readable by u
 - **THEN** the install script exits non-zero, explains how to fix the permissions, and installs nothing
 
 ### Requirement: Public HTTPS access through Tailscale Funnel
-The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from both tailnet devices and the public internet, through Tailscale Funnel, while the process itself keeps listening only on loopback. Over this public address it SHALL serve only `GET /health`, `POST /application`, `POST /application/email-status`, `POST /resume` and `POST /cover-letter`; the four `POST` endpoints SHALL still require the API key, and generated files SHALL NOT be retrievable over it.
+The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from both tailnet devices and the public internet, through Tailscale Funnel, while the process itself keeps listening only on loopback. Over this public address it SHALL serve only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter`; the three `POST` endpoints SHALL still require the API key, and generated files SHALL NOT be retrievable over it.
 
 #### Scenario: Tailnet device
 - **WHEN** a device signed into the owner's tailnet requests `https://<mac-tailscale-name>/health`
@@ -92,12 +92,12 @@ The service SHALL be reachable over HTTPS at the Mac's Tailscale hostname from b
 - **THEN** it gets 201 (or 200 for a link already recorded), then 202 and 202, exactly as on the local listener
 
 #### Scenario: n8n updates a status
-- **WHEN** an authenticated client outside the tailnet sends `POST /application/email-status` with a `Rejected` email for a company and role that match one application
-- **THEN** it gets 200 and that application's status becomes `rejected`, exactly as on the local listener
+- **WHEN** an authenticated client outside the tailnet, such as the off-Mac n8n workflow once assumed, sends `POST /application/email-status` with a `Rejected` email for a company and role that match one application
+- **THEN** it receives the unknown-path 404 and the application's status is unchanged; the email workflow calls the local listener instead
 
 #### Scenario: Email status without API key
 - **WHEN** a client outside the tailnet sends `POST /application/email-status` without a valid `X-API-Key`
-- **THEN** it receives 401 and no application changes
+- **THEN** it receives the same unknown-path 404 as with a valid key, not 401, and no application changes
 
 #### Scenario: LAN still refused
 - **WHEN** another device on the local network connects to the Mac's LAN address on the service port
@@ -294,14 +294,14 @@ The install script SHALL put the path of the Herdr CLI it finds on its `PATH` in
 - **THEN** the install completes and `HERDR_BIN` is `herdr`
 
 ### Requirement: Public listener serves only the Funnel endpoints
-The installed service's public listener SHALL serve only `GET /health`, `POST /application`, `POST /application/email-status`, `POST /resume` and `POST /cover-letter`. Every other path and method SHALL be handled exactly as an unknown path would be, whatever `X-API-Key` or forwarding headers the request carries, and SHALL change no data. The restriction SHALL be set in code, not by `.env`.
+The installed service's public listener SHALL serve only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter`. Every other path and method SHALL be handled exactly as an unknown path would be, whatever `X-API-Key` or forwarding headers the request carries, and SHALL change no data. The restriction SHALL be set in code, not by `.env`.
 
 #### Scenario: Local-only endpoints answer 404
-- **WHEN** a client with a valid `X-API-Key` sends `GET /healthz`, `GET /applications`, `PATCH /application/<id>`, `DELETE /application/<id>`, `GET /resume/<id>/status` or `GET /cover-letter/<id>/status` to the public listener, for an existing application with a finished job
+- **WHEN** a client with a valid `X-API-Key` sends `GET /healthz`, `GET /applications`, `PATCH /application/<id>`, `DELETE /application/<id>`, `POST /application/email-status`, `GET /resume/<id>/status` or `GET /cover-letter/<id>/status` to the public listener, for an existing application with a finished job
 - **THEN** each responds 404 with no job state, application field or file name, and the application still exists unchanged
 
 #### Scenario: Same 404 with or without a key
-- **WHEN** a client sends `GET /resume/<id>/status` to the public listener without `X-API-Key`
+- **WHEN** a client sends `GET /resume/<id>/status` or `POST /application/email-status` to the public listener without `X-API-Key`
 - **THEN** it gets the same 404 as with a valid key, not 401, so the response does not reveal the endpoint exists elsewhere
 
 #### Scenario: Other methods on the email status path
@@ -310,15 +310,15 @@ The installed service's public listener SHALL serve only `GET /health`, `POST /a
 
 #### Scenario: Smoke test checks the moved endpoints
 - **WHEN** the owner runs the smoke test
-- **THEN** it fails if, on the public base URL, `GET /healthz`, `GET /applications`, `GET /resume/<zero uuid>/status`, `GET /cover-letter/<zero uuid>/status`, or `PATCH` or `DELETE /application/<zero uuid>` with the API key, answers anything other than 404, where `<zero uuid>` is `00000000-0000-0000-0000-000000000000`
+- **THEN** it fails if, on the public base URL, `GET /healthz`, `GET /applications`, `GET /resume/<zero uuid>/status`, `GET /cover-letter/<zero uuid>/status`, `POST /application/email-status`, or `PATCH` or `DELETE /application/<zero uuid>` with the API key, answers anything other than 404, where `<zero uuid>` is `00000000-0000-0000-0000-000000000000`
 
 #### Scenario: Smoke test checks the email status endpoint
 - **WHEN** the owner runs the smoke test
-- **THEN** it sends an authenticated `Applied` email for a company and role no application has to `POST /application/email-status` on the public base URL, and fails unless the response is 404 with `reason` `no_match`
+- **THEN** it sends an authenticated `Applied` email for a company and role no application has to `POST /application/email-status` on the local listener, and fails unless the response is 404 with `reason` `no_match`
 
 #### Scenario: Development server unchanged
 - **WHEN** the service is run with `uvicorn app.main:create_app --factory`, with or without `API_DOCS_ENABLED`
-- **THEN** every API endpoint, `GET /healthz` and the status endpoints included, is served as before
+- **THEN** every API endpoint, `GET /healthz`, the status endpoints and `POST /application/email-status` included, is served as before
 
 ### Requirement: Loopback-only local listener
 The installed service SHALL serve the API reference pages, the OpenAPI document, the resume viewer with its endpoints, and the full API on a second loopback port, the docs port, that is reached only from the Mac itself. Requests on this port SHALL behave like the same requests on the public port where both serve them, and both ports SHALL share one application store and output folder.
@@ -334,6 +334,10 @@ The installed service SHALL serve the API reference pages, the OpenAPI document,
 #### Scenario: Status and edits on the Mac
 - **WHEN** an authenticated client on the Mac calls `GET /resume/<id>/status`, `PATCH /application/<id>` or `DELETE /application/<id>` on the docs port
 - **THEN** it gets the same response as those endpoints gave before this change
+
+#### Scenario: Local email workflow updates a status
+- **WHEN** the owner's email workflow on the Mac (Hermes) sends `POST /application/email-status` with a valid `X-API-Key` and a `Rejected` email for a company and role that match one application to `http://127.0.0.1:<docs port>`
+- **THEN** it gets 200 and that application's status becomes `rejected`; without a valid key it gets 401 and nothing changes
 
 #### Scenario: Not reachable from the tailnet
 - **WHEN** the README setup is followed and a tailnet device connects to the Mac's Tailscale hostname on any HTTPS port other than the Funnel one

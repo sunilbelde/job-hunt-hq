@@ -95,18 +95,25 @@ def test_api_same_on_both_ports(apps):
 
 # --- the public allowlist ---
 
-def test_public_routes_are_the_five_funnel_endpoints():
-    assert PUBLIC_ROUTES == {("GET", "/health"), ("POST", "/application"), ("POST", "/application/email-status"),
-                             ("POST", "/resume"), ("POST", "/cover-letter")}
+def test_public_routes_are_the_four_funnel_endpoints():
+    assert PUBLIC_ROUTES == {("GET", "/health"), ("POST", "/application"), ("POST", "/resume"),
+                             ("POST", "/cover-letter")}
 
 
-def test_email_status_updates_through_the_public_port(apps):
-    recorded = client_on(apps, PUBLIC).post("/application", json=VALID_APPLICATION, headers=HEADERS)
+def test_email_status_updates_through_the_local_port(apps):
+    recorded = client_on(apps, DOCS).post("/application", json=VALID_APPLICATION, headers=HEADERS)
+    application_id = recorded.json()["application_id"]
     email = {"company": VALID_APPLICATION["company"], "role": VALID_APPLICATION["role"], "status": "Rejected"}
-    r = client_on(apps, PUBLIC).post("/application/email-status", json=email, headers=HEADERS)
-    assert r.status_code == 200 and r.json()["application_id"] == recorded.json()["application_id"]
+    # The public port treats it as an unknown path, key or not, and changes nothing.
+    before = client_on(apps, DOCS).get("/applications", headers=HEADERS).json()
+    for headers in ({}, HEADERS):
+        r = client_on(apps, PUBLIC).post("/application/email-status", json=email, headers=headers)
+        assert (r.status_code, r.json()) == (404, {"detail": "Not Found"})
+    assert client_on(apps, DOCS).get("/applications", headers=HEADERS).json() == before
+    r = client_on(apps, DOCS).post("/application/email-status", json=email, headers=HEADERS)
+    assert r.status_code == 200 and r.json()["application_id"] == application_id
     assert r.json()["status"] == "rejected"
-    assert client_on(apps, PUBLIC).post("/application/email-status", json=email).status_code == 401
+    assert client_on(apps, DOCS).post("/application/email-status", json=email).status_code == 401
 
 
 @pytest.mark.parametrize(("method", "path"), sorted(PUBLIC_ROUTES))
@@ -141,6 +148,7 @@ def test_every_other_operation_is_404_on_the_public_port(finished):
     blocked = [op for op in docs_operations(app) if op not in PUBLIC_ROUTES] + [("GET", "/healthz")]
     assert ("GET", "/resume/{application_id}/status") in blocked and ("DELETE", "/application/{application_id}") in blocked
     assert ("GET", "/applications") in blocked and ("PATCH", "/application/{application_id}") in blocked
+    assert ("POST", "/application/email-status") in blocked
     public = client_on(app, PUBLIC)
     for method, template in blocked:
         path = template.replace("{application_id}", application_id)

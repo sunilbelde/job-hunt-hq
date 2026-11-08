@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs (or reinstalls) the service as a launchd daemon that starts at boot,
-# restarts on crash and listens on 127.0.0.1: the five public endpoints Funnel publishes
+# restarts on crash and listens on 127.0.0.1: the four public endpoints Funnel publishes
 # on PORT (default 8080), and the full API, its docs and the resume viewer on DOCS_PORT
 # (default 8081), the local listener reached only from this Mac. Run as your own
 # user; it uses sudo only for the launchd steps. Safe to run again after `git pull`.
@@ -102,10 +102,10 @@ for path in /docs /viewer; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
   [ "$code" = 404 ] || die "http://127.0.0.1:$port$path answered $code, want 404: the public port must not serve API docs or the viewer"
 done
-# Nor anything but its five endpoints: these are served on the local listener only.
+# Nor anything but its four endpoints: these are served on the local listener only.
 for path in /healthz /resume/00000000-0000-0000-0000-000000000000/status; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
-  [ "$code" = 404 ] || die "http://127.0.0.1:$port$path answered $code, want 404: the public port serves only its five endpoints"
+  [ "$code" = 404 ] || die "http://127.0.0.1:$port$path answered $code, want 404: the public port serves only its four endpoints"
 done
 for path in /docs /viewer; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$docs_port$path" || true)

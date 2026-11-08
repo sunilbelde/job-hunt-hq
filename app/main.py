@@ -87,8 +87,7 @@ BODY_MODELS = (ApplicationRow, ApplicationUpdate, EmailStatusRequest, ResumeRequ
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
-Only `GET /health`, `POST /application`, `POST /application/email-status`, `POST /resume` and
-`POST /cover-letter` are served on the public address (the one Tailscale Funnel publishes); every other operation here is served only on the Mac's local
+Only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public address (the one Tailscale Funnel publishes); every other operation here is served only on the Mac's local
 listener, `http://127.0.0.1:8081`, and answers 404 on the public address.
 
 Every endpoint except the health checks and the viewer's endpoints needs the `X-API-Key` header. Every error is a JSON object
@@ -481,14 +480,15 @@ def create_app(
             content={"ok": True, "application_id": application_id},
         )
 
-    # A fixed path, so the public listener's exact-match allowlist can publish it for the owner's n8n workflow.
+    # Local-only on the installed service: its caller, the owner's Hermes email workflow, runs on the Mac.
     @app.post(
         "/application/email-status",
         tags=["applications"],
         summary="Update an application's status from a job email",
         description=(
-            "For an email classifier such as n8n, which knows the company and role an email is about but not the "
-            "application ID. Served on the public address.\n\n"
+            "For a local email workflow such as Hermes on the Mac, which knows the company and role an email is "
+            "about but not the application ID. Served only on the local listener on the Mac; the public address "
+            "answers 404.\n\n"
             "Finds the application: a `job_link` that identifies a recorded posting decides on its own; otherwise "
             "the company and role must both match. Names are compared ignoring case, accents, punctuation and "
             "spacing, `&` reads as `and`, company suffixes such as Inc or LLC are dropped, and `Sr`/`Jr` read as "
