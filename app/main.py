@@ -33,6 +33,10 @@ from app.models import (
     ApplyFromLinkStarted,
     CoverLetterJobStatus,
     CoverLetterRequest,
+    EmailStatusAmbiguous,
+    EmailStatusNoMatch,
+    EmailStatusRequest,
+    EmailStatusUpdated,
     ErrorResponse,
     FillFormStarted,
     GenerationAccepted,
@@ -78,13 +82,13 @@ api_key_header = APIKeyHeader(
 )
 
 # Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
-BODY_MODELS = (ApplicationRow, ApplicationUpdate, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate,
+BODY_MODELS = (ApplicationRow, ApplicationUpdate, EmailStatusRequest, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate,
                ApplyFromLinkRequest)
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
-Only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public
-address (the one Tailscale Funnel publishes); every other operation here is served only on the Mac's local
+Only `GET /health`, `POST /application`, `POST /application/email-status`, `POST /resume` and
+`POST /cover-letter` are served on the public address (the one Tailscale Funnel publishes); every other operation here is served only on the Mac's local
 listener, `http://127.0.0.1:8081`, and answers 404 on the public address.
 
 Every endpoint except the health checks and the viewer's endpoints needs the `X-API-Key` header. Every error is a JSON object
@@ -476,6 +480,66 @@ def create_app(
             status_code=201 if created else 200,
             content={"ok": True, "application_id": application_id},
         )
+
+    # A fixed path, so the public listener's exact-match allowlist can publish it for the owner's n8n workflow.
+    @app.post(
+        "/application/email-status",
+        tags=["applications"],
+        summary="Update an application's status from a job email",
+        description=(
+            "For an email classifier such as n8n, which knows the company and role an email is about but not the "
+            "application ID. Served on the public address.\n\n"
+            "Finds the application: a `job_link` that identifies a recorded posting decides on its own; otherwise "
+            "the company and role must both match. Names are compared ignoring case, accents, punctuation and "
+            "spacing, `&` reads as `and`, company suffixes such as Inc or LLC are dropped, and `Sr`/`Jr` read as "
+            "`Senior`/`Junior`. Exact matches win; a name at least 90% similar counts only when none is exact.\n\n"
+            "Then maps the email's `status` (letter case ignored):\n"
+            "- `Applied` changes nothing: it only confirms, returning the current status.\n"
+            "- `Rejected` sets `rejected`, except on a `withdrawn` application.\n"
+            "- `Response` sets `interviewing`, only from `verified` or `applied`.\n\n"
+            "Statuses never move backwards, so a repeated or late email is harmless; `changed` says whether this "
+            "one wrote anything. Only `status` (and `updated_at`) is ever written.\n\n"
+            "No match gets 404 (`reason` `no_match`) and several matches get 409 (`reason` `ambiguous`, with "
+            "`match_count` but no IDs); both leave every application unchanged. `received_at` and `note` are "
+            "accepted but never stored or logged."
+        ),
+        responses={
+            200: {"model": EmailStatusUpdated, "description": "Exactly one application matched."},
+            404: {"model": EmailStatusNoMatch, "description": "No application matches. Nothing changed."},
+            409: {"model": EmailStatusAmbiguous, "description": "Several applications match. Nothing changed."},
+            **errors(401, 422, 503),
+        },
+        openapi_extra=json_body(EmailStatusRequest, "What the email says, and which application it is about."),
+    )
+    async def email_status(request: Request, x_api_key: str | None = Security(api_key_header)):
+        if not api_key_valid(x_api_key):
+            return application_error(401, "Invalid or missing API key")
+        try:
+            payload = await request.json()
+        except ValueError:
+            return application_error(422, "Request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return application_error(422, "Request body must be a JSON object")
+        try:
+            email = EmailStatusRequest.model_validate(payload)
+        except ValidationError as exc:
+            return application_error(422, validation_message(exc))
+
+        try:
+            result = await run_in_threadpool(
+                applications.apply_email_status, email.company, email.role, email.job_link, email.status)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if result.match_count == 0:
+            return JSONResponse(status_code=404, content={
+                "ok": False, "reason": "no_match", "message": "No application matches this company and role"})
+        if result.match_count > 1:
+            return JSONResponse(status_code=409, content={
+                "ok": False, "reason": "ambiguous", "match_count": result.match_count,
+                "message": "Several applications match this company and role; send job_link to pick one"})
+        request.state.application_id = result.application_id
+        return {"ok": True, "application_id": result.application_id, "company": result.company, "role": result.role,
+                "previous_status": result.previous_status, "status": result.status, "changed": result.changed}
 
     async def read_update(request: Request) -> tuple[dict | None, str | None]:
         """The fields to write, or a 422 message naming what is wrong with the body."""

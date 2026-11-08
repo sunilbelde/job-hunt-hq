@@ -26,6 +26,15 @@ APPLICATION_EXAMPLE = {
 }
 UPDATE_EXAMPLE = {"status": "applied"}
 APPLY_LINK_EXAMPLE = {"link": "https://jobs.ashbyhq.com/acme/3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
+# The summary the owner's n8n workflow builds from a job email.
+EMAIL_STATUS_EXAMPLE = {
+    "company": "Ramp",
+    "role": "Applied AI Engineer",
+    "status": "Rejected",
+    "received_at": "Nov 7, 2026 9:21 PM",
+    "note": "Ramp thanks you for applying and has decided to move forward with other candidates.",
+}
+EmailStatus = Literal["Applied", "Rejected", "Response"]
 RESUME_EXAMPLE = {"application_id": "3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
 
 # Fixed once recorded: job_link is the dedupe key, and the rest are its verification record and origin.
@@ -138,6 +147,35 @@ class ViewerStatusUpdate(BaseModel):
     status: ApplicationStatus
 
 
+class EmailStatusRequest(BaseModel):
+    """What a job email says about an application. The service finds the application from company, role and,
+    when given, job_link; received_at and note are accepted for the client's convenience and never stored."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [EMAIL_STATUS_EXAMPLE]})
+
+    company: StrictStr = Field(min_length=1, description="The employer named in the email.")
+    role: StrictStr = Field(min_length=1, description="The job title named in the email.")
+    status: EmailStatus = Field(description="What the email says: `Applied` (a receipt), `Rejected`, or "
+                                            "`Response` (a reply from the employer). Letter case is ignored.")
+    job_link: StrictStr | None = Field(default=None, description="The posting's link, when the email has one. "
+                                                                 "A link that identifies a recorded posting "
+                                                                 "decides the match on its own.")
+    received_at: StrictStr | None = Field(default=None, description="When the email arrived. Not stored.")
+    note: StrictStr | None = Field(default=None, description="A one-line summary of the email. Not stored.")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_any_case(cls, value: Any) -> Any:
+        return value.strip().title() if isinstance(value, str) else value
+
+    @field_validator("company", "role")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
 def is_web_link(value: str) -> bool:
     """An http(s) URL with a host, no credentials and nothing that could split it into more than one word."""
     if any(c.isspace() or unicodedata.category(c)[0] == "C" for c in value):
@@ -228,6 +266,29 @@ class ApplicationUpdated(BaseModel):
     ok: Literal[True] = True
     application_id: str
     status: ApplicationStatus
+
+
+class EmailStatusUpdated(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    company: str = Field(description="The matched application's company, as stored.")
+    role: str = Field(description="The matched application's role, as stored.")
+    previous_status: ApplicationStatus
+    status: ApplicationStatus = Field(description="The application's status after this email.")
+    changed: bool = Field(description="Whether this email changed the status.")
+
+
+class EmailStatusNoMatch(BaseModel):
+    ok: Literal[False] = False
+    message: str
+    reason: Literal["no_match"] = "no_match"
+
+
+class EmailStatusAmbiguous(BaseModel):
+    ok: Literal[False] = False
+    message: str
+    reason: Literal["ambiguous"] = "ambiguous"
+    match_count: int = Field(description="How many applications match; their IDs are not returned.")
 
 
 class FillFormStarted(BaseModel):

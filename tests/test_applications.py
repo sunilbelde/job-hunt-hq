@@ -8,7 +8,10 @@ from contextlib import closing
 
 import pytest
 
-from app.applications import FIELDS, INTERRUPTED, NO_JOB, ApplicationStore, ApplicationStoreError, dedupe_key
+from app.applications import (
+    FIELDS, INTERRUPTED, NO_JOB, ApplicationStore, ApplicationStoreError, dedupe_key, email_status_target,
+    match_applications, normalize_name,
+)
 from app.storage import StorageError
 
 GH = "https://job-boards.greenhouse.io/acme/jobs/123"
@@ -848,3 +851,207 @@ def test_store_from_before_statuses_reads_as_manual(old_store_path):
 def test_store_with_integer_ids_reads_as_manual(int_store_path):
     ids = ApplicationStore(int_store_path).legacy_ids()
     assert ids and all(origin(int_store_path, application_id) == "manual" for application_id in ids.values())
+
+
+# --- Email status matching and updates ---
+
+def candidate(company, role, job_link=GH, application_id=None):
+    return {"id": application_id or str(uuid.uuid4()), "job_link_key": dedupe_key(job_link),
+            "company": company, "role": role}
+
+
+@pytest.mark.parametrize(("stored_name", "sent", "kind"), [
+    ("Ramp Business Corporation, Inc.", "ramp business corporation", "company"),
+    ("The Acme Company", "ACME", "company"),
+    ("Café & Co. GmbH", "cafe and co", "company"),
+    ("Sr. Software Engineer - Payments", "Senior Software Engineer, Payments", "role"),
+    ("Jr  Data   Analyst", "junior data analyst", "role"),
+])
+def test_names_equal_after_normalization(stored_name, sent, kind):
+    assert normalize_name(stored_name, kind) == normalize_name(sent, kind)
+
+
+def test_suffix_alone_is_kept():
+    assert normalize_name("Co", "company") == "co"
+    assert normalize_name("The", "company") == "the"
+
+
+def test_company_suffix_and_case_match():
+    rows = [candidate("Ramp Business Corporation, Inc.", "Applied AI Engineer")]
+    assert match_applications(rows, "ramp business corporation", "Applied AI Engineer", None) == rows
+
+
+def test_role_punctuation_and_abbreviation_match():
+    rows = [candidate("Acme", "Sr. Software Engineer - Payments")]
+    assert match_applications(rows, "Acme", "Senior Software Engineer, Payments", None) == rows
+
+
+def test_small_typo_matches():
+    rows = [candidate("Ramp", "Applied AI Engineer")]
+    assert match_applications(rows, "Ramp", "Applied AI Enginer", None) == rows
+    databricks = [candidate("Databricks", "Applied AI Engineer")]
+    assert match_applications(databricks, "Databrick", "Applied AI Engineer", None) == databricks
+
+
+def test_short_name_typo_is_not_close_enough():
+    rows = [candidate("Ramp", "Applied AI Engineer")]
+    assert match_applications(rows, "Rammp", "Applied AI Engineer", None) == []
+
+
+def test_different_role_at_same_company_does_not_match():
+    rows = [candidate("Ramp", "Product Designer")]
+    assert match_applications(rows, "Ramp", "Applied AI Engineer", None) == []
+
+
+def test_different_company_does_not_match():
+    rows = [candidate("Ramp", "Applied AI Engineer")]
+    assert match_applications(rows, "Brex", "Applied AI Engineer", None) == []
+
+
+def test_link_decides_between_equal_names():
+    first = candidate("Ramp", "Applied AI Engineer", GH)
+    second = candidate("Ramp", "Applied AI Engineer", "https://job-boards.greenhouse.io/acme/jobs/456")
+    assert match_applications([first, second], "Ramp", "Applied AI Engineer", GH + "/?utm_source=x") == [first]
+
+
+def test_link_decides_even_against_names():
+    linked = candidate("Ramp", "Applied AI Engineer", GH)
+    assert match_applications([linked], "Someone Else", "Other Role", GH) == [linked]
+
+
+def test_unknown_link_falls_back_to_names():
+    rows = [candidate("Ramp", "Applied AI Engineer", GH)]
+    assert match_applications(rows, "Ramp", "Applied AI Engineer", "https://example.com/other") == rows
+
+
+def test_exact_match_beats_near_match():
+    exact = candidate("Ramp", "Applied AI Engineer")
+    near = candidate("Ramp", "Applied AI Engineers", "https://job-boards.greenhouse.io/acme/jobs/456")
+    assert match_applications([exact, near], "Ramp", "Applied AI Engineer", None) == [exact]
+
+
+def test_equal_names_are_all_returned():
+    first = candidate("Ramp", "Applied AI Engineer", GH)
+    second = candidate("Ramp", "Applied AI Engineer", "https://job-boards.greenhouse.io/acme/jobs/456")
+    assert len(match_applications([first, second], "Ramp", "Applied AI Engineer", None)) == 2
+
+
+def test_punctuation_only_name_matches_nothing():
+    rows = [candidate("Ramp", "Applied AI Engineer")]
+    assert match_applications(rows, "!!!", "Applied AI Engineer", None) == []
+
+
+STATUSES = ("verified", "applied", "interviewing", "offer", "rejected", "withdrawn")
+TRANSITIONS = {
+    "Applied": dict(zip(STATUSES, STATUSES)),
+    "Rejected": {"verified": "rejected", "applied": "rejected", "interviewing": "rejected", "offer": "rejected",
+                 "rejected": "rejected", "withdrawn": "withdrawn"},
+    "Response": {"verified": "interviewing", "applied": "interviewing", "interviewing": "interviewing",
+                 "offer": "offer", "rejected": "rejected", "withdrawn": "withdrawn"},
+}
+
+
+@pytest.mark.parametrize("email_status", sorted(TRANSITIONS))
+@pytest.mark.parametrize("current", STATUSES)
+def test_email_status_transitions(current, email_status):
+    assert email_status_target(current, email_status) == TRANSITIONS[email_status][current]
+
+
+def test_email_status_updates_only_status(store, db_path):
+    application_id, _ = store.record(row(company="Ramp", role="Applied AI Engineer", salary="$1"))
+    before = stored(db_path, application_id)
+    result = store.apply_email_status("ramp", "applied ai engineer", None, "Response")
+    assert result.match_count == 1 and result.application_id == application_id
+    assert (result.company, result.role) == ("Ramp", "Applied AI Engineer")
+    assert (result.previous_status, result.status, result.changed) == ("verified", "interviewing", True)
+    after = stored(db_path, application_id)
+    assert after["status"] == "interviewing" and after["updated_at"]
+    assert {k: v for k, v in after.items() if k not in ("status", "updated_at")} == \
+        {k: v for k, v in before.items() if k not in ("status", "updated_at")}
+
+
+def test_unchanged_status_keeps_updated_at(store, db_path):
+    application_id, _ = store.record(row())
+    store.update(application_id, {"status": "applied"})
+    before = stored(db_path, application_id)
+    result = store.apply_email_status("Acme", "Engineer", None, "Applied")
+    assert (result.previous_status, result.status, result.changed) == ("applied", "applied", False)
+    assert stored(db_path, application_id) == before
+
+
+def test_repeated_rejection_changes_once(store):
+    store.record(row())
+    assert store.apply_email_status("Acme", "Engineer", None, "Rejected").changed is True
+    second = store.apply_email_status("Acme", "Engineer", None, "Rejected")
+    assert (second.status, second.changed) == ("rejected", False)
+
+
+def test_no_match_writes_nothing(store, db_path):
+    application_id, _ = store.record(row())
+    before = stored(db_path, application_id)
+    result = store.apply_email_status("Brex", "Engineer", None, "Rejected")
+    assert result.match_count == 0 and result.application_id is None
+    assert stored(db_path, application_id) == before
+
+
+def test_ambiguous_match_writes_nothing(store, db_path):
+    first, _ = store.record(row())
+    second, _ = store.record(row(job_link="https://job-boards.greenhouse.io/acme/jobs/456"))
+    before = (stored(db_path, first), stored(db_path, second))
+    result = store.apply_email_status("Acme", "Engineer", None, "Rejected")
+    assert result.match_count == 2 and result.application_id is None
+    assert (stored(db_path, first), stored(db_path, second)) == before
+
+
+def test_link_resolves_ambiguity_in_store(store):
+    store.record(row())
+    second, _ = store.record(row(job_link="https://job-boards.greenhouse.io/acme/jobs/456"))
+    result = store.apply_email_status("Acme", "Engineer", "https://job-boards.greenhouse.io/acme/jobs/456/", "Rejected")
+    assert result.application_id == second and result.status == "rejected"
+
+
+def test_unknown_email_status_refused(store):
+    with pytest.raises(ValueError):
+        store.apply_email_status("Acme", "Engineer", None, "Offer")
+
+
+@pytest.mark.parametrize("first", ["Rejected", "Response"])
+def test_concurrent_emails_end_rejected(store, db_path, first):
+    application_id, _ = store.record(row())
+    store.update(application_id, {"status": "applied"})
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def worker(email_status):
+        try:
+            barrier.wait()
+            store.apply_email_status("Acme", "Engineer", None, email_status)
+        except Exception as exc:  # surfaced below
+            errors.append(exc)
+
+    order = [first, "Response" if first == "Rejected" else "Rejected"]
+    threads = [threading.Thread(target=worker, args=(s,)) for s in order]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert errors == []
+    assert stored(db_path, application_id)["status"] == "rejected"
+
+
+def test_email_status_read_failure_raises_store_error(store, db_path):
+    db_path.unlink()
+    db_path.mkdir()
+    with pytest.raises(ApplicationStoreError):
+        store.apply_email_status("Acme", "Engineer", None, "Rejected")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+def test_email_status_write_failure_raises_store_error(store, db_path):
+    store.record(row())
+    db_path.chmod(0o400)
+    try:
+        with pytest.raises(ApplicationStoreError):
+            store.apply_email_status("Acme", "Engineer", None, "Rejected")
+    finally:
+        db_path.chmod(0o600)

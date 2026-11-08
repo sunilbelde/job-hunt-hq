@@ -1,8 +1,12 @@
+import difflib
 import json
 import os
+import re
 import sqlite3
+import unicodedata
 import uuid
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -153,6 +157,80 @@ def dedupe_key(link: str) -> str:
     return urlunsplit((scheme, userinfo + at + hostport, parts.path.rstrip("/"), query, ""))
 
 
+# Email-driven status updates (POST /application/email-status). Names from an email rarely match the
+# stored ones byte for byte, so both sides are normalized first; a fuzzy match is only a fallback.
+COMPANY_SUFFIXES = frozenset({"inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation", "co",
+                              "company", "plc", "gmbh", "ag", "sa", "bv", "pbc"})
+ROLE_ABBREVIATIONS = {"sr": "senior", "jr": "junior"}
+SIMILARITY_THRESHOLD = 0.9
+NON_ALPHANUMERIC = re.compile(r"[^0-9a-z]+")
+
+
+def normalize_name(value: str, kind: str) -> str:
+    """A company ("company") or role ("role") name reduced to what matters for comparison."""
+    text = "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))
+    text = text.casefold().replace("&", " and ")
+    tokens = NON_ALPHANUMERIC.sub(" ", text).split()
+    if kind == "company":
+        if len(tokens) > 1 and tokens[0] == "the":
+            tokens = tokens[1:]
+        while len(tokens) > 1 and tokens[-1] in COMPANY_SUFFIXES:
+            tokens = tokens[:-1]
+    else:
+        tokens = [ROLE_ABBREVIATIONS.get(token, token) for token in tokens]
+    return " ".join(tokens)
+
+
+def _tier(rows: list[dict], field: str, wanted: str) -> list[dict]:
+    """The rows whose normalized field equals wanted; failing that, those at least 90% similar."""
+    if not wanted:
+        return []
+    names = [(row, normalize_name(row[field] or "", field)) for row in rows]
+    exact = [row for row, name in names if name == wanted]
+    if exact:
+        return exact
+    return [row for row, name in names
+            if name and difflib.SequenceMatcher(None, name, wanted).ratio() >= SIMILARITY_THRESHOLD]
+
+
+def match_applications(rows: list[dict], company: str, role: str, job_link: str | None) -> list[dict]:
+    """The applications an email names. Each row needs id, job_link_key, company and role. A job_link that
+    identifies a stored posting decides alone; otherwise company and role must both match."""
+    if job_link:
+        key = dedupe_key(job_link)
+        linked = [row for row in rows if row["job_link_key"] == key]
+        if linked:
+            return linked
+    by_company = _tier(rows, "company", normalize_name(company, "company"))
+    return _tier(by_company, "role", normalize_name(role, "role"))
+
+
+EMAIL_STATUSES = ("Applied", "Rejected", "Response")
+
+
+def email_status_target(current: str, email_status: str) -> str:
+    """The status an email moves an application to. Never backwards: Applied only confirms, Response
+    advances only an application not yet past applied, and withdrawn stays withdrawn."""
+    if email_status == "Rejected" and current != "withdrawn":
+        return "rejected"
+    if email_status == "Response" and current in ("verified", "applied"):
+        return "interviewing"
+    return current
+
+
+@dataclass(frozen=True)
+class EmailStatusResult:
+    """What apply_email_status did: matched none, several (match_count), or exactly one (the rest)."""
+
+    match_count: int
+    application_id: str | None = None
+    company: str | None = None
+    role: str | None = None
+    previous_status: str | None = None
+    status: str | None = None
+    changed: bool = False
+
+
 class ApplicationStore:
     """Verified job applications in a SQLite file, one row per job_link dedupe key."""
 
@@ -290,6 +368,39 @@ class ApplicationStore:
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
         return result[0] if result else None
+
+    def apply_email_status(self, company: str, role: str, job_link: str | None,
+                           email_status: str) -> EmailStatusResult:
+        """Find the one application an email names and move its status. The write lock is taken before the
+        read, so nothing can change the row between the match and the update. Nothing is written unless
+        exactly one application matches and its status changes."""
+        if email_status not in EMAIL_STATUSES:
+            raise ValueError("unknown email status")
+        try:
+            with closing(sqlite3.connect(self._path, timeout=5, isolation_level=None)) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    columns = ("id", "job_link_key", "company", "role", "status")
+                    rows = [dict(zip(columns, row)) for row in
+                            conn.execute(f"SELECT {', '.join(columns)} FROM applications")]
+                    matches = match_applications(rows, company, role, job_link)
+                    if len(matches) != 1:
+                        conn.execute("ROLLBACK")
+                        return EmailStatusResult(match_count=len(matches))
+                    row = matches[0]
+                    target = email_status_target(row["status"], email_status)
+                    if target != row["status"]:
+                        conn.execute("UPDATE applications SET status = ?, updated_at = ? WHERE id = ?",
+                                     (target, utc_now(), row["id"]))
+                    conn.execute("COMMIT")
+                except BaseException:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return EmailStatusResult(match_count=1, application_id=row["id"], company=row["company"], role=row["role"],
+                                 previous_status=row["status"], status=target, changed=target != row["status"])
 
     def delete(self, application_id: str) -> bool:
         """Remove the row for good, freeing its job_link. Returns whether a row was removed."""

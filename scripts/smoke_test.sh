@@ -1,6 +1,6 @@
 #!/bin/sh
 # Smoke test: check that the public address serves no API docs, no resume viewer and nothing but its
-# four endpoints, and that the local docs listener serves the docs, the viewer and the full API,
+# five endpoints (the email status one answering no_match for a company no application has), and that the local docs listener serves the docs, the viewer and the full API,
 # then record a synthetic application on the public address, start its resume there, poll the resume
 # job's status on the local listener until it is done, and check that the file it names (a bare file name, never a host path) is a PDF in the
 # application's folder under OUTPUT_DIR. The application has no posting text, so the
@@ -73,21 +73,33 @@ for path in /docs /openapi.json /viewer; do
   fi
 done
 
-# Nor anything but GET /health and the three POSTs: the rest is served on the local listener only.
+# Nor anything but GET /health and the four POSTs: the rest is served on the local listener only.
 # The keyed PATCH and DELETE use the all-zero ID and the viewer's POST an empty body, so even a service that
 # wrongly serves them changes nothing.
-for probe in "GET /healthz" "GET /resume/$zero/status" "GET /cover-letter/$zero/status" \
+for probe in "GET /healthz" "GET /applications" "GET /resume/$zero/status" "GET /cover-letter/$zero/status" \
              "PATCH /application/$zero" "DELETE /application/$zero" "POST /viewer/apply-from-link"; do
   method=${probe% *}; path=${probe#* }
   status=$(curl -sS -o /dev/null -w '%{http_code}' -X "$method" "$base$path" -H "X-API-Key: $API_KEY" \
     -H 'Content-Type: application/json' -d '{}')
   if [ "$status" != "404" ]; then
-    echo "FAIL: $method $path returned $status, want 404 (the public address serves only its four endpoints)" >&2
+    echo "FAIL: $method $path returned $status, want 404 (the public address serves only its five endpoints)" >&2
     exit 1
   fi
 done
 
-# The local docs listener serves the reference, the viewer and a schema with the twenty-one operations.
+# The email status endpoint is public. An Applied email never writes, and this company matches no application,
+# so the probe changes nothing even on a store full of real rows.
+resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/application/email-status" -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"company":"job-hunt-hq smoke test no such company","role":"No Such Role","status":"Applied"}' || true)
+status=$(printf '%s\n' "$resp" | tail -n 1)
+reason=$(printf '%s\n' "$resp" | sed '$d' | json_field reason 2>/dev/null || true)
+if [ "$status" != "404" ] || [ "$reason" != "no_match" ]; then
+  echo "FAIL: POST /application/email-status returned $status (reason ${reason:-none}), want 404 no_match" >&2
+  exit 1
+fi
+
+# The local docs listener serves the reference, the viewer and a schema with the twenty-two operations.
 for path in /docs /viewer; do
   status=$(curl -sS -o /dev/null -w '%{http_code}' "$docs$path" || true)
   if [ "$status" != "200" ]; then
@@ -100,8 +112,8 @@ status=$(printf '%s\n' "$resp" | tail -n 1)
 count=$(printf '%s\n' "$resp" | sed '$d' | python3 -c 'import json,sys
 methods = {"get", "put", "post", "delete", "patch", "head", "options", "trace"}
 print(sum(m in methods for ops in json.load(sys.stdin)["paths"].values() for m in ops))' 2>/dev/null || true)
-if [ "$status" != "200" ] || [ "$count" != "21" ]; then
-  echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 21" >&2
+if [ "$status" != "200" ] || [ "$count" != "22" ]; then
+  echo "FAIL: GET $docs/openapi.json returned $status with ${count:-no} operations, want 200 with 22" >&2
   exit 1
 fi
 

@@ -189,7 +189,7 @@ check "install fails when the public port serves the viewer" '[ $rc -ne 0 ] && g
 make_repo
 run install_service.sh STUB_PUBLIC_HEALTHZ=200; rc=$?
 check "install fails when the public port serves /healthz" \
-  '[ $rc -ne 0 ] && grep -q "127.0.0.1:8080/healthz answered 200" "$tmp/out" && grep -q "serves only its four endpoints" "$tmp/out"'
+  '[ $rc -ne 0 ] && grep -q "127.0.0.1:8080/healthz answered 200" "$tmp/out" && grep -q "serves only its five endpoints" "$tmp/out"'
 
 make_repo
 run install_service.sh STUB_PUBLIC_STATUS=401; rc=$?
