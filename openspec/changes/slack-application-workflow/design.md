@@ -80,7 +80,7 @@ A batch with `kind: approval` covers the Step 7 "agree and submit" question and 
 1. It calls `conversations.replies` for the thread and finds that `ts`.
 2. The message's `user` is `SLACK_OWNER_USER_ID`.
 3. The message is newer than the batch's posted `slack_ts`.
-4. The message's text, lowercased and trimmed, starts with `yes` or `approve`, or names the option label of the approving answer.
+4. The message's text, lowercased and trimmed, starts with `yes`, `approve` or `submit`, or names the option label of the approving answer. A declining answer (a label starting with "No") needs only checks 1 to 3: refusing never needs proof.
 
 If any check fails, the service returns 422 `approval_not_verified` and the batch stays pending. As a result, Hermes, or text injected into a form page, cannot submit an application without a real owner message saying so. The non-approval questions are trusted from Hermes, as they would be from the terminal today.
 

@@ -500,3 +500,153 @@ class ApplicationDetail(BaseModel):
         description="The latest generation report, or null when none is stored (never generated, or generated "
         "before reports existed)."
     )
+
+
+# ---------------------------------------------------------------- the Slack workflow
+
+SlackErrorReason = Literal["slack_not_configured", "no_thread", "resume_not_ready", "slack_error", "not_pending",
+                           "approval_not_verified", "answer_count"]
+
+FILL_FROM_SLACK_EXAMPLE = {"mode": "slack"}
+QUESTION_BATCH_EXAMPLE = {
+    "questions": [
+        {"question": "Ramp form: years of professional Python experience?", "header": "Python yrs",
+         "options": [{"label": "5+", "description": "from your resume"}, {"label": "3-5"}],
+         "multi_select": False, "kind": "normal"},
+    ]
+}
+ANSWERS_EXAMPLE = {"answers": [["5+"]], "slack_message_ts": "1762570000.123456"}
+SLACK_UPDATE_EXAMPLE = {"text": "Filled page 1 of 3: contact details and work authorization."}
+
+
+class SlackErrorResponse(BaseModel):
+    ok: Literal[False] = False
+    message: str
+    reason: SlackErrorReason
+
+
+class SlackReportPosted(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    thread_ts: str = Field(description="The Slack `ts` of the report that starts the application's thread.")
+    already_posted: bool = Field(description="True when the report had been posted before; nothing was posted now.")
+
+
+class FillFromSlackRequest(BaseModel):
+    """Starts the form filler in Slack mode. The body may be empty."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [FILL_FROM_SLACK_EXAMPLE]})
+
+    mode: Literal["slack"] = Field(default="slack", description="Always `slack`: questions go to the thread.")
+
+
+class QuestionOption(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    label: StrictStr = Field(min_length=1, max_length=200)
+    description: StrictStr | None = Field(default=None, max_length=500)
+
+
+class Question(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    question: StrictStr = Field(min_length=1, max_length=1000, description="Names the form field and company.")
+    header: StrictStr = Field(min_length=1, max_length=12, description="A short label for the field.")
+    options: list[QuestionOption] = Field(min_length=2, max_length=4)
+    multi_select: bool = False
+    kind: Literal["normal", "approval"] = Field(
+        default="normal", description="`approval` for agree-and-submit and mark-applied questions: their answer "
+                                      "is accepted only after the owner's own Slack reply is read back.")
+
+    @field_validator("question", "header")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class QuestionBatchRequest(BaseModel):
+    """What the Slack-mode form filler would have passed to AskUserQuestion."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [QUESTION_BATCH_EXAMPLE]})
+
+    questions: list[Question] = Field(min_length=1, max_length=4)
+
+
+class QuestionBatchCreated(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    question_id: str
+
+
+class QuestionBatchState(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    question_id: str
+    status: Literal["pending", "answered", "cancelled"]
+    questions: list[Question]
+    answers: list[list[str]] | None = Field(description="Per question, the chosen labels or free-text answers. "
+                                                        "Set once answered.")
+    created_at: str
+    answered_at: str | None
+
+
+class PendingQuestions(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    pending: QuestionBatchState | None = Field(description="The pending batch, or null when nothing is waiting.")
+
+
+class AnswersRequest(BaseModel):
+    """The owner's answers, as Hermes read them from the thread."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [ANSWERS_EXAMPLE]})
+
+    answers: list[list[StrictStr]] = Field(min_length=1, max_length=4, description=(
+        "One entry per question, in order: the chosen option labels, or the owner's own words."))
+    slack_message_ts: StrictStr | None = Field(default=None, description=(
+        "The `ts` of the owner's reply these answers come from. Required for a batch with an `approval` question."))
+
+    @field_validator("answers")
+    @classmethod
+    def _each_answered(cls, value: list[list[str]]) -> list[list[str]]:
+        for entry in value:
+            if not entry or not all(item.strip() for item in entry):
+                raise ValueError("every question needs a non-blank answer")
+            if any(len(item) > 2000 for item in entry):
+                raise ValueError("answers are at most 2000 characters")
+        return value
+
+
+class AnswersRecorded(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    question_id: str
+    status: Literal["answered"] = "answered"
+
+
+class QuestionsCancelled(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    question_id: str
+    status: Literal["cancelled"] = "cancelled"
+
+
+class SlackUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [SLACK_UPDATE_EXAMPLE]})
+
+    text: StrictStr = Field(min_length=1, max_length=20000, description="Slack mrkdwn; split at 3,500 characters.")
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class SlackUpdatePosted(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    messages: int = Field(description="How many Slack messages the text was split into.")

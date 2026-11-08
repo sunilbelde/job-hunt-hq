@@ -3,7 +3,8 @@
 Fill form opens a tab in the Herdr workspace named by FILL_WORKSPACE (created if missing), labelled
 "<Company>-<Role>-<application id>", in the repo, and runs `claude --chrome "/job-application-form-filler <id>"`
 there as an ordinary interactive session: the owner watches it, approves its permissions and answers its
-questions. Its only variable part is the application ID, which the caller has already parsed as a UUID.
+questions. Its only variable part is the application ID, which the caller has already parsed as a UUID. Started
+from Slack, the skill gets the fixed extra argument `slack` and asks its questions in the application's thread.
 
 The link box opens one the same way, labelled "ByLink-<host>-<hash>", running `claude --chrome
 "/apply-from-link <link>"`. The link is the one thing typed on a page that reaches a command: the caller has
@@ -71,8 +72,15 @@ def tab_label(company: str, role: str, application_id: str) -> str:
     return "-".join(part for part in (label_part(company), label_part(role), application_id) if part)
 
 
-def fill_command(claude_bin: str, application_id: str) -> str:
-    return f"{shlex.quote(claude_bin)} --chrome {shlex.quote(f'/{SKILL} {application_id}')}"
+# The only extra skill argument a fill can get: Slack mode, started from the application's Slack thread.
+FILL_MODES = (None, "slack")
+
+
+def fill_command(claude_bin: str, application_id: str, mode: str | None = None) -> str:
+    if mode not in FILL_MODES:
+        raise ValueError("unknown fill mode")
+    arguments = f"/{SKILL} {application_id}" + (f" {mode}" if mode else "")
+    return f"{shlex.quote(claude_bin)} --chrome {shlex.quote(arguments)}"
 
 
 def link_hash(link: str) -> str:
@@ -114,8 +122,8 @@ class FormFillLauncher:
                             "--no-focus")
         return created["workspace"]["workspace_id"], created
 
-    def start(self, company: str, role: str, application_id: str) -> FillStarted:
-        command = fill_command(self.claude_bin, application_id)
+    def start(self, company: str, role: str, application_id: str, mode: str | None = None) -> FillStarted:
+        command = fill_command(self.claude_bin, application_id, mode)
         return self.open_tab(tab_label(company, role, application_id), application_id, command)
 
     def start_link(self, link: str) -> FillStarted:

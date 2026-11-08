@@ -79,3 +79,27 @@ def test_questions_only_in_review_mode():
     step = section("Step 7")
     assert "Default mode: Step 5 submits and confirms" in step
     assert "review mode" in step
+
+
+def slack_mode() -> str:
+    start = TEXT.index("## Slack mode")
+    return TEXT[start:TEXT.index("## Step 1", start)]
+
+
+def test_slack_mode_asks_through_the_relay_not_ask_user_question():
+    mode = slack_mode()
+    assert "Questions go to the thread, never to AskUserQuestion" in mode
+    assert "python3 scripts/ask_slack.py post <id> -" in mode and 'python3 scripts/ask_slack.py wait <id> "$QID"' in mode
+    assert "Exit code 3 means no answer yet: run the same `wait` again" in mode
+
+
+def test_slack_mode_marks_approvals_and_keeps_every_other_rule():
+    mode = slack_mode()
+    assert '`"kind": "approval"`' in mode and "agree and submit" in mode and "mark it applied anyway" in mode
+    assert "Everything in this skill applies unchanged" in mode
+
+
+def test_slack_mode_posts_reports_and_cancels_on_takeover():
+    mode = slack_mode()
+    assert "/application/<id>/slack-update" in mode
+    assert 'python3 scripts/ask_slack.py cancel <id> "$QID"' in mode

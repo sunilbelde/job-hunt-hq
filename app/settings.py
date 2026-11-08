@@ -28,13 +28,31 @@ class Settings(BaseSettings):
     fill_workspace: str = Field(default="Claude-Jobs-Automation", min_length=1)
     # Serves /docs, /redoc and /openapi.json. Local development only: the launchd job pins it off.
     api_docs_enabled: bool = False
+    # Slack workflow: the Hermes app's bot token, the channel ready reports go to, and the owner whose own
+    # messages are the only ones that can approve a submission. Without the token and channel, Slack is off.
+    slack_bot_token: SecretStr | None = None
+    slack_channel_id: str | None = None
+    slack_owner_user_id: str | None = None
+    slack_api_base: str = Field(default="https://slack.com/api", min_length=1)
+
+    @property
+    def slack_enabled(self) -> bool:
+        return self.slack_bot_token is not None and self.slack_channel_id is not None
 
     @field_validator("output_dir")
     @classmethod
     def _expand_user(cls, value: Path) -> Path:
         return value.expanduser()
 
-    @field_validator("anthropic_api_key", "claude_code_oauth_token", mode="before")
+    @field_validator("slack_channel_id", "slack_owner_user_id", mode="before")
+    @classmethod
+    def _blank_id_is_unset(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("anthropic_api_key", "claude_code_oauth_token", "slack_bot_token", mode="before")
     @classmethod
     def _blank_is_unset(cls, value):
         # .env.example ships `ANTHROPIC_API_KEY=`; an empty credential means none.

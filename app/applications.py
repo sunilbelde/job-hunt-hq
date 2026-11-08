@@ -90,6 +90,31 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
     PRIMARY KEY (application_id, kind)
 )
 """
+# The Slack workflow's thread per application. A row with thread_ts NULL is a report being posted right now:
+# claim_slack_report inserts it under the write lock, so two jobs finishing together post one report.
+SLACK_THREADS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS slack_threads (
+    application_id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    thread_ts TEXT,
+    claimed_at TEXT NOT NULL
+)
+"""
+# Question batches from a Slack-mode form filler, answered in the application's thread. `questions` and
+# `answers` are JSON documents. Removed by delete().
+FILL_QUESTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS fill_questions (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL,
+    questions TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'cancelled')),
+    slack_ts TEXT,
+    answers TEXT,
+    approval_message_ts TEXT,
+    created_at TEXT NOT NULL,
+    answered_at TEXT
+)
+"""
 JOB_KINDS = ("resume", "cover_letter")
 INTERRUPTED = "Interrupted by a service restart"
 # get_job's answer for an application that exists but has never had a job of that kind.
@@ -221,6 +246,18 @@ def email_status_target(current: str, email_status: str) -> str:
 
 
 @dataclass(frozen=True)
+class SlackClaim:
+    """What claim_slack_report found: claimed (this caller posts the report), existing (thread_ts set),
+    in_progress (another caller is posting it), not_ready, or not_found."""
+
+    state: str
+    thread_ts: str | None = None
+
+
+QUESTION_STATUSES = ("pending", "answered", "cancelled")
+
+
+@dataclass(frozen=True)
 class EmailStatusResult:
     """What apply_email_status did: matched none, several (match_count), or exactly one (the rest)."""
 
@@ -248,6 +285,8 @@ class ApplicationStore:
                 self._migrate_ids(conn)
                 conn.execute(REPORTS_SCHEMA)
                 conn.execute(JOBS_SCHEMA)
+                conn.execute(SLACK_THREADS_SCHEMA)
+                conn.execute(FILL_QUESTIONS_SCHEMA)
                 conn.execute("BEGIN IMMEDIATE")  # write probe: fails on a read-only store
                 # A job still running belongs to a process that is gone: its thread did not survive.
                 conn.execute(
@@ -422,6 +461,8 @@ class ApplicationStore:
             with closing(self._connect()) as conn, conn:
                 conn.execute("DELETE FROM resume_reports WHERE application_id = ?", (application_id,))
                 conn.execute("DELETE FROM generation_jobs WHERE application_id = ?", (application_id,))
+                conn.execute("DELETE FROM slack_threads WHERE application_id = ?", (application_id,))
+                conn.execute("DELETE FROM fill_questions WHERE application_id = ?", (application_id,))
                 cursor = conn.execute("DELETE FROM applications WHERE id = ?", (application_id,))
         except sqlite3.Error as exc:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
@@ -586,3 +627,164 @@ class ApplicationStore:
             return NO_JOB
         return {"status": status, "started_at": started_at, "finished_at": finished_at, "saved_path": saved_path,
                 "error": error, **(json.loads(result) if result else {})}
+
+    # ------------------------------------------------------------ Slack threads
+
+    def _locked(self):
+        """A connection in autocommit mode, for BEGIN IMMEDIATE blocks."""
+        return closing(sqlite3.connect(self._path, timeout=5, isolation_level=None))
+
+    def claim_slack_report(self, application_id: str, channel: str) -> SlackClaim:
+        """Claim the application's ready report: only when its resume is done, no job of it is running, and it has
+        no thread yet. Decided and claimed under the write lock, so of two jobs finishing at once exactly one
+        claims. The claimer posts, then calls set_slack_thread_ts, or release_slack_claim if posting failed."""
+        try:
+            with self._locked() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if conn.execute("SELECT 1 FROM applications WHERE id = ?", (application_id,)).fetchone() is None:
+                        conn.execute("ROLLBACK")
+                        return SlackClaim("not_found")
+                    thread = conn.execute("SELECT thread_ts FROM slack_threads WHERE application_id = ?",
+                                          (application_id,)).fetchone()
+                    if thread is not None:
+                        conn.execute("ROLLBACK")
+                        return SlackClaim("existing" if thread[0] else "in_progress", thread[0])
+                    jobs = dict(conn.execute("SELECT kind, status FROM generation_jobs WHERE application_id = ?",
+                                             (application_id,)).fetchall())
+                    if jobs.get("resume") != "done" or "running" in jobs.values():
+                        conn.execute("ROLLBACK")
+                        return SlackClaim("not_ready")
+                    conn.execute("INSERT INTO slack_threads (application_id, channel, thread_ts, claimed_at) "
+                                 "VALUES (?, ?, NULL, ?)", (application_id, channel, utc_now()))
+                    conn.execute("COMMIT")
+                except BaseException:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return SlackClaim("claimed")
+
+    def set_slack_thread_ts(self, application_id: str, thread_ts: str) -> None:
+        try:
+            with closing(self._connect()) as conn, conn:
+                conn.execute("UPDATE slack_threads SET thread_ts = ? WHERE application_id = ?",
+                             (thread_ts, application_id))
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+
+    def release_slack_claim(self, application_id: str) -> None:
+        """Drop a claim whose report was never posted, so a later job end can post it."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                conn.execute("DELETE FROM slack_threads WHERE application_id = ? AND thread_ts IS NULL",
+                             (application_id,))
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+
+    def get_slack_thread(self, application_id: str) -> dict | None:
+        """{channel, thread_ts, claimed_at} (thread_ts None while being posted), or None."""
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute("SELECT channel, thread_ts, claimed_at FROM slack_threads WHERE application_id = ?",
+                                   (application_id,)).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return dict(zip(("channel", "thread_ts", "claimed_at"), row)) if row else None
+
+    # ------------------------------------------------------------ question batches
+
+    @staticmethod
+    def _batch(row) -> dict:
+        (qid, application_id, questions, status, slack_ts, answers, approval_ts, created_at, answered_at) = row
+        return {"question_id": qid, "application_id": application_id, "questions": json.loads(questions),
+                "status": status, "slack_ts": slack_ts, "answers": json.loads(answers) if answers else None,
+                "approval_message_ts": approval_ts, "created_at": created_at, "answered_at": answered_at}
+
+    _BATCH_COLUMNS = ("id, application_id, questions, status, slack_ts, answers, approval_message_ts, created_at, "
+                      "answered_at")
+
+    def add_question_batch(self, application_id: str, questions: list[dict]) -> str | None:
+        """Store a pending batch, cancelling any older pending one for the application. None if no such
+        application."""
+        question_id = str(uuid.uuid4())
+        try:
+            with self._locked() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if conn.execute("SELECT 1 FROM applications WHERE id = ?", (application_id,)).fetchone() is None:
+                        conn.execute("ROLLBACK")
+                        return None
+                    conn.execute("UPDATE fill_questions SET status = 'cancelled' "
+                                 "WHERE application_id = ? AND status = 'pending'", (application_id,))
+                    conn.execute("INSERT INTO fill_questions (id, application_id, questions, status, created_at) "
+                                 "VALUES (?, ?, ?, 'pending', ?)",
+                                 (question_id, application_id, json.dumps(questions), utc_now()))
+                    conn.execute("COMMIT")
+                except BaseException:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return question_id
+
+    def set_question_batch_ts(self, question_id: str, slack_ts: str) -> None:
+        try:
+            with closing(self._connect()) as conn, conn:
+                conn.execute("UPDATE fill_questions SET slack_ts = ? WHERE id = ?", (slack_ts, question_id))
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+
+    def get_question_batch(self, application_id: str, question_id: str) -> dict | None:
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute(f"SELECT {self._BATCH_COLUMNS} FROM fill_questions "
+                                   "WHERE id = ? AND application_id = ?", (question_id, application_id)).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return self._batch(row) if row else None
+
+    def pending_question_batch(self, application_id: str) -> dict | None:
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute(f"SELECT {self._BATCH_COLUMNS} FROM fill_questions "
+                                   "WHERE application_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+                                   (application_id,)).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return self._batch(row) if row else None
+
+    def answer_question_batch(self, application_id: str, question_id: str, answers: list,
+                              approval_message_ts: str | None) -> str:
+        """Record answers on a pending batch: "answered", "not_pending" or "not_found". One statement, so two
+        answers can never both land."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                cursor = conn.execute(
+                    "UPDATE fill_questions SET status = 'answered', answers = ?, approval_message_ts = ?, "
+                    "answered_at = ? WHERE id = ? AND application_id = ? AND status = 'pending'",
+                    (json.dumps(answers), approval_message_ts, utc_now(), question_id, application_id))
+                if cursor.rowcount == 1:
+                    return "answered"
+                exists = conn.execute("SELECT 1 FROM fill_questions WHERE id = ? AND application_id = ?",
+                                      (question_id, application_id)).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return "not_pending" if exists else "not_found"
+
+    def cancel_question_batch(self, application_id: str, question_id: str) -> str:
+        """"cancelled", "not_pending" or "not_found"."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                cursor = conn.execute("UPDATE fill_questions SET status = 'cancelled' "
+                                      "WHERE id = ? AND application_id = ? AND status = 'pending'",
+                                      (question_id, application_id))
+                if cursor.rowcount == 1:
+                    return "cancelled"
+                exists = conn.execute("SELECT 1 FROM fill_questions WHERE id = ? AND application_id = ?",
+                                      (question_id, application_id)).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return "not_pending" if exists else "not_found"
