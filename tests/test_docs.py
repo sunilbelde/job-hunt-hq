@@ -519,8 +519,7 @@ def test_oauth2_redirect_served_when_enabled(docs_client):
     assert docs_client.get("/docs/oauth2-redirect").status_code == 200
 
 
-PUBLIC_OPERATIONS = ("GET /health", "POST /application", "POST /application/email-status", "POST /resume",
-                     "POST /cover-letter")
+PUBLIC_OPERATIONS = ("GET /health", "POST /application", "POST /resume", "POST /cover-letter")
 
 
 def test_description_names_the_public_operations(schema):
@@ -528,6 +527,7 @@ def test_description_names_the_public_operations(schema):
     for operation in PUBLIC_OPERATIONS:
         method, path = operation.split()
         assert f"`{method} {path}`" in description, operation
+    assert "`POST /application/email-status`" not in description
     assert "only on the Mac's local listener" in description and "404 on the public address" in description
 
 
@@ -558,8 +558,17 @@ def test_email_status_body_documented(schema):
 def test_email_status_mapping_described(schema):
     description = " ".join(operations(schema)[("post", "/application/email-status")]["description"].split())
     for phrase in ("`Rejected` sets `rejected`", "`Response` sets `interviewing`", "`Applied` changes nothing",
-                   "never move backwards", "leave every application unchanged", "public address"):
+                   "never move backwards", "leave every application unchanged", "only on the local listener",
+                   "public address answers 404"):
         assert phrase in description, phrase
+
+
+def test_email_status_caller_is_the_local_workflow(schema):
+    description = operations(schema)[("post", "/application/email-status")]["description"]
+    assert "Hermes" in description
+    assert "n8n" not in schema["info"]["description"].lower()
+    for key, op in operations(schema).items():
+        assert "n8n" not in op["description"].lower(), key
 
 
 def test_email_status_responses_documented(schema):

@@ -86,7 +86,7 @@ def test_no_match_hidden_without_key(client):
 
 # --- Body validation ---
 
-def test_n8n_summary_accepted(client, settings):
+def test_email_workflow_summary_accepted(client, settings):
     application_id = record(client)
     r = email(client, body("Rejected", received_at="Nov 7, 2026 9:21 PM", note="Thanks, but no.", extra=True))
     assert r.status_code == 200

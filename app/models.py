@@ -26,7 +26,7 @@ APPLICATION_EXAMPLE = {
 }
 UPDATE_EXAMPLE = {"status": "applied"}
 APPLY_LINK_EXAMPLE = {"link": "https://jobs.ashbyhq.com/acme/3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
-# The summary the owner's n8n workflow builds from a job email.
+# The summary the owner's Hermes email workflow builds from a job email.
 EMAIL_STATUS_EXAMPLE = {
     "company": "Ramp",
     "role": "Applied AI Engineer",

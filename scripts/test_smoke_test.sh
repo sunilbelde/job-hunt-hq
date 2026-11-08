@@ -13,15 +13,16 @@ fail=0
 # write a file. The resume job reads `running` for the first STUB_RUNNING polls, then STUB_JOB (default done).
 # On the public address the moved endpoints answer 404 unless STUB_PUBLIC_HEALTHZ, STUB_PUBLIC_MOVED (the all-zero
 # ID probes), STUB_PUBLIC_DELETE (the all-zero DELETE), STUB_PUBLIC_LINK (the viewer's link POST) or
-# STUB_PUBLIC_STATUS (a real ID's status) or STUB_PUBLIC_LIST (GET /applications) say otherwise;
-# those probes are logged as a bare PROBE line. The public email status probe is logged as EMAIL and answers
-# STUB_EMAIL (default 404) with reason STUB_EMAIL_REASON (default no_match).
+# STUB_PUBLIC_STATUS (a real ID's status), STUB_PUBLIC_LIST (GET /applications) or STUB_PUBLIC_EMAIL (the email
+# status POST) say otherwise; those probes are logged as a bare PROBE line. The email status probe on the docs
+# listener is logged as EMAIL and answers STUB_EMAIL (default 404) with reason STUB_EMAIL_REASON (default no_match).
 cat > "$tmp/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
   *"http://x/healthz"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_HEALTHZ:-404}" ;;
   *"http://x/applications"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_LIST:-404}" ;;
-  *"http://x/application/email-status"*) echo "EMAIL $*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
+  *"http://x/application/email-status"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_EMAIL:-404}" ;;
+  *"http://d/application/email-status"*) echo "EMAIL $*" | tr "\n" " " >> "$STUB_LOG"; echo >> "$STUB_LOG"
     printf '{"ok":false,"reason":"%s","message":"m"}\n%s' "${STUB_EMAIL_REASON:-no_match}" "${STUB_EMAIL:-404}" ;;
   *"http://x/viewer/apply-from-link"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_LINK:-404}" ;;
   *"-X DELETE http://x/"*"00000000-0000-0000-0000-000000000000"*) echo PROBE >> "$STUB_LOG"; printf '%s' "${STUB_PUBLIC_DELETE:-404}" ;;
@@ -106,10 +107,12 @@ run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 202); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 202); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off run 201 202); [ $? -eq 2 ] && [ ! -s "$tmp/log" ] && ok "DOCS_URL=off is refused before any request" || bad "docs off"
-run 201 202 && [ "$(grep -c '^PROBE' "$tmp/log")" -eq 7 ] && ok "the public address is probed for the seven local-only endpoints" || bad "probes"
+run 201 202 && [ "$(grep -c '^PROBE' "$tmp/log")" -eq 8 ] && ok "the public address is probed for the eight local-only endpoints" || bad "probes"
 (STUB_PUBLIC_LIST=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public GET /applications fails before creating anything" || bad "public list"
-email_probe() { grep -q "^EMAIL .*-X POST http://x/application/email-status .*\"status\":\"Applied\"" "$tmp/log"; }
-run 201 202 && email_probe && [ "$(grep -n "^EMAIL" "$tmp/log" | cut -d: -f1)" -lt "$(grep -n "^CREATE" "$tmp/log" | cut -d: -f1)" ] && ok "public email status probe sends an Applied email before creating anything" || bad "email probe"
+email_probe() { grep -q "^EMAIL .*-X POST http://d/application/email-status .*\"status\":\"Applied\"" "$tmp/log"; }
+run 201 202 && email_probe && [ "$(grep -n "^EMAIL" "$tmp/log" | cut -d: -f1)" -lt "$(grep -n "^CREATE" "$tmp/log" | cut -d: -f1)" ] && ok "local email status probe sends an Applied email before creating anything" || bad "email probe"
+(STUB_PUBLIC_EMAIL=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public email status POST (200) fails before creating anything" || bad "public email 200"
+(STUB_PUBLIC_EMAIL=422 run 201 202); [ $? -ne 0 ] && ! created_any && ok "a public email status POST (422) fails before creating anything" || bad "public email 422"
 (STUB_EMAIL=200 run 201 202); [ $? -ne 0 ] && ! created_any && ok "an email status probe that matches fails" || bad "email 200"
 (STUB_EMAIL=404 STUB_EMAIL_REASON=other run 201 202); [ $? -ne 0 ] && ! created_any && ok "an email status 404 without no_match fails" || bad "email reason"
 (STUB_EMAIL=401 run 201 202); [ $? -ne 0 ] && ! created_any && ok "an email status 401 fails" || bad "email 401"
