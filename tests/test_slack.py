@@ -411,12 +411,12 @@ def test_owner_decline_accepted(api, slack):
     assert r.status_code == 200
 
 
-@pytest.mark.parametrize("case", ["missing_ts", "unknown_ts", "bot", "other_user", "older", "not_yes"])
+@pytest.mark.parametrize("case", ["no_reply", "unknown_ts", "bot", "other_user", "older", "not_yes"])
 def test_approval_not_verified(api, slack, case):
     app_id = ready(api)
     older = slack.owner_reply("yes")  # before the question
     qid = ask(api, app_id, APPROVAL)
-    ts = {"missing_ts": None, "unknown_ts": "1.000000", "older": older,
+    ts = {"no_reply": None, "unknown_ts": "1.000000", "older": older,
           "bot": slack.owner_reply("yes, approve", bot=True) if case == "bot" else None,
           "other_user": slack.owner_reply("yes", user="U0SOMEONE") if case == "other_user" else None,
           "not_yes": slack.owner_reply("hmm let me think") if case == "not_yes" else None}[case]
@@ -426,6 +426,27 @@ def test_approval_not_verified(api, slack, case):
     r = api.post(f"/application/{app_id}/questions/{qid}/answers", headers=KEY, json=body)
     assert r.status_code == 422 and r.json()["reason"] == "approval_not_verified"
     assert api.get(f"/application/{app_id}/questions/{qid}", headers=KEY).json()["status"] == "pending"
+
+
+def test_approval_without_ts_uses_latest_owner_reply(api, slack):
+    app_id = ready(api)
+    qid = ask(api, app_id, APPROVAL)
+    slack.owner_reply("hmm wait")
+    slack.owner_reply("yes, approve", bot=True)  # a bot saying yes never counts
+    slack.owner_reply("yes go ahead")
+    r = api.post(f"/application/{app_id}/questions/{qid}/answers", headers=KEY,
+                 json={"answers": [["Yes, agree and submit"]]})
+    assert r.status_code == 200
+
+
+def test_approval_without_ts_rejected_when_latest_owner_reply_hesitates(api, slack):
+    app_id = ready(api)
+    qid = ask(api, app_id, APPROVAL)
+    slack.owner_reply("yes")
+    slack.owner_reply("actually wait, hold on")
+    r = api.post(f"/application/{app_id}/questions/{qid}/answers", headers=KEY,
+                 json={"answers": [["Yes, agree and submit"]]})
+    assert r.status_code == 422
 
 
 def test_approval_needs_owner_configured(slack_settings, storage, store, slack, launcher):

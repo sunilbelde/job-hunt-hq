@@ -606,7 +606,8 @@ class AnswersRequest(BaseModel):
     answers: list[list[StrictStr]] = Field(min_length=1, max_length=4, description=(
         "One entry per question, in order: the chosen option labels, or the owner's own words."))
     slack_message_ts: StrictStr | None = Field(default=None, description=(
-        "The `ts` of the owner's reply these answers come from. Required for a batch with an `approval` question."))
+        "The `ts` of the owner's reply these answers come from. For an `approval` batch without it, the owner's "
+        "latest reply after the question is the one checked."))
 
     @field_validator("answers")
     @classmethod

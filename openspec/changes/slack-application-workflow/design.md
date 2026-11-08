@@ -76,7 +76,7 @@ Alternatives considered:
 - (b) The service polls `conversations.replies` and parses answers itself. Rejected, because it duplicates Hermes, and Hermes would answer the same reply anyway.
 
 ### Approval answers are verified against Slack, not trusted from Hermes
-A batch with `kind: approval` covers the Step 7 "agree and submit" question and the "mark applied anyway" question. Its answer must include `slack_message_ts`. Before accepting it, the service checks all of these:
+A batch with `kind: approval` covers the Step 7 "agree and submit" question and the "mark applied anyway" question. Its answer should include `slack_message_ts`. When the relay cannot name the reply (Hermes may not show the model Slack message IDs), the service uses the owner's latest reply after the question instead. Before accepting it, the service checks all of these:
 1. It calls `conversations.replies` for the thread and finds that `ts`.
 2. The message's `user` is `SLACK_OWNER_USER_ID`.
 3. The message is newer than the batch's posted `slack_ts`.

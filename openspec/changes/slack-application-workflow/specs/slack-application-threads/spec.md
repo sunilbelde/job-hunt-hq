@@ -113,7 +113,11 @@ Posting a batch SHALL cancel any older pending batch for the same application. `
 - **THEN** the system responds 409 and the stored answers are unchanged
 
 ### Requirement: Verified submit approval
-For a batch with an `approval` question, the service SHALL read the message named by `slack_message_ts` from the thread through `conversations.replies` before accepting answers. It SHALL accept only a message from `SLACK_OWNER_USER_ID`, newer than the batch's post, whose text starts with `yes`, `approve` or `submit` or contains the chosen label; a declining answer (label starting `No`) needs only that message. Otherwise it SHALL respond 422 `approval_not_verified` and leave the batch pending.
+Before accepting answers to a batch with an `approval` question, the service SHALL read from Slack the owner's reply named by `slack_message_ts`, or else the owner's latest reply after the question. It SHALL accept only a reply from `SLACK_OWNER_USER_ID`, newer than the question, that starts with `yes`, `approve` or `submit` or contains the chosen label (a declining label starting `No` needs only the reply). Otherwise: 422 `approval_not_verified`, batch still pending.
+
+#### Scenario: Relay cannot name the reply
+- **WHEN** Hermes records an approval without `slack_message_ts` and the owner's latest reply after the question says "yes go ahead"
+- **THEN** the batch becomes `answered`; had that latest reply said "wait", the system would respond 422
 
 #### Scenario: Owner declines
 - **WHEN** the owner replies "no, I'll do it" and Hermes records "No, I'll do it myself" with that message's `ts`

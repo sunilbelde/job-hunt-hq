@@ -63,12 +63,29 @@ def declines(label: str) -> bool:
     return label.strip().lower().startswith("no")
 
 
-def approval_verified(messages: list[dict], message_ts: str, owner: str, posted_ts: str | None,
+def is_owner_message(message: dict, owner: str) -> bool:
+    return not message.get("bot_id") and not message.get("subtype") and message.get("user") == owner
+
+
+def latest_owner_reply(messages: list[dict], owner: str, posted_ts: str | None) -> str | None:
+    """The ts of the owner's most recent reply after the question, for a relay that cannot name the message."""
+    if posted_ts is None:
+        return None
+    replies = [m["ts"] for m in messages
+               if is_owner_message(m, owner) and isinstance(m.get("ts"), str) and float(m["ts"]) > float(posted_ts)]
+    return max(replies, key=float) if replies else None
+
+
+def approval_verified(messages: list[dict], message_ts: str | None, owner: str, posted_ts: str | None,
                       chosen: list[str]) -> bool:
-    """Whether the thread holds the owner's own reply at message_ts, newer than the question, saying what the
-    approval answer says. Bot messages never count, whatever their text."""
+    """Whether the thread holds the owner's own reply at message_ts (or, when none is named, the owner's latest
+    reply), newer than the question, saying what the approval answer says. Bot messages never count."""
+    if message_ts is None:
+        message_ts = latest_owner_reply(messages, owner, posted_ts)
+        if message_ts is None:
+            return False
     message = next((m for m in messages if m.get("ts") == message_ts), None)
-    if message is None or message.get("bot_id") or message.get("subtype") or message.get("user") != owner:
+    if message is None or not is_owner_message(message, owner):
         return False
     if posted_ts is None or float(message_ts) <= float(posted_ts):
         return False
@@ -345,9 +362,10 @@ def register_slack(app: FastAPI, *, applications: ApplicationStore, notifier: Sl
         description=(
             "For Hermes, after the owner replies in the thread: one entry per question, in order, each the chosen "
             "option labels or the owner's own words.\n\n"
-            "A batch with an `approval` question (agree and submit, mark applied) is accepted only when "
-            "`slack_message_ts` names the owner's own reply in the thread (`SLACK_OWNER_USER_ID`, not a bot), newer "
-            "than the question, whose text starts with yes, approve or submit, or contains the chosen label; a "
+            "A batch with an `approval` question (agree and submit, mark applied) is accepted only when the owner's "
+            "own reply in the thread (`SLACK_OWNER_USER_ID`, not a bot), newer than the question, starts with yes, "
+            "approve or submit, or contains the chosen label. That reply is the one `slack_message_ts` names, or "
+            "without it the owner's latest reply after the question; a "
             "declining answer (a label starting with No) needs only the owner's reply. The service reads that reply "
             "from Slack itself, so no relay can approve a submission on the owner's behalf. Answers are never logged."),
         responses={200: {"model": AnswersRecorded, "description": "Recorded; the form filler's next poll gets them."},
@@ -381,8 +399,6 @@ def register_slack(app: FastAPI, *, applications: ApplicationStore, notifier: Sl
         if approvals:
             if owner_user_id is None:
                 return slack_error(503, "slack_not_configured", "SLACK_OWNER_USER_ID is not set: approvals are off")
-            if not body.slack_message_ts:
-                return slack_error(422, "approval_not_verified", "An approval needs the owner's reply (slack_message_ts)")
             try:
                 thread = await run_in_threadpool(applications.get_slack_thread, target)
                 if thread is None or thread["thread_ts"] is None:
@@ -396,7 +412,8 @@ def register_slack(app: FastAPI, *, applications: ApplicationStore, notifier: Sl
                 return slack_error(502, "slack_error", "Could not read the thread to verify the approval")
             chosen = [label for answer in approvals for label in answer]
             try:
-                verified = approval_verified(messages, body.slack_message_ts, owner_user_id, batch["slack_ts"], chosen)
+                message_ts = body.slack_message_ts or latest_owner_reply(messages, owner_user_id, batch["slack_ts"])
+                verified = approval_verified(messages, message_ts, owner_user_id, batch["slack_ts"], chosen)
             except ValueError:
                 verified = False
             if not verified:
@@ -405,7 +422,7 @@ def register_slack(app: FastAPI, *, applications: ApplicationStore, notifier: Sl
                                    "No reply from the owner in this thread approves this answer")
         try:
             outcome = await run_in_threadpool(applications.answer_question_batch, target, batch["question_id"],
-                                              body.answers, body.slack_message_ts if approvals else None)
+                                              body.answers, message_ts if approvals else None)
         except ApplicationStoreError as exc:
             return store_unavailable(exc)
         if outcome != "answered":
