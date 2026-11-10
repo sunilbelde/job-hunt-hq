@@ -2,7 +2,7 @@ import unicodedata
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, field_validator, model_validator
 
 
 ApplicationStatus = Literal["verified", "applied", "interviewing", "offer", "rejected", "withdrawn"]
@@ -25,6 +25,7 @@ APPLICATION_EXAMPLE = {
     "official_employer_domain": "acme.com",
 }
 UPDATE_EXAMPLE = {"status": "applied"}
+HIDDEN_EXAMPLE = {"hidden": True}
 APPLY_LINK_EXAMPLE = {"link": "https://jobs.ashbyhq.com/acme/3f2b9c1e-8d4a-4c6e-9b1f-2a7d5e8c0b13"}
 # The summary the owner's Hermes email workflow builds from a job email.
 EMAIL_STATUS_EXAMPLE = {
@@ -147,6 +148,14 @@ class ViewerStatusUpdate(BaseModel):
     status: ApplicationStatus
 
 
+class ViewerHiddenUpdate(BaseModel):
+    """The viewer's hide write: only `hidden` is read, and it must be a real boolean."""
+
+    model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [HIDDEN_EXAMPLE]})
+
+    hidden: StrictBool = Field(description="`true` to hide the application from the viewer's list, `false` to show it again.")
+
+
 class EmailStatusRequest(BaseModel):
     """What a job email says about an application. The service finds the application from company, role and,
     when given, job_link; received_at and note are accepted for the client's convenience and never stored."""
@@ -266,6 +275,12 @@ class ApplicationUpdated(BaseModel):
     ok: Literal[True] = True
     application_id: str
     status: ApplicationStatus
+
+
+class ApplicationHiddenUpdated(BaseModel):
+    ok: Literal[True] = True
+    application_id: str
+    hidden: bool
 
 
 class EmailStatusUpdated(BaseModel):
@@ -457,6 +472,8 @@ class ApplicationListItem(BaseModel):
     )
     created_at: str
     updated_at: str | None
+    hidden: bool = Field(description="Whether the owner hid this application in the viewer. Hidden applications "
+                                     "are still listed here; hiding changes nothing else about them.")
     report: ReportSummary | None = Field(description="The latest generation's summary, or null if none is stored.")
     jobs: ApplicationJobs = Field(
         description="Each kind's latest job state, so the viewer can show running jobs. Never the job's result, "

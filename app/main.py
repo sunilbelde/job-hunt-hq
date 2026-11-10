@@ -28,6 +28,7 @@ from app.models import (
     ApplicationRecorded,
     ApplicationRow,
     ApplicationUpdate,
+    ApplicationHiddenUpdated,
     ApplicationUpdated,
     ApplyFromLinkRequest,
     ApplyFromLinkStarted,
@@ -44,6 +45,7 @@ from app.models import (
     ResumeJobStatus,
     ResumeRequest,
     StoredApplication,
+    ViewerHiddenUpdate,
     ViewerStatusUpdate,
 )
 from app.rendering import RenderError
@@ -83,7 +85,7 @@ api_key_header = APIKeyHeader(
 
 # Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
 BODY_MODELS = (ApplicationRow, ApplicationUpdate, EmailStatusRequest, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate,
-               ApplyFromLinkRequest)
+               ViewerHiddenUpdate, ApplyFromLinkRequest)
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
@@ -956,8 +958,8 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             report = {**report, "saved_path": file_name(report["saved_path"])}
         return {"ok": True, "application": found["application"], "report": report}
 
-    # The viewer's two writes. Like the reads they take no key, so they exist only here; they are kept to a status
-    # and a delete so the docs flag never becomes a key bypass for the full PATCH /application body.
+    # The viewer's small writes. Like the reads they take no key, so they exist only here; they are kept to a status,
+    # the hidden flag and a delete so the docs flag never becomes a key bypass for the full PATCH /application body.
     viewer_writes = (
         "Takes no API key, so it is served only where the viewer is: on the installed service, only the "
         "local listener on the Mac. A request a browser marks as coming from another site gets 403."
@@ -1018,6 +1020,52 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
         if status is None:
             return application_not_found()
         return {"ok": True, "application_id": target, "status": status}
+
+    async def read_hidden(request: Request) -> tuple[bool | None, str | None]:
+        """The hidden value to write, or a 422 message naming what is wrong with the body."""
+        payload, problem = await read_viewer_body(request)
+        if problem is not None:
+            return None, problem
+        try:
+            return ViewerHiddenUpdate.model_validate(payload).hidden, None
+        except ValidationError as exc:
+            return None, validation_message(exc)
+
+    @app.put(
+        "/viewer/application/{application_id}/hidden",
+        tags=["viewer"],
+        summary="Hide or show an application in the viewer",
+        description=(
+            "Sets whether the application is hidden from the viewer's list and changes nothing else about it: its "
+            "status, report and generated files stay as they are, and it can be shown again. Hidden applications "
+            "are still returned by `GET /applications`, with `hidden` true. " + viewer_writes + "\n\n"
+            "An unknown ID gets 404 even when the body is also invalid."
+        ),
+        responses={
+            200: {"model": ApplicationHiddenUpdated, "description": "Updated; returns the stored value."},
+            **errors(403, 404, 422, 503),
+        },
+        openapi_extra=json_body(ViewerHiddenUpdate, "Whether the application is hidden."),
+    )
+    async def viewer_set_hidden(request: Request, application_id: str = application_id_path):
+        if not same_origin(request):
+            return application_error(403, "Cross-site request refused")
+        target = parse_application_id(application_id)
+        if target is None:
+            return application_not_found()
+        request.state.application_id = target
+        hidden, message = await read_hidden(request)
+        try:
+            if message is not None:
+                if not await run_in_threadpool(applications.exists, target):
+                    return application_not_found()
+                return application_error(422, message)
+            hidden = await run_in_threadpool(applications.set_hidden, target, hidden)
+        except ApplicationStoreError as exc:
+            return store_unavailable(exc)
+        if hidden is None:
+            return application_not_found()
+        return {"ok": True, "application_id": target, "hidden": hidden}
 
     @app.delete(
         "/viewer/application/{application_id}",

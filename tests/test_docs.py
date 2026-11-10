@@ -31,6 +31,7 @@ VIEWER_READS = [
 VIEWER_WRITES = [
     ("patch", "/viewer/application/{application_id}"),
     ("delete", "/viewer/application/{application_id}"),
+    ("put", "/viewer/application/{application_id}/hidden"),
     ("post", "/viewer/application/{application_id}/fill"),
     ("post", "/viewer/application/{application_id}/resume"),
     ("post", "/viewer/application/{application_id}/cover-letter"),
@@ -56,6 +57,7 @@ RESPONSES = {
     ("get", "/cover-letter/base.pdf"): {"200", "404"},
     ("patch", "/viewer/application/{application_id}"): {"200", "403", "404", "422", "503"},
     ("delete", "/viewer/application/{application_id}"): {"200", "403", "404", "503"},
+    ("put", "/viewer/application/{application_id}/hidden"): {"200", "403", "404", "422", "503"},
     ("post", "/viewer/application/{application_id}/fill"): {"200", "403", "404", "503"},
     ("post", "/viewer/application/{application_id}/resume"): {"202", "403", "404", "503"},
     ("post", "/viewer/application/{application_id}/cover-letter"): {"202", "403", "404", "422", "503"},
@@ -108,8 +110,8 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_twenty_two_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 22
+def test_documents_exactly_the_twenty_three_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 23
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -200,6 +202,20 @@ def test_viewer_status_body_schema(schema):
     assert body["properties"]["status"]["enum"] == [
         "verified", "applied", "interviewing", "offer", "rejected", "withdrawn",
     ]
+
+
+def test_viewer_hidden_body_and_description(schema):
+    op = operations(schema)[("put", "/viewer/application/{application_id}/hidden")]
+    body = component(schema, op)
+    assert body["required"] == ["hidden"] and set(body["properties"]) == {"hidden"}
+    assert body["properties"]["hidden"]["type"] == "boolean"
+    assert "changes nothing else" in op["description"] and "another site" in op["description"]
+
+
+def test_application_list_documents_hidden(schema):
+    item = schema["components"]["schemas"]["ApplicationListItem"]
+    assert item["properties"]["hidden"]["type"] == "boolean" and item["properties"]["hidden"]["description"]
+    assert "hidden" in item["required"]
 
 
 @pytest.mark.parametrize("key", VIEWER_WRITES)
@@ -428,6 +444,9 @@ def test_documented_examples_are_accepted(schema, docs_client):
     r = docs_client.patch(f"/viewer/application/{application_id}",
                           json=example(("patch", "/viewer/application/{application_id}")))
     assert r.status_code == 200, r.json()
+    r = docs_client.put(f"/viewer/application/{application_id}/hidden",
+                        json=example(("put", "/viewer/application/{application_id}/hidden")))
+    assert r.status_code == 200 and r.json()["hidden"] is True, r.json()
     # The email example names its own company and role: record a posting it matches.
     sent = example(("post", "/application/email-status"))
     link = "https://jobs.ashbyhq.com/ramp/0d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d"

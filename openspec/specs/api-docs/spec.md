@@ -41,11 +41,11 @@ When API docs are disabled, which is the default, the system SHALL NOT serve `/d
 - **THEN** `GET /health`, `GET /healthz`, `POST /application`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume` and `POST /cover-letter` behave exactly as they do with docs enabled
 
 ### Requirement: Documented endpoint coverage
-The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `POST /application/email-status`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}`, `POST /viewer/application/{application_id}/fill`, `POST /viewer/application/{application_id}/resume`, `POST /viewer/application/{application_id}/cover-letter` and `POST /viewer/apply-from-link`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
+The OpenAPI document SHALL describe `GET /health`, `GET /healthz`, `POST /application`, `POST /application/email-status`, `PATCH /application/{application_id}`, `DELETE /application/{application_id}`, `POST /resume`, `GET /resume/{application_id}/status`, `POST /cover-letter`, `GET /cover-letter/{application_id}/status`, `GET /applications`, `GET /application/{application_id}`, `GET /application/{application_id}/resume.pdf`, `GET /application/{application_id}/cover-letter.pdf`, `GET /resume/base.pdf`, `GET /cover-letter/base.pdf`, `PATCH /viewer/application/{application_id}`, `DELETE /viewer/application/{application_id}`, `PUT /viewer/application/{application_id}/hidden`, `POST /viewer/application/{application_id}/fill`, `POST /viewer/application/{application_id}/resume`, `POST /viewer/application/{application_id}/cover-letter` and `POST /viewer/apply-from-link`, each with a summary, a description and a tag that groups it with related endpoints, and SHALL describe no other operations.
 
 #### Scenario: All endpoints listed
 - **WHEN** the OpenAPI document is fetched
-- **THEN** it contains exactly those twenty-two operations, each with a non-empty summary, description and tag
+- **THEN** it contains exactly those twenty-three operations, each with a non-empty summary, description and tag
 
 #### Scenario: Health alias
 - **WHEN** the OpenAPI document is fetched
@@ -333,3 +333,14 @@ The OpenAPI document SHALL list responses 200, 401, 404, 409, 422 and 503 for `P
 #### Scenario: Responses documented
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the operation lists 200, 401, 404, 409, 422 and 503, the 200 schema has `application_id`, `company`, `role`, `previous_status`, `status` and `changed`, and the 404 and 409 schemas carry `ok`, `message` and `reason`
+
+### Requirement: Viewer hide endpoint documented
+The OpenAPI document SHALL tag `PUT /viewer/application/{application_id}/hidden` `viewer`, mark it as needing no API key, and describe the `hidden` boolean request body with an example the endpoint accepts. Its description SHALL say it is served only where the viewer is, refuses cross-site browser requests, and that hiding changes nothing but the flag. It SHALL list 200, 403, 404, 422 and 503. The `GET /applications` entry schema SHALL document `hidden`.
+
+#### Scenario: Listed
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the operation is tagged `viewer`, has no security requirement, requires a boolean `hidden`, and lists 200, 403, 404, 422 and 503
+
+#### Scenario: List field
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the application list entry schema has a boolean `hidden` with a description

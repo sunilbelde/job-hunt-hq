@@ -35,7 +35,7 @@ DEFAULT_STATUS = "verified"
 DEFAULT_ADDED_VIA = "manual"
 
 # Every column but the ID, in table order: what the integer-ID migration copies across.
-COPIED_COLUMNS = ("job_link_key", "job_link", *FIELDS, "created_at", "status", "updated_at", "added_via")
+COPIED_COLUMNS = ("job_link_key", "job_link", *FIELDS, "created_at", "status", "updated_at", "added_via", "hidden")
 
 
 def _schema(table: str) -> str:
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS {table} (
     created_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT '{DEFAULT_STATUS}',
     updated_at TEXT,
-    added_via TEXT NOT NULL DEFAULT '{DEFAULT_ADDED_VIA}'
+    added_via TEXT NOT NULL DEFAULT '{DEFAULT_ADDED_VIA}',
+    hidden INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -96,7 +97,7 @@ NO_JOB = "no_job"
 
 # What the application list carries from each report: scores and status, never posting text.
 REPORT_SUMMARY = ("status", "threshold", "base_score", "tailored_score")
-LIST_COLUMNS = ("id", "company", "role", "status", "added_via", "posting_source_type", "created_at", "updated_at")
+LIST_COLUMNS = ("id", "company", "role", "status", "added_via", "posting_source_type", "created_at", "updated_at", "hidden")
 # What the application list carries from each job: its state, never its result or saved path.
 JOB_SUMMARY = ("status", "started_at", "finished_at", "error")
 
@@ -106,6 +107,7 @@ MIGRATION = {
     "status": f"ALTER TABLE applications ADD COLUMN status TEXT NOT NULL DEFAULT '{DEFAULT_STATUS}'",
     "updated_at": "ALTER TABLE applications ADD COLUMN updated_at TEXT",
     "added_via": f"ALTER TABLE applications ADD COLUMN added_via TEXT NOT NULL DEFAULT '{DEFAULT_ADDED_VIA}'",
+    "hidden": "ALTER TABLE applications ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -369,6 +371,18 @@ class ApplicationStore:
             raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
         return result[0] if result else None
 
+    def set_hidden(self, application_id: str, hidden: bool) -> bool | None:
+        """Hide or show one application. Returns the stored value, or None if the row is absent."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                result = conn.execute(
+                    "UPDATE applications SET hidden = ?, updated_at = ? WHERE id = ? RETURNING hidden",
+                    (int(hidden), utc_now(), application_id),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ApplicationStoreError(f"{type(exc).__name__}: {exc}") from exc
+        return bool(result[0]) if result else None
+
     def apply_email_status(self, company: str, role: str, job_link: str | None,
                            email_status: str) -> EmailStatusResult:
         """Find the one application an email names and move its status. The write lock is taken before the
@@ -494,6 +508,7 @@ class ApplicationStore:
         listed = []
         for row in rows:
             item = dict(zip(LIST_COLUMNS, row))
+            item["hidden"] = bool(item["hidden"])
             generated_at, report = row[len(LIST_COLUMNS):len(LIST_COLUMNS) + 2]
             resume_job = row[len(LIST_COLUMNS) + 2:len(LIST_COLUMNS) + 2 + len(JOB_SUMMARY)]
             letter_job = row[len(LIST_COLUMNS) + 2 + len(JOB_SUMMARY):]
