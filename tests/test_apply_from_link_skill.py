@@ -88,6 +88,7 @@ def test_tab_takes_the_label_the_form_filler_expects():
 def test_handoff_passes_only_the_id():
     assert "with the ID and nothing else" in TEXT and "Pass no submit instruction" in TEXT
     assert "submit it" not in TEXT.lower().replace("submit instruction", "")
+    assert "and no `review`" in TEXT and "submits on its own unless one of its guardrails stops it" in TEXT
 
 
 def test_attaching_by_hand():

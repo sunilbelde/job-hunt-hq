@@ -234,7 +234,8 @@ def test_viewer_apply_from_link_described(schema):
     op = operations(schema)[("post", "/viewer/apply-from-link")]
     assert "Claude-Jobs-Automation" in op["description"] and "ByLink-<host>-<hash>" in op["description"]
     assert "/apply-from-link <link>" in op["description"]
-    assert "never submits" in op["description"] and "already_open" in op["description"]
+    assert "submits the application on its own unless a guardrail stops it" in op["description"]
+    assert "never submits" not in op["description"] and "already_open" in op["description"]
     assert "Herdr unavailable" in op["responses"]["503"]["description"]
     assert "Application store" not in op["responses"]["503"]["description"]
 
@@ -277,7 +278,8 @@ def test_viewer_fill_described(schema):
     op = operations(schema)[("post", "/viewer/application/{application_id}/fill")]
     assert "Claude-Jobs-Automation" in op["description"] and "<Company>-<Role>-<application_id>" in op["description"]
     assert "/job-application-form-filler <application_id>" in op["description"]
-    assert "never submits" in op["description"] and "already_open" in op["description"]
+    assert "submits the application on its own unless a guardrail stops it" in op["description"]
+    assert "never submits" not in op["description"] and "already_open" in op["description"]
     assert "Herdr unavailable" in op["responses"]["503"]["description"]
     assert "requestBody" not in op
 

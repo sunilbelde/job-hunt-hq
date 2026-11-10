@@ -192,11 +192,11 @@ The workflow SHALL open the form and generate a cover letter through `POST /cove
 - **THEN** no form is opened and no cover letter job is started
 
 ### Requirement: Handoff to the form filler
-Except for an Easy Apply application, the workflow SHALL finish by running `job-application-form-filler` with the application ID in the same session, and SHALL pass no submit instruction, so the form filler's own rules for filling, review and submitting apply. If that skill is not installed, the workflow SHALL report the application ID and stop.
+Except for an Easy Apply application, the workflow SHALL finish by running `job-application-form-filler` with the application ID in the same session, and SHALL pass nothing else, no submit instruction and no `review`, so the form filler's own default applies: it fills, reviews, agrees to the standard terms and submits on its own unless a guardrail stops it. If that skill is not installed, the workflow SHALL report the application ID and stop.
 
 #### Scenario: Handoff
 - **WHEN** the documents are ready for application `<id>`
-- **THEN** the session runs `/job-application-form-filler <id>` and nothing is submitted unless the owner approves it there
+- **THEN** the session runs `/job-application-form-filler <id>` and the form filler submits on its own unless one of its guardrails stops it
 
 #### Scenario: Form filler missing
 - **WHEN** the form filler skill is not installed
@@ -204,7 +204,7 @@ Except for an Easy Apply application, the workflow SHALL finish by running `job-
 
 #### Scenario: Easy Apply application
 - **WHEN** the resume is ready for an application with `posting_source_type` `linkedin_easy_apply`
-- **THEN** the session does not run the form filler
+- **THEN** the form filler is not run
 
 ### Requirement: Attaching by hand on custom careers pages
 When Tailored Attach is unavailable on the form, even after the owner was asked to enable it for the site, the workflow SHALL report the saved resume and cover letter file names and their folder, so the owner can attach them by hand. It SHALL NOT use the operating system's file picker itself.

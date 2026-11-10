@@ -225,11 +225,15 @@ The OpenAPI document SHALL tag `PATCH /viewer/application/{application_id}` and 
 - **THEN** the `DELETE /viewer/application/{application_id}` description says generated resume and cover letter files are kept
 
 ### Requirement: Viewer fill endpoint documented
-The OpenAPI document SHALL tag `POST /viewer/application/{application_id}/fill` `viewer`, mark it as needing no API key and taking no request body, and list 200, 403, 404 and 503. Its description SHALL name the Herdr workspace, the tab label format and the command it runs, say that the session never submits unless asked in it, and explain `already_open`. The 503 description SHALL mention `Herdr unavailable`.
+The OpenAPI document SHALL tag `POST /viewer/application/{application_id}/fill` `viewer`, mark it as needing no API key and taking no request body, and list 200, 403, 404 and 503. Its description SHALL name the Herdr workspace, the tab label format and the command it runs, say that the session submits the application on its own unless one of its guardrails stops it and it asks in that tab, and explain `already_open`. It SHALL NOT say the session never submits. The 503 description SHALL mention `Herdr unavailable`.
 
 #### Scenario: Fill endpoint listed
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the fill operation is tagged `viewer`, has no security requirement and no request body, and its description says it is served only where the viewer is, refuses cross-site requests, and names `Claude-Jobs-Automation`, `<Company>-<Role>-<application_id>` and `/job-application-form-filler <application_id>`
+
+#### Scenario: Submit behavior described
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the fill description says the session submits on its own unless it stops to ask, and does not contain "never submits"
 
 ### Requirement: Reference says where endpoints are served
 The OpenAPI document's descriptions SHALL say that only `GET /health`, `POST /application`, `POST /resume` and `POST /cover-letter` are served on the public address, and that every other operation is served only on the Mac's local listener. No description SHALL say an operation is served on the tailnet or that the status endpoints or the email status endpoint are served on the public address.
@@ -265,11 +269,15 @@ The OpenAPI document SHALL describe the `jobs` field of each `GET /applications`
 - **THEN** the list entry schema has `jobs` with nullable `resume` and `cover_letter` members of exactly those four fields, and no `saved_path`, `match` or `text`
 
 ### Requirement: Viewer apply-from-link endpoint documented
-The OpenAPI document SHALL tag `POST /viewer/apply-from-link` `viewer`, mark it as needing no API key, describe its request body and its 200 response, and list 200, 403, 422 and 503. Its description SHALL name the Herdr workspace, the tab label format and the command it runs, say that the session never submits unless asked in it, and explain `already_open`.
+The OpenAPI document SHALL tag `POST /viewer/apply-from-link` `viewer`, mark it as needing no API key, describe its request body and its 200 response, and list 200, 403, 422 and 503. Its description SHALL name the Herdr workspace, the tab label format and the command it runs, say that the session submits the application on its own unless one of its guardrails stops it and it asks in that tab, and explain `already_open`. It SHALL NOT say the session never submits.
 
 #### Scenario: Endpoint listed
 - **WHEN** the OpenAPI document is fetched
 - **THEN** the operation is tagged `viewer`, has no security requirement, and its description says it is served only where the viewer is, refuses cross-site requests, and names `Claude-Jobs-Automation`, `ByLink-<host>-<hash>` and `/apply-from-link <link>`
+
+#### Scenario: Submit behavior described
+- **WHEN** the OpenAPI document is fetched
+- **THEN** the apply-from-link description says the session submits on its own unless it stops to ask, and does not contain "never submits"
 
 #### Scenario: Request body
 - **WHEN** the OpenAPI document is fetched

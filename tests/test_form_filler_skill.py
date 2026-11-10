@@ -32,3 +32,50 @@ def test_contact_email_mismatch_is_a_red_flag():
 
 def test_no_email_address_in_the_skill():
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", SKILL)
+
+
+def test_submitting_is_the_default_with_a_review_opt_out():
+    assert "**Submitting is the default.**" in TEXT
+    assert "No submit word is needed" in TEXT
+    assert "`/job-application-form-filler <id> review`" in TEXT and "**review mode**" in TEXT
+    assert "only after the user has reviewed the form" not in TEXT
+
+
+def test_agreement_boxes_are_ticked_except_opt_ins_and_extra_terms():
+    row = TEXT[TEXT.index("| Consent, privacy, GDPR"):]
+    row = row[:900]
+    assert "tick each one the form needs" in row
+    for opt_in in ("job alerts", "newsletters", "SMS", "talent community", "sharing with other employers"):
+        assert opt_in in row
+    assert "anything that costs money, an employment contract, a non-compete" in row
+
+
+def test_self_review_before_submitting():
+    assert "**Self-review.**" in TEXT
+    assert "this check is the review" in TEXT
+
+
+def test_guardrails_stop_and_ask():
+    step = section("Step 5")
+    assert "do not submit" in step and "AskUserQuestion" in step
+    for g in ("A required answer the sources do not give", "a required salary question", "A Step 6 red flag",
+              "pay floor, sponsorship refused, not the company site or its ATS, wrong company or role",
+              "contact email mismatch", "a cover letter field with no letter",
+              "Files not attached for this application ID", "A sign-in, CAPTCHA or bot check",
+              "A validation error that does not clear",
+              "An agreement beyond the standard application terms"):
+        assert g in step, g
+    for gone in ("No acknowledgments", "**Simple:**", "only when this run asked for it"):
+        assert gone not in step
+
+
+def test_drafts_listed_in_full_in_the_report():
+    step = section("Step 6")
+    assert "Each drafted open-ended answer, in full" in step
+    assert "the final report must list every one" in step
+
+
+def test_questions_only_in_review_mode():
+    step = section("Step 7")
+    assert "Default mode: Step 5 submits and confirms" in step
+    assert "review mode" in step

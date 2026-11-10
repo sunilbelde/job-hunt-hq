@@ -183,8 +183,9 @@ letter was generated, and the resume's file name and folder, `outputs/<company>/
 
 For a `linkedin_easy_apply` application, do not hand off: go to Step 9.
 
-Run `/job-application-form-filler <id>` in this session, with the ID and nothing else. Pass no submit instruction:
-that skill's own rules for filling, review and submitting apply from here. If it is not installed, say so, give the
+Run `/job-application-form-filler <id>` in this session, with the ID and nothing else. Pass no submit instruction
+and no `review`: that skill's default applies from here, so it fills, reviews, agrees to the standard terms and
+submits on its own unless one of its guardrails stops it. If it is not installed, say so, give the
 application ID and say the documents are ready.
 
 While it runs, two things stay with you:
