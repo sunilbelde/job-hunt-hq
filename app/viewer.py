@@ -123,6 +123,8 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 #filters .dates { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px;
   font-size: 12px; color: var(--muted); }
 #filters .dates input { width: 100%; font-size: 12px; padding: 4px 6px; }
+#filters .show-hidden { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+#filters .show-hidden input { width: auto; margin: 0; padding: 0; }
 button.link { padding: 4px 2px; border: 0; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
 button.link:hover { text-decoration: underline; }
 #list { flex: 1; overflow-y: auto; padding: 6px; }
@@ -150,6 +152,9 @@ button.link:hover { text-decoration: underline; }
 .pill.origin { color: var(--muted); border-style: dashed; }
 .pill.origin.o-link { color: var(--accent); }
 .pill.easy-apply { color: var(--accent); }
+.pill.hidden-tag { color: var(--muted); border-style: dotted; }
+#list button.entry.hidden-entry { opacity: .6; }
+#list button.entry.hidden-entry:hover, #list button.entry.hidden-entry.current { opacity: 1; }
 .running { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); }
 .dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
@@ -250,6 +255,7 @@ button.danger:disabled { opacity: .6; cursor: default; }
         <select id="filter-status" aria-label="Status"><option value="">All statuses</option></select>
         <button id="filter-clear" type="button" class="link hidden">Clear</button>
       </div>
+      <label id="show-hidden-row" class="show-hidden hidden"><input id="show-hidden" type="checkbox"><span id="show-hidden-label">Show hidden</span></label>
       <div class="dates">
         <span>Recorded</span>
         <input id="filter-from" type="date" aria-label="Recorded from" title="Recorded from">
@@ -280,6 +286,7 @@ button.danger:disabled { opacity: .6; cursor: default; }
   let loadToken = 0;           // ignores responses for an application no longer selected
   let detailStatus = null;     // the selected application's status text in the details
   const filters = { q: "", status: "", from: "", to: "" };  // "from" and "to" are YYYY-MM-DD recorded days
+  let showHidden = false;      // hidden applications are listed only while this is on
   const notes = {};            // application ID → { text, error }: its last action's note, shown in its action bar
   const busy = new Set();      // application IDs with a status, fill or delete request in flight
   const KINDS = ["resume", "cover_letter"];
@@ -395,12 +402,16 @@ button.danger:disabled { opacity: .6; cursor: default; }
     return isNaN(date) ? "" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
+  const hiddenCount = () => applications.filter((a) => a.hidden).length;
+  const inScope = (item) => showHidden || !item.hidden;  // what the header counts: hidden ones only while shown
+
   function filtering() {
     return Boolean(filters.q.trim() || filters.status || filters.from || filters.to);
   }
 
   // Recorded is when the application was stored (created_at), never when the job was posted.
   function matches(item) {
+    if (!inScope(item)) return false;
     const q = filters.q.trim().toLowerCase();
     if (q && !item.company.toLowerCase().includes(q) && !item.role.toLowerCase().includes(q)) return false;
     if (filters.status && item.status !== filters.status) return false;
@@ -411,10 +422,14 @@ button.danger:disabled { opacity: .6; cursor: default; }
   }
 
   function updateCount() {
-    const total = applications.length;
+    const total = applications.filter(inScope).length;
+    const hidden = hiddenCount();
     const noun = total === 1 ? " application" : " applications";
-    $("status").textContent = filtering() ? applications.filter(matches).length + " of " + total + noun : total + noun;
+    const count = filtering() ? applications.filter(matches).length + " of " + total + noun : total + noun;
+    $("status").textContent = !showHidden && hidden ? count + " · " + hidden + " hidden" : count;
     $("filter-clear").classList.toggle("hidden", !filtering());
+    $("show-hidden-row").classList.toggle("hidden", !hidden && !showHidden);
+    $("show-hidden-label").textContent = "Show hidden (" + hidden + ")";
   }
 
   function clearFilters() {
@@ -433,12 +448,13 @@ button.danger:disabled { opacity: .6; cursor: default; }
   // One button per application: it only selects. Every action is in the selected application's action bar.
   function entry(item) {
     const current = item.id === selected;
-    return el("button", { type: "button", class: current ? "entry current" : "entry", "data-id": item.id,
+    return el("button", { type: "button", class: "entry" + (current ? " current" : "") + (item.hidden ? " hidden-entry" : ""), "data-id": item.id,
                           "aria-current": current ? "true" : "false" },
       el("span", { class: "line" }, el("span", { class: "company" }, item.company), scoreNode(item.report)),
       el("span", { class: "role" }, item.role),
       el("span", { class: "meta" },
         el("span", { class: "pill s-" + item.status }, item.status),
+        item.hidden ? el("span", { class: "pill hidden-tag", title: "Hidden from the list" }, "Hidden") : null,
         el("span", { class: "pill origin o-" + item.added_via, title: "How this posting was added" },
           ADDED_VIA[item.added_via]),
         item.posting_source_type === EASY_APPLY
@@ -460,6 +476,10 @@ button.danger:disabled { opacity: .6; cursor: default; }
       return;
     }
     const shown = applications.filter(matches);
+    if (!shown.length && !showHidden && hiddenCount() === applications.length) {
+      nav.append(el("p", { class: "muted" }, "All applications are hidden."));
+      return;
+    }
     if (!shown.length) {
       nav.append(el("p", { class: "muted" }, "No applications match these filters."),
         el("button", { type: "button", class: "clear-filters" }, "Clear filters"));
@@ -549,15 +569,17 @@ button.danger:disabled { opacity: .6; cursor: default; }
       title: "Open a Claude Code tab in Herdr that fills this application's form" }, "Fill form");
     fill.addEventListener("click", () => fillForm(app));
     fill.classList.toggle("hidden", app.posting_source_type === EASY_APPLY);
+    const hide = el("button", { type: "button", class: "action" });
+    hide.addEventListener("click", () => toggleHidden(app));
     const del = el("button", { type: "button", class: "danger" }, "Delete");
     del.addEventListener("click", () => deleteApplication(app));
     const note = el("p", { class: "action-note", role: "status", "aria-live": "polite" });
-    bar = { id: app.id, status, buttons, fill, del, note };
+    bar = { id: app.id, status, buttons, fill, hide, del, note };
     const node = el("section", { class: "actions", "aria-label": "Actions" },
       el("div", { class: "title" }, el("span", { class: "role" }, app.role), el("span", { class: "company" }, app.company)),
       el("div", { class: "row" },
         el("label", { class: "field" }, "Status", status),
-        buttons.resume, buttons.cover_letter, fill, el("span", { class: "spacer" }), del),
+        buttons.resume, buttons.cover_letter, fill, el("span", { class: "spacer" }), hide, del),
       note);
     renderActions();
     return node;
@@ -570,7 +592,9 @@ button.danger:disabled { opacity: .6; cursor: default; }
     const item = itemOf(id);
     const writing = busy.has(id);
     if (item && !writing) bar.status.value = item.status;
-    bar.status.disabled = bar.fill.disabled = bar.del.disabled = writing;
+    bar.status.disabled = bar.fill.disabled = bar.hide.disabled = bar.del.disabled = writing;
+    bar.hide.textContent = item && item.hidden ? "Unhide" : "Hide";
+    bar.hide.title = item && item.hidden ? "Show this application in the list again" : "Leave this application out of the list; it can be shown again";
     for (const kind of KINDS) {
       const running = isRunning(jobOf(id, kind));
       const pending = starting.has(id + ":" + kind);
@@ -600,6 +624,26 @@ button.danger:disabled { opacity: .6; cursor: default; }
       notes[app.id] = { text: "Status saved" };
     } catch (error) {
       notes[app.id] = { text: "Not saved: " + error.message, error: true };  // the re-render shows the stored status
+    } finally {
+      busy.delete(app.id);
+      renderList();
+      renderActions();
+    }
+  }
+
+  async function toggleHidden(app) {
+    const item = itemOf(app.id);
+    const wanted = !(item && item.hidden);
+    busy.add(app.id);
+    notes[app.id] = { text: "Saving…" };
+    renderActions();
+    try {
+      const body = await api("/viewer/application/" + app.id + "/hidden", false, { method: "PUT", body: { hidden: wanted } });
+      listEpoch++;
+      if (item) item.hidden = body.hidden;
+      notes[app.id] = { text: body.hidden ? "Hidden" : "Unhidden" };
+    } catch (error) {
+      notes[app.id] = { text: "Not saved: " + error.message, error: true };
     } finally {
       busy.delete(app.id);
       renderList();
@@ -1022,6 +1066,10 @@ button.danger:disabled { opacity: .6; cursor: default; }
     if (button) select(button.getAttribute("data-id"));
   });
   $("filter-clear").addEventListener("click", clearFilters);
+  $("show-hidden").addEventListener("change", () => {
+    showHidden = $("show-hidden").checked;
+    renderList();
+  });
   $("filter-search").addEventListener("input", () => {
     filters.q = $("filter-search").value;
     renderList();

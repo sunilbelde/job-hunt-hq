@@ -666,6 +666,119 @@ def test_refused_writes_logged_without_the_path_id(viewer, caplog, send):
     assert "not-a-uuid" not in caplog.text and UNKNOWN not in caplog.text
 
 
+# --- hiding an application ---
+
+def set_hidden(client, application_id, body, headers=SAME_ORIGIN):
+    return client.put(f"/viewer/application/{application_id}/hidden", json=body, headers=headers)
+
+
+def listed(client, application_id):
+    return next(a for a in client.get("/applications").json()["applications"] if a["id"] == application_id)
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}, SAME_ORIGIN])
+def test_hide_and_unhide_without_a_key(viewer, monkeypatch, headers):
+    application_id = record(viewer)
+    generate(viewer, monkeypatch, application_id)
+    before = viewer.get(f"/application/{application_id}").json()
+    assert listed(viewer, application_id)["hidden"] is False
+    r = set_hidden(viewer, application_id, {"hidden": True}, headers)
+    assert (r.status_code, r.json()) == (200, {"ok": True, "application_id": application_id, "hidden": True})
+    assert listed(viewer, application_id)["hidden"] is True
+    after = viewer.get(f"/application/{application_id}").json()
+    for body in (before, after):
+        body["application"].pop("updated_at")
+    assert after == before  # status, fields and report are untouched
+    assert set_hidden(viewer, application_id, {"hidden": False}, headers).json()["hidden"] is False
+    assert listed(viewer, application_id)["hidden"] is False
+
+
+def test_hide_same_value_again(viewer):
+    application_id = record(viewer)
+    assert set_hidden(viewer, application_id, {"hidden": False}).status_code == 200
+    assert set_hidden(viewer, application_id, {"hidden": True}).status_code == 200
+    assert set_hidden(viewer, application_id, {"hidden": True}).json()["hidden"] is True
+
+
+def test_hidden_application_is_still_listed_and_still_recorded_once(viewer):
+    application_id = record(viewer)
+    set_hidden(viewer, application_id, {"hidden": True})
+    assert [a["id"] for a in viewer.get("/applications").json()["applications"]] == [application_id]
+    link = f"{GH_LINK}1"
+    r = viewer.post("/application", json={**VALID_APPLICATION, "job_link": link, "official_apply_url": link},
+                    headers=HEADERS)
+    assert (r.status_code, r.json()["application_id"]) == (200, application_id)
+    assert listed(viewer, application_id)["hidden"] is True
+
+
+@pytest.mark.parametrize("body", [{"hidden": "yes"}, {"hidden": 1}, {"hidden": 0}, {"hidden": None}, {},
+                                  {"status": "applied"}])
+def test_bad_hidden_rejected(viewer, body):
+    application_id = record(viewer)
+    r = set_hidden(viewer, application_id, body)
+    assert r.status_code == 422 and r.json()["ok"] is False
+    assert "hidden" in r.json()["message"] and "yes" not in r.text
+    assert listed(viewer, application_id)["hidden"] is False
+
+
+@pytest.mark.parametrize("content, content_type", [
+    (b"not json", "application/json"), (b"[]", "application/json"), (b"null", "application/json"),
+    (b'{"hidden": true}', "text/plain"), (b'{"hidden": true}', None),
+])
+def test_malformed_hidden_body(viewer, content, content_type):
+    application_id = record(viewer)
+    headers = {**SAME_ORIGIN, **({"Content-Type": content_type} if content_type else {})}
+    r = viewer.put(f"/viewer/application/{application_id}/hidden", content=content, headers=headers)
+    assert r.status_code == 422 and r.json()["ok"] is False
+    assert listed(viewer, application_id)["hidden"] is False
+
+
+@pytest.mark.parametrize("path_id", ["abc", "1", UNKNOWN])
+@pytest.mark.parametrize("body", [{"hidden": True}, {"hidden": "x"}])
+def test_hidden_unknown_id(viewer, path_id, body):
+    assert_error(set_hidden(viewer, path_id, body), 404, "Application not found")
+
+
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},
+                                     {"Origin": "https://evil.example"}])
+def test_hidden_cross_site_refused(viewer, headers):
+    application_id = record(viewer)
+    assert_error(set_hidden(viewer, application_id, {"hidden": True}, headers), 403, "Cross-site request refused")
+    assert_error(set_hidden(viewer, "abc", {"hidden": "x"}, headers), 403, "Cross-site request refused")
+    assert listed(viewer, application_id)["hidden"] is False
+
+
+def test_hidden_upper_case_id(viewer):
+    application_id = record(viewer)
+    assert set_hidden(viewer, application_id.upper(), {"hidden": True}).json()["application_id"] == application_id
+
+
+@pytest.mark.parametrize("headers", [{}, HEADERS])
+def test_hidden_not_served_without_docs(settings, storage, headers):
+    public = TestClient(create_app(settings, storage))
+    application_id = record(public)
+    r = public.put(f"/viewer/application/{application_id}/hidden", json={"hidden": True},
+                   headers={**SAME_ORIGIN, **headers})
+    assert (r.status_code, r.json()) == (404, public.get("/no-such-path").json())
+    assert store_of(settings).list_with_reports()[0]["hidden"] is False
+
+
+def test_keyed_patch_cannot_change_hidden(viewer):
+    application_id = record(viewer)
+    r = viewer.patch(f"/application/{application_id}", json={"hidden": True, "status": "applied"}, headers=HEADERS)
+    assert r.status_code == 200 and listed(viewer, application_id)["hidden"] is False
+
+
+def test_hidden_store_failure(viewer, monkeypatch):
+    application_id = record(viewer)
+
+    def boom(*args):
+        raise ApplicationStoreError("db")
+
+    monkeypatch.setattr(ApplicationStore, "set_hidden", boom)
+    assert_error(set_hidden(viewer, application_id, {"hidden": True}), 503, "Application store unavailable")
+
+
 # --- the page ---
 
 def test_page_served_without_a_key_and_without_data(viewer, monkeypatch):
@@ -732,7 +845,7 @@ def test_page_changes_status_and_deletes(viewer):
 def test_page_list_entries_only_select(viewer):
     html = viewer.get("/viewer").text
     entry = html[html.index("function entry(item) {"):html.index("function renderList(")]
-    assert 'el("button", { type: "button", class: current ? "entry current" : "entry"' in entry
+    assert 'el("button", { type: "button", class: "entry" + (current ? " current" : "")' in entry
     for name in ("statusControl", "el(\"select\"", "Fill form", "Delete", "addEventListener"):
         assert name not in entry, name
     for shown in ("item.company", "item.role", '"pill s-" + item.status', "statusBadge(item.report)",
@@ -781,6 +894,7 @@ def test_page_filters_by_status_and_recorded_day(viewer):
     matches = html[html.index("function matches("):html.index("function updateCount(")]
     assert "localDay(item.created_at)" in matches and "date_posted" not in matches
     assert 'applications.filter(matches).length + " of " + total + noun' in html
+    assert 'const total = applications.filter(inScope).length;' in html
     assert '"No applications match these filters."' in html and '"Clear filters"' in html
 
 
@@ -793,6 +907,35 @@ def test_page_searches_company_and_role(viewer):
     clear = html[html.index("function clearFilters("):html.index("function runningNote(")]
     assert 'filters.q = filters.status = filters.from = filters.to = "";' in clear
     assert 'return Boolean(filters.q.trim() || filters.status || filters.from || filters.to);' in html
+
+
+def test_page_hides_and_unhides_from_the_action_bar(viewer):
+    html = viewer.get("/viewer").text
+    assert ('"/viewer/application/" + app.id + "/hidden", false, { method: "PUT", body: { hidden: wanted } }' in html)
+    bar = html[html.index("function actionBar(app) {"):html.index("function renderActions(")]
+    assert 'buttons.resume, buttons.cover_letter, fill, el("span", { class: "spacer" }), hide, del)' in bar
+    assert 'class: "action" });\n    hide.addEventListener("click", () => toggleHidden(app));' in bar
+    assert 'class: "danger"' in bar and "confirm(" not in html[html.index("async function toggleHidden("):html.index("async function startGeneration(")]
+    assert 'item && item.hidden ? "Unhide" : "Hide"' in html
+    toggle = html[html.index("async function toggleHidden("):html.index("async function startGeneration(")]
+    assert '"Not saved: " + error.message' in toggle and 'body.hidden ? "Hidden" : "Unhidden"' in toggle
+    assert "selected = null" not in toggle  # the application stays selected
+    assert "bar.hide.disabled" in html
+
+
+def test_page_lists_hidden_applications_only_on_request(viewer):
+    html = viewer.get("/viewer").text
+    assert 'id="show-hidden" type="checkbox"' in html and "let showHidden = false;" in html
+    assert '"Show hidden (" + hidden + ")"' in html
+    matches = html[html.index("function matches("):html.index("function updateCount(")]
+    assert "if (!inScope(item)) return false;" in matches
+    assert "const inScope = (item) => showHidden || !item.hidden;" in html
+    clear = html[html.index("function clearFilters("):html.index("function runningNote(")]
+    assert "showHidden" not in clear and "show-hidden" not in clear
+    assert 'count + " · " + hidden + " hidden"' in html and "!showHidden && hidden" in html
+    assert '"All applications are hidden."' in html
+    entry = html[html.index("function entry(item) {"):html.index("function renderList(")]
+    assert 'item.hidden ? el("span", { class: "pill hidden-tag"' in entry and '"Hide' not in entry.replace('"Hidden', "")
 
 
 def test_page_has_no_inline_styles_or_handlers(viewer):

@@ -469,8 +469,8 @@ def raw_rows(db_path):
 
 
 def with_origin(rows):
-    """The rows as the migration leaves them: the origin column is added before the ID rebuild is tried."""
-    return [{**r, "added_via": "manual"} for r in rows]
+    """The rows as the migration leaves them: the origin and hidden columns are added before the ID rebuild."""
+    return [{**r, "added_via": "manual", "hidden": 0} for r in rows]
 
 
 def test_integer_ids_migrated_keeping_fields(int_store_path):
@@ -481,7 +481,7 @@ def test_integer_ids_migrated_keeping_fields(int_store_path):
     assert all(UUID4.match(v) for v in ids.values())
     for old_id, new_id in ids.items():
         after = stored(int_store_path, new_id)
-        assert after == {**before[old_id], "id": new_id, "added_via": "manual"}
+        assert after == {**before[old_id], "id": new_id, "added_via": "manual", "hidden": 0}
 
 
 def test_migrated_store_keeps_working(int_store_path):
@@ -617,7 +617,7 @@ def test_list_orders_by_generation_then_recording(store, db_path):
                                    "base_score": 57, "tailored_score": 81}
     assert listed[2]["report"] is None
     assert set(listed[2]) == {"id", "company", "role", "status", "added_via", "posting_source_type", "created_at",
-                              "updated_at", "report", "jobs"}
+                              "updated_at", "hidden", "report", "jobs"}
     assert listed[2]["jobs"] == {"resume": None, "cover_letter": None}
     assert "secret posting" not in repr(listed)
 
@@ -1055,3 +1055,69 @@ def test_email_status_write_failure_raises_store_error(store, db_path):
             store.apply_email_status("Acme", "Engineer", None, "Rejected")
     finally:
         db_path.chmod(0o600)
+
+
+# --- hidden flag ---
+
+def test_new_row_is_not_hidden(store, db_path):
+    application_id, _ = store.record(row())
+    assert stored(db_path, application_id)["hidden"] == 0
+    assert store.list_with_reports()[0]["hidden"] is False
+
+
+def test_set_hidden_round_trip(store):
+    application_id, _ = store.record(row())
+    assert store.set_hidden(application_id, True) is True
+    assert store.list_with_reports()[0]["hidden"] is True
+    assert store.set_hidden(application_id, True) is True
+    assert store.set_hidden(application_id, False) is False
+    assert store.list_with_reports()[0]["hidden"] is False
+
+
+def test_set_hidden_changes_only_the_flag_and_update_time(store, db_path):
+    application_id, _ = store.record(row())
+    before = stored(db_path, application_id)
+    store.set_hidden(application_id, True)
+    after = stored(db_path, application_id)
+    assert {k for k in before if before[k] != after[k]} == {"hidden", "updated_at"}
+
+
+def test_set_hidden_unknown_application(store):
+    assert store.set_hidden("00000000-0000-4000-8000-000000000000", True) is None
+
+
+def test_hidden_survives_updates_duplicates_and_email_status(store):
+    application_id, _ = store.record(row())
+    store.set_hidden(application_id, True)
+    store.update(application_id, {"status": "applied", "salary": "$1"})
+    assert store.record(row()) == (application_id, False)
+    store.apply_email_status("Acme", "Engineer", None, "Response")
+    assert store.list_with_reports()[0]["hidden"] is True
+
+
+def test_keyed_update_cannot_set_hidden(store):
+    application_id, _ = store.record(row())
+    with pytest.raises(ValueError):
+        store.update(application_id, {"hidden": 1})
+    assert store.list_with_reports()[0]["hidden"] is False
+
+
+def test_store_from_before_hidden_gains_it_visible(store, db_path):
+    application_id, _ = store.record(row())
+    before = stored(db_path, application_id)
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("ALTER TABLE applications DROP COLUMN hidden")
+    ApplicationStore(db_path)
+    assert stored(db_path, application_id) == {**before, "hidden": 0}
+
+
+def test_restart_after_hidden_migration_changes_nothing(store, db_path):
+    application_id, _ = store.record(row())
+    store.set_hidden(application_id, True)
+    ApplicationStore(db_path)
+    assert stored(db_path, application_id)["hidden"] == 1
+
+
+def test_integer_id_migration_keeps_rows_visible(int_store_path):
+    store = ApplicationStore(int_store_path)
+    assert [item["hidden"] for item in store.list_with_reports()] == [False, False]
