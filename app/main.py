@@ -1110,7 +1110,8 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             "Opens a tab in the Herdr workspace `Claude-Jobs-Automation` (`FILL_WORKSPACE`; created if missing), "
             "labelled `<Company>-<Role>-<application_id>`, and runs `claude --chrome "
             "\"/job-application-form-filler <application_id>\"` in the repo there. The session is interactive: "
-            "it asks for permissions and answers in that tab, and never submits unless asked there. If a tab whose "
+            "it asks for permissions and answers in that tab, and submits the application on its own unless a guardrail "
+            "stops it and it asks there. If a tab whose "
             "label ends with this ID is already open in the workspace, nothing is started and `already_open` is "
             "true. Any request body is ignored. " + viewer_writes
         ),
@@ -1149,7 +1150,8 @@ def register_viewer(app: FastAPI, settings: Settings, applications: ApplicationS
             "labelled `ByLink-<host>-<hash>`, and runs `claude --chrome \"/apply-from-link <link>\"` in the repo "
             "there. The session checks whether the posting is stored, finds the official posting, applies the hard "
             "filters, records the application, generates its documents and hands off to the form filler. It is "
-            "interactive: it asks for permissions and answers in that tab, and never submits unless asked there. "
+            "interactive: it asks for permissions and answers in that tab, and submits the application on its own unless "
+            "a guardrail stops it and it asks there. "
             "This endpoint stores nothing itself, and a posting the session drops is reported only in its tab. If a "
             "tab for the same posting (the same dedupe key) is already open, nothing is started and `already_open` "
             "is true. " + viewer_writes

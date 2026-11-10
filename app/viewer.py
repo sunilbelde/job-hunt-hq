@@ -680,7 +680,7 @@ button.danger:disabled { opacity: .6; cursor: default; }
   }
 
   // Opens a Herdr tab running Claude Code with the form-filler skill for this application. Nothing is sent but
-  // the ID; the session asks for anything else in its own tab, and never submits unless asked there.
+  // the ID; the session asks for anything else in its own tab, and submits on its own unless a guardrail stops it.
   async function fillForm(app) {
     busy.add(app.id);
     notes[app.id] = { text: "Opening…" };
