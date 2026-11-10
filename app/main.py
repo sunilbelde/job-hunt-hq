@@ -50,6 +50,9 @@ from app.models import (
 )
 from app.rendering import RenderError
 from app.settings import Settings, get_settings
+from app.slack import SlackNotifier, build_notifier
+from app.slack_routes import BODY_MODELS as SLACK_BODY_MODELS
+from app.slack_routes import register_slack
 from app.storage import (
     COVER_LETTER_FILE_NAME,
     LocalStorage,
@@ -85,7 +88,7 @@ api_key_header = APIKeyHeader(
 
 # Bodies are read by hand (see record_application), so FastAPI cannot document them itself.
 BODY_MODELS = (ApplicationRow, ApplicationUpdate, EmailStatusRequest, ResumeRequest, CoverLetterRequest, ViewerStatusUpdate,
-               ViewerHiddenUpdate, ApplyFromLinkRequest)
+               ViewerHiddenUpdate, ApplyFromLinkRequest, *SLACK_BODY_MODELS)
 
 DESCRIPTION = """Records verified job applications and generates resume and cover letter PDFs for them.
 
@@ -109,6 +112,10 @@ TAGS = [
                                       "or generate its resume and cover letter, or open a session that applies "
                                       "from a job link, for the resume viewer at `/viewer`. "
                                       "No API key; served only where these docs are."},
+    {"name": "slack", "description": "The Slack workflow: one thread per application in `SLACK_CHANNEL_ID`. Post "
+                                     "the ready report, start the form filler in Slack mode, relay its questions "
+                                     "and the owner's answers, and post its reports. Served only where these docs "
+                                     "are; answer 503 when Slack is not configured."},
 ]
 
 ERROR_DESCRIPTIONS = {
@@ -228,7 +235,8 @@ def start_thread(job: Callable[[], None]) -> None:
 
 
 def run_job(applications: ApplicationStore, kind: str, application_id: str, started_at: str,
-            work: Callable[[dict], tuple[pathlib.Path, dict]]) -> None:
+            work: Callable[[dict], tuple[pathlib.Path, dict]],
+            after: Callable[[str, str], None] | None = None) -> None:
     """Run work, record how it ended on the job, and log one job line. work fills in the line's generation
     details and returns the saved path and the result, or raises JobFailed. Nothing escapes: a thread that died
     silently would leave its job running until the next restart."""
@@ -249,6 +257,13 @@ def run_job(applications: ApplicationStore, kind: str, application_id: str, star
         logger.error(json.dumps({"event": "job_store_error", "application_id": application_id, "error": str(exc)}))
     logger.info(json.dumps({"event": JOB_EVENTS[kind], "application_id": application_id, "outcome": outcome["status"],
                             "duration_ms": round((time.perf_counter() - started) * 1000, 1), **fields}))
+    if after is not None:
+        # The Slack report or thread reply. The job is already recorded: nothing here may change or undo it.
+        try:
+            after(application_id, kind)
+        except Exception as exc:
+            logger.error(json.dumps({"event": "after_job_error", "application_id": application_id,
+                                     "error": type(exc).__name__}))
 
 
 def request_event(path: str) -> str | None:
@@ -310,6 +325,7 @@ def create_app(
     applications: ApplicationStore | None = None,
     start_job: Callable[[Callable[[], None]], None] | None = None,
     form_filler: FormFillLauncher | None = None,
+    notifier: SlackNotifier | None = None,
 ) -> FastAPI:
     """Build the app. Settings are validated here, so bad config fails at startup. start_job runs a generation
     job in the background, on its own thread unless given."""
@@ -317,6 +333,7 @@ def create_app(
     start_job = start_job or start_thread
     storage = storage or LocalStorage(settings.output_dir)
     applications = applications or ApplicationStore(settings.output_dir / "applications.sqlite3")
+    notifier = notifier or build_notifier(settings, applications)
     try:
         # Resume folders made before IDs were UUIDs follow their application to its new ID.
         rename_legacy_folders(settings.output_dir, applications.legacy_ids())
@@ -719,7 +736,7 @@ def create_app(
         if running_since is None:  # deleted since it was read
             return application_not_found()
         if claimed:
-            start_job(lambda: run_job(applications, kind, application.id, started_at, work))
+            start_job(lambda: run_job(applications, kind, application.id, started_at, work, notifier.after_job))
         else:
             request.state.duplicate = True
         return JSONResponse(
@@ -864,6 +881,11 @@ def create_app(
 
         register_viewer(app, settings, applications, store_unavailable, application_id_path, form_filler, generate,
                         accepted)
+        register_slack(app, applications=applications, notifier=notifier, form_filler=form_filler,
+                       owner_user_id=settings.slack_owner_user_id, api_key_header=api_key_header,
+                       api_key_valid=api_key_valid, store_unavailable=store_unavailable,
+                       application_id_path=application_id_path, parse_application_id=parse_application_id,
+                       validation_message=validation_message)
     else:
         # PATCH and DELETE share this path, so without a GET route it would answer 405 and reveal that the
         # viewer's read exists somewhere. Answer exactly as for an unknown path instead.

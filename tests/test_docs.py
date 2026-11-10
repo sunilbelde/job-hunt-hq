@@ -62,7 +62,19 @@ RESPONSES = {
     ("post", "/viewer/application/{application_id}/resume"): {"202", "403", "404", "503"},
     ("post", "/viewer/application/{application_id}/cover-letter"): {"202", "403", "404", "422", "503"},
     ("post", "/viewer/apply-from-link"): {"200", "403", "422", "503"},
+    # The Slack workflow (local listener only).
+    ("post", "/application/{application_id}/slack-report"): {"200", "401", "404", "409", "502", "503"},
+    ("post", "/application/{application_id}/fill"): {"200", "401", "404", "409", "422", "503"},
+    ("post", "/application/{application_id}/questions"): {"201", "401", "404", "409", "422", "502", "503"},
+    ("get", "/application/{application_id}/questions"): {"200", "401", "404", "422", "503"},
+    ("get", "/application/{application_id}/questions/{question_id}"): {"200", "401", "404", "503"},
+    ("delete", "/application/{application_id}/questions/{question_id}"): {"200", "401", "404", "409", "503"},
+    ("post", "/application/{application_id}/questions/{question_id}/answers"):
+        {"200", "401", "404", "409", "422", "502", "503"},
+    ("post", "/application/{application_id}/slack-update"): {"200", "401", "404", "409", "422", "502", "503"},
 }
+SLACK_OPERATIONS = [key for key in RESPONSES if key[1].startswith("/application/{application_id}/")
+                    and key[1].split("/")[3] in ("slack-report", "fill", "questions", "slack-update")]
 PDF_OPERATIONS = [("get", "/application/{application_id}/resume.pdf"), ("get", "/application/{application_id}/cover-letter.pdf"),
                   ("get", "/resume/base.pdf"), ("get", "/cover-letter/base.pdf")]
 IMMUTABLE = {"job_link", "posting_source_type", "verification_method", "official_apply_url"}
@@ -110,8 +122,16 @@ def test_swagger_does_not_persist_authorization(docs_client):
 
 # --- coverage and metadata ---
 
-def test_documents_exactly_the_twenty_three_operations(schema):
-    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 23
+def test_documents_exactly_the_thirty_one_operations(schema):
+    assert set(operations(schema)) == set(RESPONSES) and len(RESPONSES) == 31
+
+
+def test_slack_operations_are_keyed_and_tagged(schema):
+    ops = operations(schema)
+    assert len(SLACK_OPERATIONS) == 8
+    for key in SLACK_OPERATIONS:
+        assert ops[key]["security"] == [{"ApiKey": []}], key
+        assert ops[key]["tags"] == ["slack"], key
 
 
 def test_viewer_page_is_not_an_operation(schema):
@@ -473,11 +493,16 @@ def test_errors_use_ok_message_shape(schema):
     # The email status endpoint's no-match and ambiguous responses extend the shape with a reason.
     extended = {(("post", "/application/email-status"), "404"): "EmailStatusNoMatch",
                 (("post", "/application/email-status"), "409"): "EmailStatusAmbiguous"}
+    # The Slack workflow's own errors carry a reason too.
+    slack_reasons = {"409", "502"}
     for key, op in operations(schema).items():
         for status, response in op["responses"].items():
             if status[0] in "45":
                 ref = response["content"]["application/json"]["schema"]["$ref"]
                 name = extended.get((key, status), "ErrorResponse")
+                if key in SLACK_OPERATIONS and (status in slack_reasons or status == "503"
+                                                or ref.endswith("SlackErrorResponse")):
+                    name = "SlackErrorResponse"
                 assert ref == f"#/components/schemas/{name}", (key, status)
                 assert {"ok", "message"} <= set(schema["components"]["schemas"][name]["properties"]), (key, status)
 

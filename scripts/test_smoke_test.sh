@@ -62,6 +62,8 @@ twenty="$(printf '%s' "$eighteen" | sed 's/}}$/,"\/viewer\/application\/{applica
 twentyone="$(printf '%s' "$twenty" | sed 's/}}$/,"\/viewer\/apply-from-link":{"post":{}}}}/')"
 twentytwo="$(printf '%s' "$twentyone" | sed 's/}}$/,"\/application\/email-status":{"post":{}}}}/')"
 twentythree="$(printf '%s' "$twentytwo" | sed 's/}}$/,"\/viewer\/application\/{application_id}\/hidden":{"put":{}}}}/')"
+slack='"\/application\/{application_id}\/slack-report":{"post":{}},"\/application\/{application_id}\/fill":{"post":{}},"\/application\/{application_id}\/questions":{"post":{},"get":{}},"\/application\/{application_id}\/questions\/{question_id}":{"get":{},"delete":{}},"\/application\/{application_id}\/questions\/{question_id}\/answers":{"post":{}},"\/application\/{application_id}\/slack-update":{"post":{}}'
+thirtyone="$(printf '%s' "$twentythree" | sed "s/}}\$/,$slack}}/")"
 
 # run <app status> <resume status> [file content | "none"]
 # Call with prefixed variables inside ( ): sh keeps VAR=x assignments made before a function call.
@@ -71,7 +73,7 @@ run() {
     mkdir -p "$(dirname "$saved")" && printf '%s' "${3:-%PDF-1.5}" > "$saved"
   fi
   PATH="$tmp:$PATH" API_KEY=k STUB_DOCS=${STUB_DOCS:-404} STUB_DOCS_LISTENER=${STUB_DOCS_LISTENER:-200} \
-  STUB_SCHEMA=${STUB_SCHEMA:-$twentythree} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
+  STUB_SCHEMA=${STUB_SCHEMA:-$thirtyone} DOCS_URL=${DOCS_URL:-http://d} OUTPUT_DIR=${OUTPUT_DIR:-$tmp/out} STUB_APP=$1 STUB_RESUME=$2 STUB_SAVED=$saved STUB_LOG=$tmp/log \
     POLL_SECONDS=0 JOB_TIMEOUT=${JOB_TIMEOUT:-3} sh "$here/smoke_test.sh" http://x >/dev/null 2>&1
 }
 created_any() { grep -q "^CREATE" "$tmp/log"; }
@@ -106,6 +108,7 @@ run 201 202 && grep -q "^CREATE" "$tmp/log" && ok "docs listener healthy passes"
 (STUB_SCHEMA="$twenty" run 201 202); [ $? -ne 0 ] && ! created_any && ok "twenty operations (before the apply-from-link endpoint) fail" || bad "twenty operations"
 (STUB_SCHEMA="$twentyone" run 201 202); [ $? -ne 0 ] && ! created_any && ok "twenty-one operations (before the email status endpoint) fail" || bad "twenty-one operations"
 (STUB_SCHEMA="$twentytwo" run 201 202); [ $? -ne 0 ] && ! created_any && ok "twenty-two operations (before the hide endpoint) fail" || bad "twenty-two operations"
+(STUB_SCHEMA="$twentythree" run 201 202); [ $? -ne 0 ] && ! created_any && ok "twenty-three operations (before the Slack workflow) fail" || bad "twenty-three operations"
 (STUB_SCHEMA='{"paths":{"/health":{"get":{}}}}' run 201 202); [ $? -ne 0 ] && ! created_any && ok "wrong operation count fails" || bad "operation count"
 (STUB_SCHEMA='not json' run 201 202); [ $? -ne 0 ] && ! created_any && ok "unreadable schema fails" || bad "unreadable schema"
 (DOCS_URL=off run 201 202); [ $? -eq 2 ] && [ ! -s "$tmp/log" ] && ok "DOCS_URL=off is refused before any request" || bad "docs off"

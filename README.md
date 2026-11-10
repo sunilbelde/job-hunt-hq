@@ -99,6 +99,23 @@ curl -sS -X POST http://127.0.0.1:8081/application/email-status \
 
 The response carries the matched application's stored `company`, `role` and `previous_status`, so the workflow can show which application it updated.
 
+### Slack workflow
+
+Each application gets one thread in a Slack channel, such as `#job-hunt-announcements`, where the owner reviews it, starts the form filler, answers its questions and approves the submission. Hermes, connected to the same Slack app, handles the conversation. The service posts and reads with that app's bot token and never receives Slack events.
+
+1. **Ready report.** When an application's resume job is `done` and no generation job is running, the service posts a report to `SLACK_CHANNEL_ID`. It shows the company, role, `App ID`, match score, why it fits, job details, posting link and viewer link (`http://127.0.0.1:8081/viewer#<id>`, which works on the Mac only). One application never gets two reports. A later job, such as a cover letter finishing or a resume being regenerated, is posted as a reply in the thread. If Slack is down, the job still counts as done; `POST /application/{id}/slack-report` retries.
+2. **Fill from the thread.** "@Hermes fill form" makes Hermes call `POST /application/{id}/fill`. That opens the usual Herdr tab running `claude --chrome "/job-application-form-filler <id> slack"`. An application already marked `applied` answers `409 already_applied` and nothing starts, so a repeated call can't submit twice; `{"force": true}` reruns it on purpose.
+3. **Questions.** In Slack mode the form filler posts each batch through `scripts/ask_slack.py` (`POST /application/{id}/questions`), and the service writes it into the thread. Hermes reads the pending batch (`GET /application/{id}/questions`) and records the owner's reply (`POST .../questions/{question_id}/answers`). The form filler's `wait` picks the answers up.
+4. **Approval.** The agree-and-submit and mark-applied questions are `approval` batches. The service accepts their answer only after reading the named reply from Slack itself. The reply must be from `SLACK_OWNER_USER_ID` (not a bot), newer than the question, and start with yes, approve or submit, or name the chosen option. Neither Hermes nor text on a form page can approve a submission.
+5. **Reports.** The form filler posts its report and final report with `POST /application/{id}/slack-update`.
+
+Setup:
+
+- In `.env`, set `SLACK_BOT_TOKEN` (the Hermes app's `xoxb-…` token), `SLACK_CHANNEL_ID` (`C…`, from the channel's details) and `SLACK_OWNER_USER_ID` (your member ID, `U…`). Restart the service. Without the token and channel, nothing is posted and the Slack endpoints answer 503.
+- The bot needs `chat:write`, plus `groups:history` for a private channel or `channels:history` for a public one, to verify approvals. Invite it to the channel with `/invite @Hermes`.
+- The token now lives in both Hermes's `.env` and this one. Rotate it in both places.
+- Every Slack endpoint needs the API key and is served on the local listener only. Message, question and answer text is never logged.
+
 ### Upgrading from integer IDs
 
 Stores made before IDs were UUIDs are converted the first time the new version starts:
