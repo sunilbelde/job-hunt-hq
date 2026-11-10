@@ -73,11 +73,15 @@ When a generation job ends for an application that already has a thread, the ser
 - **THEN** it receives 404
 
 ### Requirement: Fill errors
-`POST /application/{application_id}/fill` SHALL respond 404 for an unknown ID, 409 `no_thread` when the application has no Slack thread, and 503 when Herdr is unavailable. In each of these cases it SHALL open no tab.
+`POST /application/{application_id}/fill` SHALL respond 404 for an unknown ID, 409 `no_thread` when the application has no Slack thread, 409 `already_applied` when its status is already `applied` and the body does not set `force` to true, and 503 when Herdr is unavailable. In each of these cases it SHALL open no tab.
 
 #### Scenario: No thread yet
 - **WHEN** Hermes calls the endpoint for an application whose report was never posted
 - **THEN** the system responds 409 with `reason` `no_thread` and no tab opens
+
+#### Scenario: Already applied
+- **WHEN** Hermes calls the endpoint for an application whose status is `applied`, without `force`
+- **THEN** the system responds 409 with `reason` `already_applied` and no tab opens, and with `{"force": true}` it opens the tab
 
 ### Requirement: Question batches
 `POST /application/{application_id}/questions` SHALL require the API key and accept `{"questions": [...]}` with 1 to 4 questions. Each question has `question`, `header` (at most 12 characters), `options` (2 to 4, each with a `label` and an optional `description`), `multi_select` (default false) and `kind` (`normal` or `approval`, default `normal`). The service SHALL store the batch as `pending`, post it in the thread as a numbered list with lettered options, and respond 201 with `question_id`.

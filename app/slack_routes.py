@@ -195,11 +195,13 @@ def register_slack(app: FastAPI, *, applications: ApplicationStore, notifier: Sl
             "Opens the application's form-filling tab exactly as the viewer's Fill form does, running "
             "`claude --chrome \"/job-application-form-filler <application_id> slack\"`: in Slack mode the form "
             "filler asks its questions and posts its reports in the application's thread. If a tab for this ID is "
-            "already open, nothing is started and `already_open` is true. Needs the application's Slack thread. "
-            "Local listener only."),
+            "already open, nothing is started and `already_open` is true. An application whose status is already "
+            "`applied` is refused with 409 `already_applied`, so a repeated call can't submit a second time; send "
+            "`{\"force\": true}` for a deliberate rerun. Needs the application's Slack thread. Local listener only."),
         responses={200: {"model": FillFormStarted, "description": "The tab was opened, or one was already open."},
                    **errors(*common, unknown,
-                            (409, "slack", "`no_thread`: the application's report was never posted."),
+                            (409, "slack", "`no_thread`: the application's report was never posted; "
+                                           "`already_applied`: its status is already applied and `force` was not set."),
                             (422, "plain", "The body is not JSON or not a JSON object, or `mode` is not `slack`."),
                             (503, "slack", "`slack_not_configured`, Herdr unavailable, or the store unavailable.")),
                    },
@@ -211,9 +213,12 @@ def register_slack(app: FastAPI, *, applications: ApplicationStore, notifier: Sl
         if error is not None:
             return error
         target, row = found
-        _, error = await read_body(request, FillFromSlackRequest, empty_ok=True)
+        body, error = await read_body(request, FillFromSlackRequest, empty_ok=True)
         if error is not None:
             return error
+        if str(row["status"]).lower() == "applied" and not (body is not None and body.force):
+            return slack_error(409, "already_applied",
+                               "This application is already marked applied; send force: true to run the form filler again")
         try:
             thread = await run_in_threadpool(applications.get_slack_thread, target)
         except ApplicationStoreError as exc:

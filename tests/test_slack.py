@@ -279,6 +279,15 @@ def test_fill_empty_body_ok(api, launcher):
     assert api.post(f"/application/{app_id}/fill", headers=KEY).status_code == 200
 
 
+def test_fill_refuses_an_application_already_applied(api, launcher):
+    app_id = ready(api)
+    assert api.patch(f"/application/{app_id}", headers=KEY, json={"status": "applied"}).status_code == 200
+    r = api.post(f"/application/{app_id}/fill", headers=KEY, json={"mode": "slack"})
+    assert r.status_code == 409 and r.json()["reason"] == "already_applied" and launcher.calls == []
+    r = api.post(f"/application/{app_id}/fill", headers=KEY, json={"force": True})
+    assert r.status_code == 200 and len(launcher.calls) == 1
+
+
 def test_fill_needs_a_thread(api, launcher):
     app_id = record(api)
     r = api.post(f"/application/{app_id}/fill", headers=KEY)

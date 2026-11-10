@@ -538,6 +538,8 @@ class FillFromSlackRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [FILL_FROM_SLACK_EXAMPLE]})
 
     mode: Literal["slack"] = Field(default="slack", description="Always `slack`: questions go to the thread.")
+    force: bool = Field(default=False, description="Start the form filler even though the application is already applied. "
+                        "Only for a deliberate rerun.")
 
 
 class QuestionOption(BaseModel):
